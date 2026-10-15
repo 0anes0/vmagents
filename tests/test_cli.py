@@ -423,7 +423,13 @@ class AutostartHookTests(SandboxTest):
             "STUB_REMOTE_LOG": str(self.sb.remote_log),
         }
         env.update(extra_env or {})
-        out = run_in_pty([path, *args], env, cwd=str(self.sb.remote_home), send="exit\n")
+        # A known prompt, set after the hook ran; type "exit" only once it shows
+        # (zsh drops input typed before its line editor starts).
+        for rc in (".bashrc", ".zshrc"):
+            f = self.sb.remote_home / rc
+            if f.exists() and "READY" not in f.read_text():
+                f.write_text(f.read_text() + "PS1='READY''> '\n")
+        out = run_in_pty([path, *args], env, cwd=str(self.sb.remote_home), answers=[("READY> ", "exit\n")])
         return self.sb.remote_calls(), out
 
     def test_bash_login_opens_claude_in_tmux(self):
