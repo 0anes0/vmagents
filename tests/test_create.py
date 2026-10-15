@@ -24,6 +24,10 @@ def opt(name):
 cmd, rest = args[0], [a for a in args[1:] if not a.startswith("--")]
 if cmd == "dominfo":
     sys.exit(0 if args[1] in st["domains"] else 1)
+if cmd == "pool-dumpxml":
+    print("<pool type='dir'>\n  <target>\n    <path>/pool</path>\n  </target>\n</pool>"); sys.exit(0)
+if cmd == "vol-info" and "--pool" in args and args[-1] in st["volumes"]:
+    print(f"Name:   {args[-1]}\nAllocation:     325.69 MiB"); sys.exit(0)
 if cmd in ("pool-info", "net-info", "net-start", "pool-refresh"):
     sys.exit(0)
 if cmd == "vol-info":
@@ -228,3 +232,15 @@ class CreateTests(SandboxTest):
         self.assertRegex(r.stdout, r"Removed vmclaude-base-debian13-\w+\.qcow2")
         self.assertEqual(self.state()["volumes"], {})
         self.assertIn("No unused base volumes.", self.sb.run("prune", check=0).stdout)
+
+    def test_images(self):
+        r = self.sb.run("images", check=0)
+        self.assertRegex(r.stdout, r"debian13 +Debian 13 \"trixie\" \(default\) +- +-\n")
+        self.create("a")
+        self.create("b")
+        r = self.sb.run("images", check=0)
+        self.assertRegex(r.stdout, r"debian13 +Debian 13 .* +\S+ +325.69MiB \(a, b\)\n")
+        self.assertRegex(r.stdout, r"arch +Arch Linux \(rolling release\) +- +-\n")
+        self.assertIn("/pool/vmclaude-base-IMAGE-CHECKSUM.qcow2", r.stdout)
+        self.assertIn(str(self.sb.home / ".cache" / "vmclaude" / "images") + "/", r.stdout)
+        self.assertRegex(r.stdout, r"\n      vmclaude-base-debian13-\w{12}\.qcow2\n")

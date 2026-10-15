@@ -134,6 +134,7 @@ vmclaude create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
     --user USER  --uri LIBVIRT_URI  --no-setup
 vmclaude delete NAME [--yes]     delete a VM made with create, and its disk
+vmclaude images                  which images exist, are downloaded, used, and where
 vmclaude prune                   remove downloaded images no VM uses any more
 vmclaude add NAME [options]      add an existing VM, or change fields of a profile
     --host HOST  --user USER  --port PORT  --key FILE
@@ -149,6 +150,9 @@ vmclaude list | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
 
 Claude arguments apply when a new tmux session starts. An existing session is
 reattached as it is.
+
+Every command has its own help with options and examples:
+`vmclaude help create`, or `vmclaude create --help`.
 
 ## Configuration
 
@@ -212,6 +216,16 @@ virtinst`, and your user in the `libvirt` group). What `create` does:
    `sudo`, and installs tmux. The account has no password at all.
 4. Waits until the VM accepts the key, then runs `vmclaude setup`: installs
    Claude Code and the SSH-login autostart.
+
+Where the files are (`vmclaude images` shows them with sizes and the VMs that
+use each image):
+
+| What | Where |
+|---|---|
+| Downloaded images | `~/.cache/vmclaude/images/` |
+| Base images, one per image release | `/var/lib/libvirt/images/vmclaude-base-IMAGE-CHECKSUM.qcow2` |
+| Each VM's own disk (only its differences) | `/var/lib/libvirt/images/NAME.qcow2` |
+| Each VM's cloud-init settings | `/var/lib/libvirt/images/NAME-seed.iso` |
 
 `prune` removes base volumes that no VM disk is built on, and the download
 cache in `~/.cache/vmclaude`.
@@ -350,6 +364,8 @@ doğrulanır. Sonraki VM'ler genelde yarım dakika ile iki dakika arasında haz�
 olur. `vmclaude delete dev` VM'i diskiyle birlikte siler; yalnızca `create`
 ile oluşturulmuş VM'lerde çalışır, diğer VM'lerine dokunamaz.
 `vmclaude prune` artık kullanılmayan imajları silip yer açar.
+`vmclaude images` hangi imajların indiğini, nerede durduğunu ve hangi VM'lerin
+kullandığını gösterir. Her komutun örnekli yardımı var: `vmclaude help create`.
 
 **Var olan bir VM ile kurulum ve ilk kullanım:**
 

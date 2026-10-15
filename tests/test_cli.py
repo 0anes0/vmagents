@@ -15,7 +15,8 @@ from tests.ptyrun import run_in_pty
 class ProfileTests(SandboxTest):
     def test_help_and_version(self):
         r = self.sb.run("help", check=0)
-        self.assertIn("Usage:", r.stdout)
+        self.assertIn("GET STARTED", r.stdout)
+        self.assertIn("vmclaude help COMMAND", r.stdout)
         self.assertRegex(self.sb.run("--version", check=0).stdout, r"^vmclaude \d+\.\d+\.\d+\n$")
 
     def test_add_writes_profile(self):
@@ -97,6 +98,33 @@ class ProfileTests(SandboxTest):
         self.assertFalse((self.sb.conf / "default").exists())
         self.assertEqual(self.sb.run("rm", "b").returncode, 1)
         self.assertRegex(self.sb.run("list", check=0).stdout, r"\* a\s")
+
+    def test_help_for_every_command(self):
+        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "doctor", "add", "setup",
+                    "autostart", "list", "default", "desktop", "edit", "forget", "rm"):
+            with self.subTest(cmd=cmd):
+                r = self.sb.run("help", cmd, check=0)
+                self.assertTrue(r.stdout.startswith(f"vmclaude {cmd}") or cmd == "list", r.stdout[:80])
+                self.assertEqual(self.sb.run(cmd, "--help", check=0).stdout, r.stdout)
+        self.assertIn("Examples:", self.sb.run("help", "create", check=0).stdout)
+        r = self.sb.run("help", "bogus")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no help for 'bogus'", r.stderr)
+
+    def test_help_flag_placement(self):
+        self.sb.run("add", "vm", "--host", "192.0.2.7", "--os", "linux", check=0)
+        # anywhere among a command's own options
+        self.assertIn("vmclaude create NAME", self.sb.run("create", "x", "--help", check=0).stdout)
+        self.assertIn("vmclaude add NAME", self.sb.run("add", "vm", "--port", "22", "-h", check=0).stdout)
+        # but arguments after a VM name belong to Claude
+        self.sb.run("vm", "--help", check=0)
+        self.assertEqual(self.sb.calls("ssh")[-1]["argv"][-1].split()[-1], "'--help'")
+        self.assertIn("vmclaude connect", self.sb.run("connect", "--help", check=0).stdout)
+        self.sb.run("connect", "vm", "--help", check=0)
+        self.assertEqual(self.sb.calls("ssh")[-1]["argv"][-1].split()[-1], "'--help'")
+        # and after -- nothing is help
+        self.sb.run("add", "vm", "--dir", "x", check=0)
+        self.assertEqual(self.sb.run("shell", "vm", "ls", "--help", check=0).stdout, "")
 
     def test_unknown_command(self):
         r = self.sb.run("frobnicate")

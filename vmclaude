@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.3.0
+VERSION=0.3.1
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -32,54 +32,310 @@ hold_prompt() {
 
 usage() {
   cat <<EOF
-vmclaude $VERSION — open Claude Code inside a virtual machine over SSH.
+vmclaude $VERSION — run Claude Code inside a virtual machine, over SSH.
 
-Usage:
-  $PROG                         connect to the default VM (asks to add one if none)
-  $PROG NAME [CLAUDE_ARGS...]   connect to VM NAME
-  $PROG COMMAND [ARGS...]
+Claude Code then works on the VM's files and programs, not on your computer's.
+vmclaude starts the VM, logs in with its own SSH key and opens Claude there:
+in tmux on Linux VMs, so Claude keeps running if the connection drops.
 
-Commands:
-  create NAME [options]    make a new Linux VM (libvirt) and set it up; no password needed
-      --image NAME           debian13 (default), debian12, ubuntu24.04 or arch
-      --memory MB            default 4096        --cpus N    default 2
-      --disk GB              default 20          --user U    default: $(id -un)
-      --uri URI              libvirt URI (default: qemu:///system)
-      --no-setup             only create the VM
-  delete NAME [--yes]      delete a VM made with create, with its disk
-  prune                    remove downloaded images no VM uses any more
-  add NAME [options]       add an existing VM, or change fields of a profile
-      --host HOST            hostname or IP (optional with --domain: detected)
-      --user USER            login user on the VM (default: $(id -un))
-      --port PORT            SSH port (default: 22)
-      --key FILE             private key (default: ~/.ssh/vmclaude_ed25519)
-      --domain NAME          libvirt domain: start it on connect, find its IP
-      --uri URI              libvirt URI (default: qemu:///system)
-      --dir DIR              working directory on the VM (default: home)
-      --session NAME         tmux session name (default: claude)
-      --no-tmux              run Claude without tmux
-      --os linux|windows     the VM's system (default: detected on first use)
-  setup NAME [options]     install the SSH key, tmux and Claude Code on the VM
-                           (on Windows: Git for Windows instead of tmux)
-      --no-install           only install the SSH key
-      --no-autostart         do not start Claude when you log in over SSH
-  connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
-                           open Claude Code on the VM (the default command)
-  shell NAME [CMD...]      plain shell (or a command) on the VM, no Claude
-  autostart NAME on|off    start Claude Code on every interactive SSH login
-  doctor NAME              check every step of the connection
-  list                     list VM profiles
-  default NAME             make NAME the default VM
-  desktop NAME             add an app-menu launcher that opens Claude on NAME
-  edit NAME                open the profile in \$EDITOR
-  forget NAME              forget the VM's SSH host key (after reinstalling it)
-  rm NAME                  delete a profile and its launcher
-  help, version
+GET STARTED
+  No VM yet? Make one (Linux computer with libvirt):
+    vmclaude create dev                      new Debian 13 VM with Claude Code, no password
+    vmclaude create box --image arch         the same with Arch Linux
+    vmclaude dev                             open Claude Code in it
 
-Claude keeps running in tmux when the connection drops; connecting again
-reattaches. Detach on purpose with Ctrl-b d. Windows VMs have no tmux: there
-Claude ends with the connection.
+  A VM you already have:
+    vmclaude add win10 --domain win10 --user emin     a libvirt VM (vmclaude starts it)
+    vmclaude add srv --host 192.168.1.50 --user dev   any machine you can SSH into
+    vmclaude setup srv                       install SSH key + Claude Code (asks the VM password once)
+    vmclaude srv                             open Claude Code in it
+
+  Every day:
+    vmclaude                                 open Claude on the default VM
+    vmclaude dev --continue                  arguments after the name go to Claude
+    ssh dev@VM                               any SSH app opens Claude too (after setup)
+
+COMMANDS
+  Make and remove VMs (libvirt):
+    create NAME          new Linux VM from an official cloud image, ready for Claude
+    delete NAME          delete a VM made with create, with its disks
+    images               list the images: which exist, which are downloaded, where
+    prune                delete downloaded images that no VM uses any more
+
+  Use a VM:
+    connect NAME         open Claude Code ("vmclaude NAME" does the same)
+    shell NAME [CMD]     a normal shell on the VM, or run one command there
+    doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
+
+  Profiles (one per VM, in ${CONF_DIR/#$HOME/\~}/hosts/):
+    add NAME             add an existing VM, or change the settings of a profile
+    setup NAME           install the SSH key, tmux and Claude Code on the VM
+    list                 show all profiles; * marks the default
+    default NAME         choose the VM that plain "vmclaude" opens
+    autostart NAME on|off   open Claude on every SSH login, or stop doing so
+    desktop NAME         add "Claude Code (NAME)" to your app menu
+    edit NAME            open the profile file in your editor
+    forget NAME          forget the VM's SSH host key (after reinstalling the VM)
+    rm NAME              delete the profile only (the VM stays)
+
+MORE HELP
+  vmclaude help COMMAND     what a command does, its options and examples
+                            (e.g. "vmclaude help create"; "vmclaude create --help" works too)
+  vmclaude images           where downloaded images and VM disks are stored
 EOF
+}
+
+help_cmd() { # COMMAND
+  local u
+  u=$(id -un)
+  case $1 in
+    create) cat <<EOF
+vmclaude create NAME [options]
+
+Makes a new Linux VM in libvirt and sets it up for Claude Code. You need
+virt-install and virsh (Debian/Ubuntu: sudo apt install virtinst libvirt-daemon-system)
+and your user in the "libvirt" group. No password is set or asked: the VM
+lets you in with vmclaude's SSH key only, and sudo works without a password.
+
+What happens:
+  1. The official cloud image is downloaded once and checked against the
+     distribution's published SHA-256/SHA-512 checksum.
+  2. It is copied into the libvirt pool as a base image. The new VM gets its
+     own small disk that only stores what differs from the base, so more VMs
+     from the same image need no download and little space.
+  3. cloud-init in the VM creates your user with the SSH key and installs tmux.
+  4. "vmclaude setup NAME" installs Claude Code and the SSH-login autostart.
+
+Options:
+  --image IMAGE    debian13 (default), debian12, ubuntu24.04 or arch
+                   ("vmclaude images" lists them, with what is downloaded)
+  --memory MB      RAM in megabytes          (default 4096)
+  --cpus N         virtual CPUs              (default 2)
+  --disk GB        disk size in gigabytes    (default 20)
+  --user USER      user created in the VM    (default: $u)
+  --uri URI        libvirt connection        (default: qemu:///system)
+  --no-setup       only make the VM; run "vmclaude setup NAME" later
+
+Examples:
+  vmclaude create dev                              Debian 13: 4 GB RAM, 2 CPUs, 20 GB disk
+  vmclaude create big --memory 16384 --cpus 8 --disk 100
+                                                   16 GB RAM, 8 CPUs, 100 GB disk
+  vmclaude create u24 --image ubuntu24.04          Ubuntu 24.04
+  vmclaude create box --image arch                 Arch Linux
+  VMCLAUDE_ARCH_MIRROR=https://mirrors.dotsrc.org/archlinux vmclaude create box --image arch
+                                                   Arch Linux, image from a faster mirror
+
+Then: "vmclaude dev" opens Claude. "vmclaude delete dev" removes the VM again.
+EOF
+      ;;
+    delete) cat <<EOF
+vmclaude delete NAME [--yes]
+
+Deletes a VM that "vmclaude create" made: stops it, removes it from libvirt with
+its disk and cloud-init disk, and removes its profile. The shared base image
+stays (see "vmclaude prune"). Asks you to type the name unless --yes is given.
+
+Only VMs made by create can be deleted: both the profile and the VM's libvirt
+description must say so. Your other VMs (for example a Windows VM you added
+with "vmclaude add") are never deleted; "vmclaude rm NAME" forgets their profile.
+
+Examples:
+  vmclaude delete dev
+  vmclaude delete dev --yes
+EOF
+      ;;
+    images) cat <<EOF
+vmclaude images [--uri URI]
+
+Lists the images "vmclaude create --image" can use, and for each one whether it
+is downloaded, whether a base image of it is in the libvirt pool, its size,
+and which VMs use it. Also shows where all of it is stored:
+
+  downloads (the original image files):
+      ${CACHE_DIR/#$HOME/\~}/images/
+  base images, one per image release, shared by the VMs made from it:
+      <libvirt pool>/vmclaude-base-IMAGE-CHECKSUM.qcow2
+  each VM's own disk (only what differs from its base image):
+      <libvirt pool>/NAME.qcow2
+  each VM's cloud-init settings (user, SSH key):
+      <libvirt pool>/NAME-seed.iso
+
+The pool is "$CREATE_POOL" (usually /var/lib/libvirt/images); set VMCLAUDE_POOL
+for another. Free the space of unused images with "vmclaude prune".
+EOF
+      ;;
+    prune) cat <<EOF
+vmclaude prune [--uri URI]
+
+Deletes base images in the libvirt pool that no VM disk is built on, and the
+downloads in ${CACHE_DIR/#$HOME/\~}/images/. Base images that a VM still uses are
+kept. The next "vmclaude create" downloads again what it needs.
+
+Example:
+  vmclaude delete dev && vmclaude prune
+EOF
+      ;;
+    connect) cat <<EOF
+vmclaude connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmclaude NAME [CLAUDE_ARGS...]
+vmclaude
+
+Opens Claude Code on the VM. A libvirt VM is started first if it is off.
+Without NAME the default VM is used (see "vmclaude default").
+
+On Linux VMs Claude runs in tmux session "claude": if the connection drops,
+Claude keeps running and the next connect returns to it. Leave it running on
+purpose with Ctrl-b d. Arguments for Claude only apply when a new session
+starts. Windows VMs have no tmux; there Claude ends with the connection.
+
+Options:
+  --no-tmux     run Claude directly, without tmux
+  --hold        keep the terminal open after an error (used by app-menu launchers)
+  -- ARGS       everything after -- goes to Claude
+
+Examples:
+  vmclaude dev
+  vmclaude dev --continue                    continue the last conversation
+  vmclaude connect dev -- --model opus       pass options to Claude
+  vmclaude                                   the default VM
+EOF
+      ;;
+    shell) cat <<EOF
+vmclaude shell NAME [COMMAND...]
+
+Opens a normal shell on the VM (without starting Claude), or runs one command
+there and prints its output.
+
+Examples:
+  vmclaude shell dev
+  vmclaude shell dev df -h
+  vmclaude shell dev 'cd ~/work && git status'
+EOF
+      ;;
+    doctor) cat <<EOF
+vmclaude doctor [NAME]
+
+Checks each step of the connection and says which one fails: ssh on this
+computer, the key, the libvirt VM state, its IP address, the SSH server, key
+login, and on the VM Claude Code, tmux (Linux) or Git (Windows), autostart.
+It does not start or change anything.
+
+Example:
+  vmclaude doctor dev
+EOF
+      ;;
+    add) cat <<EOF
+vmclaude add NAME [options]
+
+Adds a profile for a VM (or any machine) you already have, or changes settings
+of an existing profile: only the options you give change. Then run
+"vmclaude setup NAME" once.
+
+Options:
+  --host HOST        IP or hostname. Optional with --domain (the IP is found)
+  --domain DOMAIN    libvirt VM name: vmclaude starts it and finds its IP
+  --user USER        login user on the VM          (default: $u)
+  --port PORT        SSH port                      (default: 22)
+  --key FILE         SSH private key               (default: ~/.ssh/vmclaude_ed25519)
+  --uri URI          libvirt connection            (default: qemu:///system)
+  --dir DIR          folder on the VM where Claude starts, created if missing
+                     (default: home; ~/work style paths are fine)
+  --session NAME     tmux session name             (default: claude)
+  --no-tmux          run Claude without tmux
+  --os linux|windows normally detected on first connect
+
+Examples:
+  vmclaude add win10 --domain win10 --user emin              libvirt VM
+  vmclaude add srv --host 192.168.1.50 --user dev            any SSH machine
+  vmclaude add vbox --host 127.0.0.1 --port 2222 --user dev  VirtualBox port forward
+  vmclaude add dev --dir ~/projects/site                     change one setting
+EOF
+      ;;
+    setup) cat <<EOF
+vmclaude setup NAME [--no-install] [--no-autostart]
+
+Prepares the VM for Claude Code. Safe to run again: done steps are skipped.
+  1. SSH key: creates ~/.ssh/vmclaude_ed25519 if needed and adds it to the VM.
+     The VM password is asked once, for this step only.
+  2. Linux: tmux (with the VM's package manager and sudo) and Claude Code.
+     Windows: Git for Windows and Claude Code.
+  3. Autostart: SSH logins open Claude (Linux: ~/.bashrc and ~/.zshrc;
+     Windows: the PowerShell profile).
+
+Options:
+  --no-install      only step 1
+  --no-autostart    skip step 3
+
+Example:
+  vmclaude add srv --host 192.168.1.50 --user dev && vmclaude setup srv
+EOF
+      ;;
+    autostart) cat <<EOF
+vmclaude autostart NAME on|off
+
+With "on", every interactive SSH login to the VM opens Claude Code, from any
+SSH program (a terminal, PuTTY, a phone app). Quit Claude, or press Ctrl-b d,
+to get a normal shell. "setup" turns it on.
+
+Skip it for one login (Linux VMs): ssh -o SetEnv=LC_VMCLAUDE=off user@VM
+A shell without Claude, on any VM: vmclaude shell NAME
+
+Examples:
+  vmclaude autostart dev off
+  vmclaude autostart dev on
+EOF
+      ;;
+    list | ls) cat <<EOF
+vmclaude list
+
+Shows all profiles: name, user@host[:port], libvirt VM and system. A * marks
+the default VM, the one plain "vmclaude" opens.
+EOF
+      ;;
+    default) cat <<EOF
+vmclaude default NAME
+
+Makes NAME the VM that "vmclaude" opens without a name. With only one profile,
+that one is the default anyway.
+
+Example:
+  vmclaude default dev
+EOF
+      ;;
+    desktop) cat <<EOF
+vmclaude desktop NAME
+
+Adds "Claude Code (NAME)" to your app menu
+(${APPS_DIR/#$HOME/\~}/vmclaude-NAME.desktop). Clicking it opens a terminal
+connected to Claude on the VM. "vmclaude rm NAME" removes it again.
+EOF
+      ;;
+    edit) cat <<EOF
+vmclaude edit NAME
+
+Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
+The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
+SESSION OS (see "vmclaude help add" for what they mean).
+EOF
+      ;;
+    forget) cat <<EOF
+vmclaude forget NAME
+
+vmclaude remembers each VM's SSH host key and refuses to connect when it
+changes, as protection against a wrong machine. After you reinstall a VM its
+key changes legitimately: run this once, and the next connection accepts the
+new key.
+EOF
+      ;;
+    rm | remove) cat <<EOF
+vmclaude rm NAME
+
+Deletes the profile, its app-menu entry and remembered host key. The VM itself
+is not touched. To delete a VM made with create: "vmclaude delete NAME".
+EOF
+      ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor add setup autostart list default desktop edit forget rm" ;;
+  esac
 }
 
 # ------------------------------------------------------------------ profiles
@@ -1078,7 +1334,7 @@ image_info() {
       IMG_URL=${IMG_URL%/}/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
       IMG_SUMS=https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256
       IMG_ALGO=sha256 IMG_OSINFO=archlinux ;;
-    *) die "unknown image: $1 (choose debian13, debian12, ubuntu24.04 or arch)" ;;
+    *) die "unknown image: $1 (choose debian13, debian12, ubuntu24.04 or arch; see: $PROG images)" ;;
   esac
 }
 
@@ -1281,6 +1537,76 @@ cmd_delete() {
   say "Deleted VM '$NAME' and its disk."
 }
 
+IMAGES="debian13 debian12 ubuntu24.04 arch"
+image_desc() {
+  case $1 in
+    debian13) printf 'Debian 13 "trixie" (default)' ;;
+    debian12) printf 'Debian 12 "bookworm"' ;;
+    ubuntu24.04) printf 'Ubuntu 24.04 LTS "noble"' ;;
+    arch) printf 'Arch Linux (rolling release)' ;;
+  esac
+}
+
+# Lists the images, what is downloaded, what is in the libvirt pool, and
+# which VMs are built on it.
+cmd_images() {
+  local uri=qemu:///system
+  while (($#)); do
+    case $1 in
+      --uri) (($# >= 2)) || usage_error "images: --uri needs a value"; uri=$2; shift 2 ;;
+      *) usage_error "images: unknown argument $1" ;;
+    esac
+  done
+  C_URI=$uri
+  local lv=0 pool_path='' vols='' v b users img file dl base size row
+  local -A used_by=()
+  if command -v virsh >/dev/null && vsh pool-info "$CREATE_POOL" >/dev/null 2>&1; then
+    lv=1
+    pool_path=$(vsh pool-dumpxml "$CREATE_POOL" 2>/dev/null | sed -n 's:.*<path>\(.*\)</path>.*:\1:p' | head -n 1)
+    vols=$(vsh vol-list "$CREATE_POOL" 2>/dev/null | awk 'NR > 2 && NF { print $1 }')
+    for v in $vols; do
+      b=$(vsh vol-dumpxml --pool "$CREATE_POOL" "$v" 2>/dev/null |
+        sed -n '/<backingStore>/,/<\/backingStore>/s:.*<path>\(.*\)</path>.*:\1:p' | head -n 1)
+      [[ -n $b ]] && used_by[${b##*/}]+="${used_by[${b##*/}]:+, }${v%.qcow2}"
+    done
+  fi
+
+  say "Images for:  $PROG create NAME --image IMAGE"
+  say ""
+  printf '  %-12s %-30s %-11s %s\n' IMAGE SYSTEM DOWNLOADED "BASE IMAGE IN LIBVIRT (used by)"
+  for img in $IMAGES; do
+    image_info "$img"
+    file=$CACHE_DIR/images/${IMG_URL##*/}
+    dl=-
+    [[ -f $file ]] && dl=$(du -h "$file" | cut -f1)
+    row=-
+    for base in $vols; do
+      [[ $base == vmclaude-base-"$img"-*.qcow2 ]] || continue
+      size=$(vsh vol-info --pool "$CREATE_POOL" "$base" 2>/dev/null | awk '/^Allocation:/ { print $2 $3 }')
+      users=${used_by[$base]:-no VM}
+      [[ $row == - ]] && row='' || row+='; '
+      row+="$size ($users)"
+    done
+    ((lv)) || row="(libvirt not available)"
+    printf '  %-12s %-30s %-11s %s\n' "$img" "$(image_desc "$img")" "$dl" "$row"
+  done
+
+  say ""
+  say "Where they are:"
+  say "  Downloads, kept only to make base images (prune deletes them):"
+  say "    $CACHE_DIR/images/"
+  if ((lv)); then
+    say "  Base images, one per image release, in libvirt pool \"$CREATE_POOL\":"
+    say "    $pool_path/vmclaude-base-IMAGE-CHECKSUM.qcow2"
+    for base in $vols; do [[ $base == vmclaude-base-*.qcow2 ]] && say "      $base"; done
+    say "  Each VM made with create: its own disk (only what differs from the base)"
+    say "  and its cloud-init settings:"
+    say "    $pool_path/NAME.qcow2   $pool_path/NAME-seed.iso"
+  fi
+  say ""
+  say "Make a VM: $PROG create NAME --image IMAGE.  Free space: $PROG prune."
+}
+
 # Removes base volumes no VM disk is built on, and the downloaded images.
 cmd_prune() {
   local uri=qemu:///system
@@ -1381,16 +1707,34 @@ first_run() {
   cmd_connect "$name"
 }
 
+# "vmclaude COMMAND --help". For connect and shell only right after the
+# command: later arguments belong to Claude or to the remote command.
+wants_help() { # COMMAND ARGS...
+  local cmd=$1 a
+  shift
+  case $cmd in
+    connect | shell) [[ ${1-} == -h || ${1-} == --help ]]; return ;;
+  esac
+  for a in "$@"; do
+    [[ $a == -- ]] && return 1
+    [[ $a == -h || $a == --help ]] && return 0
+  done
+  return 1
+}
+
 main() {
   ((BASH_VERSINFO[0] >= 4)) || { echo "$PROG: bash 4 or newer is required" >&2; exit 1; }
   local cmd=${1-}
   case $cmd in
     "")
       if [[ -z $(profile_names) ]]; then first_run; else cmd_connect; fi ;;
-    help | -h | --help) usage ;;
+    help | -h | --help)
+      if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
-    add | create | delete | prune | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
-      shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+      shift
+      if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
+      "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
     --hold | --no-tmux) cmd_connect "$@" ;;
