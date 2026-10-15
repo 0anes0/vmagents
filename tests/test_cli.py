@@ -447,7 +447,8 @@ class AutostartHookTests(SandboxTest):
     def test_zsh_login(self):
         (self.sb.remote_home / ".zshrc").write_text("")
         self.sb.run("autostart", "vm", "on", env={"STUB_SSH_EXEC": "1"}, check=0)
-        calls, _ = self.login("zsh")
+        # Skip /etc/zsh/zshrc: Ubuntu's runs compinit, which asks about the temp dir.
+        calls, _ = self.login("zsh", args=("--no-globalrcs", "-i"))
         self.assertEqual(calls, [f"claude cwd=[{self.sb.remote_home / 'code'}]"])
 
     def test_skipped_cases(self):
