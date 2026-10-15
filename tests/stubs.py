@@ -87,3 +87,19 @@ chmod +x "$HOME/.local/bin/claude"
 echo "installer ran"
 EOS
 '''
+
+# Fake scp: the "VM" is this machine, so user@host:/path is just /path.
+SCP = r"""#!/usr/bin/env python3
+import json, os, re, shutil, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write(json.dumps({"prog": "scp", "argv": args}) + "\n")
+def local(p):
+    m = re.match(r"^[^/:]+@(\[[^]]*\]|[^:]+):(.*)$", p)
+    return m.group(2) if m else p
+try:
+    shutil.copyfile(local(args[-2]), local(args[-1]))
+except OSError as e:
+    print(f"scp: {local(args[-2])}: {e.strerror}", file=sys.stderr)
+    sys.exit(1)
+"""

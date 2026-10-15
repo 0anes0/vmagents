@@ -47,6 +47,7 @@ class Sandbox:
         self.virsh_state = self.tmp / "virsh.state"
         write_exe(self.bin / "ssh", stubs.SSH)
         write_exe(self.bin / "virsh", stubs.VIRSH)
+        write_exe(self.bin / "scp", stubs.SCP)
         for tool in REMOTE_TOOLS:
             src = shutil.which(tool)
             if src:

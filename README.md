@@ -46,6 +46,9 @@ also an app-menu launcher.
 - **App-menu launcher:** `vmclaude desktop NAME`.
 - **`vmclaude doctor`** checks each step: VM state, IP, sshd, key login,
   Claude, tmux, autostart.
+- **Work in the VM from Claude Code on your computer:** `vmclaude mcp NAME --add`
+  gives the Claude Code you already use tools to run commands and read, write
+  and edit files inside the VM. See [Claude Code on your computer](#claude-code-on-your-computer-working-in-the-vm).
 - **Windows VMs too:** detected from the SSH banner. Setup installs Git for
   Windows and Claude Code there; see [Windows VMs](#windows-vms).
 - Several VMs, one default. Plain-text profiles. A single Bash script with no
@@ -145,6 +148,7 @@ vmclaude connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmclaude shell NAME [CMD...]     plain shell or command on the VM
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
+vmclaude mcp NAME [--add]        tools for Claude Code on this computer to work in the VM
 vmclaude list | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
 ```
 
@@ -248,6 +252,34 @@ in a loop.
 so does the VM's own libvirt description ("created by vmclaude"). Your other
 VMs cannot be deleted with it.
 
+## Claude Code on your computer, working in the VM
+
+Besides running Claude inside the VM, you can let the Claude Code on your own
+computer reach into the VM. Register the VM once:
+
+```sh
+vmclaude mcp arch --add      # = claude mcp add --scope user arch -- vmclaude mcp arch
+```
+
+Every Claude Code session then has four more tools (see `/mcp`):
+
+| Tool | Does, inside the VM |
+|---|---|
+| `run` | run a command: bash on Linux, PowerShell on Windows; output and exit code come back |
+| `read_file` | read a file, with line numbers |
+| `write_file` | create or overwrite a file; folders are created |
+| `edit_file` | replace exact text, like Claude's own Edit tool |
+
+Ask in plain words, e.g. *"in the arch VM, write ~/work/app.py and run it"*.
+Paths are relative to the profile's `DIR` (or the home folder). The VM is
+started when a tool needs it. Files travel over SFTP, so their size and
+contents (any characters) do not matter. Remove with
+`claude mcp remove arch --scope user`.
+
+On Windows VMs, `.ps1` files with non-ASCII text are saved with a UTF-8 BOM,
+because Windows PowerShell 5.1 would read them in the old ANSI code page
+otherwise; and any non-zero exit code shows as 1 (see [Windows VMs](#windows-vms)).
+
 ## Windows VMs
 
 Turn on the SSH server in Windows once, in an administrator PowerShell
@@ -307,6 +339,8 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_e2e.py` uses the real OpenSSH client against a local SSH server
   (needs `asyncssh`, skipped otherwise). It covers password then key login,
   host-key pinning and quoting through a real remote shell.
+- `tests/test_mcp.py` talks MCP to `vmclaude mcp` the way Claude Code does
+  and checks every tool against a throwaway VM home.
 - `tests/test_create.py` runs `create` and `delete` against fake `curl`,
   `virsh` and `virt-install`, including that `delete` refuses VMs it did not
   create.
@@ -323,6 +357,9 @@ python3 -m unittest discover -s tests -t .
 - Inside that Arch Linux VM (kernel 7.2, `/bin/sh` is bash there): connect,
   detach and reattach the tmux session, autostart on a plain `ssh` login, and
   the whole test suite with shellcheck, asyncssh and zsh installed.
+- By hand, `vmclaude mcp` against the Arch and Windows 10 VMs, and a real
+  `claude -p` session that wrote, ran, edited and re-ran a program in the
+  Arch VM using only these tools.
 - By hand, on Windows 10 22H2 (libvirt, OpenSSH for Windows 9.5): setup (key
   as administrator, Git via the fallback installer since winget failed over
   SSH, Claude Code), doctor, connect and quit,
@@ -392,6 +429,11 @@ Claude VM'de ilk kez açıldığında `/login` ile giriş yap.
   `vmclaude autostart dev off`.
 - Bağlantı koparsa Claude tmux içinde çalışmaya devam eder. Tekrar
   bağlandığında aynı oturuma dönersin.
+
+**Bilgisayarındaki Claude Code'dan VM'e müdahale:** `vmclaude mcp arch --add`
+bir kez çalıştırınca, kendi bilgisayarındaki Claude Code'a VM'in içinde komut
+çalıştırma, dosya okuma, yazma ve düzenleme araçları eklenir. Sonra Claude'a
+"arch VM'inde ~/work/app.py yaz ve çalıştır" demen yeterli.
 
 **Sorun mu var?** `vmclaude doctor dev` her adımı (VM durumu, IP, sshd, anahtar
 girişi, Claude, tmux) tek tek kontrol eder.

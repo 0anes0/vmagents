@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.3.1
+VERSION=0.4.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -66,6 +66,7 @@ COMMANDS
     connect NAME         open Claude Code ("vmclaude NAME" does the same)
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
+    mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
 
   Profiles (one per VM, in ${CONF_DIR/#$HOME/\~}/hosts/):
     add NAME             add an existing VM, or change the settings of a profile
@@ -334,7 +335,32 @@ Deletes the profile, its app-menu entry and remembered host key. The VM itself
 is not touched. To delete a VM made with create: "vmclaude delete NAME".
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor add setup autostart list default desktop edit forget rm" ;;
+    mcp) cat <<EOF
+vmclaude mcp NAME [--add]
+
+Lets Claude Code running on this computer work inside the VM: it gets four
+tools that act in the VM over SSH:
+  run          run a command (bash on Linux, PowerShell on Windows VMs)
+  read_file    read a file, with line numbers
+  write_file   create or overwrite a file (folders are created)
+  edit_file    replace exact text in a file, like Claude's own Edit
+Paths are relative to the profile's DIR (or the home folder); ~ works.
+The VM is started if it is off. Files move over SFTP, so size and special
+characters do not matter.
+
+  vmclaude mcp NAME --add   register it once, for all your projects:
+                            claude mcp add --scope user NAME -- vmclaude mcp NAME
+  vmclaude mcp NAME         the server itself; Claude Code starts it
+
+Examples:
+  vmclaude mcp arch --add
+  claude                        then ask: "arch VM'inde ~/work/app.py yaz ve çalıştır"
+  claude mcp remove arch --scope user        unregister
+
+Needs python3 on this computer. In Claude Code, /mcp shows the server.
+EOF
+      ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor mcp add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -1652,6 +1678,375 @@ cmd_prune() {
   ((n)) || say "No unused base volumes."
 }
 
+# ------------------------------------------------------------------ MCP server
+# "vmclaude mcp NAME" speaks MCP on stdin/stdout so that a Claude Code on this
+# computer can run commands and edit files inside the VM. The protocol part is
+# the Python program below; it calls the hidden __mcp-* commands for each step,
+# so SSH options, VM start-up and Linux/Windows differences stay in one place.
+
+mcp_prepare() { # NAME: load, start the VM if needed, connect options
+  load "$1"
+  resolve_target
+  build_ssh_opts
+}
+
+# __mcp-info NAME: prints os=, home= and dir= (the working directory, created).
+cmd___mcp-info() {
+  mcp_prepare "$1"
+  if [[ $C_OS == windows ]]; then
+    # shellcheck disable=SC2016
+    run_ssh -T -o BatchMode=yes -- "$TARGET" "$(win_cmd "$WIN_ENV_PS"'$d = Resolve-Dir '"$(psq "$C_DIR")"'
+if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+"os=windows"; "home=$env:USERPROFILE"; "dir=" + (Resolve-Path -LiteralPath $d).Path')" </dev/null | tr -d '\r'
+  else
+    # shellcheck disable=SC2016
+    run_ssh -T -o BatchMode=yes -- "$TARGET" "$(remote_cmd "$REMOTE_ENV"'cd_dir "$1" || exit 1
+printf "os=linux\nhome=%s\ndir=%s\n" "$HOME" "$PWD"' "$C_DIR")" </dev/null
+  fi
+}
+
+# __mcp-run NAME DIR COMMAND: runs COMMAND in DIR on the VM (bash/sh on Linux,
+# PowerShell on Windows). Output and exit code pass through.
+cmd___mcp-run() {
+  mcp_prepare "$1"
+  local dir=$2 command=$3
+  if [[ $C_OS == windows ]]; then
+    # Errors are written as plain text: left to PowerShell, they reach us
+    # as CLIXML when stderr is not a console.
+    win_run "$WIN_ENV_PS\$global:LASTEXITCODE = 0
+\$vmclaudeFailed = \$false
+Set-Location -LiteralPath $(psq "$dir")
+& {
+$command
+} 2>&1 | ForEach-Object {
+  if (\$_ -is [System.Management.Automation.ErrorRecord]) { \$script:vmclaudeFailed = \$true; [Console]::Error.WriteLine(\$_.ToString()) }
+  else { \$_ }
+}
+if (\$LASTEXITCODE) { exit \$LASTEXITCODE }
+if (\$vmclaudeFailed) { exit 1 }
+exit 0"
+  else
+    # shellcheck disable=SC2016
+    run_ssh -T -o BatchMode=yes -- "$TARGET" "$(remote_cmd "$REMOTE_ENV"'cd "$1" || exit 1
+if command -v bash >/dev/null 2>&1; then exec bash -c "$2"; else exec sh -c "$2"; fi' "$dir" "$command")" </dev/null
+  fi
+}
+
+# Remote paths for scp/sftp: Windows wants C:/x/y written as /C:/x/y.
+sftp_path() {
+  local p=$1
+  if [[ $C_OS == windows ]]; then
+    p=${p//\\//}
+    [[ $p == [A-Za-z]:/* ]] && p=/$p
+  fi
+  printf '%s' "$p"
+}
+
+run_scp() { # SRC DST (one of them remote, as host:path)
+  local -a scp_opts=(-q -s -P "$C_PORT" -o "HostKeyAlias=vmclaude-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
+    -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15)
+  [[ -f $C_KEY ]] && scp_opts+=(-i "$C_KEY" -o IdentitiesOnly=yes)
+  scp "${scp_opts[@]}" -- "$1" "$2"
+}
+
+scp_host() { # user@host, with IPv6 addresses in brackets
+  if [[ $TARGET == *:* && $TARGET != \[* ]]; then printf '%s@[%s]' "$C_USER" "$TARGET"
+  else printf '%s@%s' "$C_USER" "$TARGET"; fi
+}
+
+# __mcp-get NAME REMOTE_PATH LOCAL_FILE
+cmd___mcp-get() {
+  mcp_prepare "$1"
+  run_scp "$(scp_host):$(sftp_path "$2")" "$3"
+}
+
+# __mcp-put NAME LOCAL_FILE REMOTE_PATH: creates the folder first.
+cmd___mcp-put() {
+  mcp_prepare "$1"
+  local local_file=$2 remote=$3 parent
+  if [[ $C_OS == windows ]]; then
+    parent=${remote%[\\/]*}
+    run_ssh -T -o BatchMode=yes -- "$TARGET" \
+      "$(win_cmd "New-Item -ItemType Directory -Force -Path $(psq "$parent") | Out-Null")" </dev/null >/dev/null || return 1
+  else
+    parent=$(dirname -- "$remote")
+    # shellcheck disable=SC2016
+    run_ssh -T -o BatchMode=yes -- "$TARGET" "$(remote_cmd 'mkdir -p -- "$1"' "$parent")" </dev/null || return 1
+  fi
+  run_scp "$local_file" "$(scp_host):$(sftp_path "$remote")"
+}
+
+cmd_mcp() {
+  local name='' add=0
+  while (($#)); do
+    case $1 in
+      --add) add=1; shift ;;
+      -*) usage_error "mcp: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "mcp: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "mcp: missing NAME"
+  load "$name"
+  if ((add)); then
+    command -v claude >/dev/null || die "the claude command is not installed on this computer"
+    local self
+    self=$(readlink -f "$0")
+    claude mcp add --scope user "$NAME" -- "$self" mcp "$NAME" ||
+      die "claude mcp add failed (is there already a server named '$NAME'? see: claude mcp list)"
+    say "Added. In Claude Code on this computer, the tools of VM '$NAME' are now available"
+    say "(start a new Claude session; check with /mcp). Remove with: claude mcp remove $NAME --scope user"
+    return 0
+  fi
+  command -v python3 >/dev/null || die "python3 is needed for the MCP server"
+  VMCLAUDE_VERSION=$VERSION exec python3 -c "$MCP_PY" "$(readlink -f "$0")" "$NAME" "$C_OS" "$C_DIR"
+}
+
+MCP_PY=$(cat <<'PYTHON_END'
+# The MCP server behind "vmclaude mcp NAME": JSON-RPC over stdin/stdout.
+import json, os, re, subprocess, sys, tempfile
+
+VMCLAUDE, NAME, OS, DIR = sys.argv[1:5]
+VERSION = os.environ.get("VMCLAUDE_VERSION", "")
+LIMIT = 30000  # characters of command output returned to the model
+info = {}
+
+
+class ToolError(Exception):
+    pass
+
+
+def vmclaude(args, timeout):
+    # Own process group, so a timeout also stops the ssh under it.
+    p = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, 15)
+        p.communicate()
+        raise ToolError(f"timed out after {timeout} s")
+    return subprocess.CompletedProcess(p.args, p.returncode, out, err)
+
+
+def text(b):
+    return b.decode("utf-8", errors="replace")
+
+
+def vm_info():
+    if not info:
+        r = vmclaude(["__mcp-info", NAME], 600)
+        if r.returncode:
+            raise ToolError(f"cannot reach VM {NAME}: {text(r.stderr or r.stdout).strip()} (try: vmclaude doctor {NAME})")
+        for line in text(r.stdout).splitlines():
+            k, _, v = line.partition("=")
+            info[k] = v
+    return info
+
+
+def remote_path(p):
+    i = vm_info()
+    win = i["os"] == "windows"
+    if not p:
+        raise ToolError("empty path")
+    if (win and (re.match(r"^[A-Za-z]:[\\/]", p) or p.startswith("\\\\"))) or (not win and p.startswith("/")):
+        return p
+    base, rest = i["dir"], p
+    if p == "~":
+        return i["home"]
+    if p.startswith("~/") or p.startswith("~\\"):
+        base, rest = i["home"], p[2:]
+    sep = "\\" if win else "/"
+    if win:
+        rest = rest.replace("/", "\\")
+    return base.rstrip("/\\") + sep + rest
+
+
+def shorten(s):
+    if len(s) <= LIMIT:
+        return s
+    half = LIMIT // 2
+    return s[:half] + f"\n... [{len(s) - LIMIT} characters cut] ...\n" + s[-half:]
+
+
+def get(path):
+    remote = remote_path(path)
+    with tempfile.TemporaryDirectory() as d:
+        local = os.path.join(d, "f")
+        r = vmclaude(["__mcp-get", NAME, remote, local], 600)
+        if r.returncode or not os.path.exists(local):
+            raise ToolError(f"cannot read {remote}: {text(r.stderr).strip() or 'not found'}")
+        with open(local, "rb") as f:
+            return remote, f.read()
+
+
+def put(path, data):
+    remote = remote_path(path)
+    with tempfile.TemporaryDirectory() as d:
+        local = os.path.join(d, "f")
+        with open(local, "wb") as f:
+            f.write(data)
+        r = vmclaude(["__mcp-put", NAME, local, remote], 600)
+        if r.returncode:
+            raise ToolError(f"cannot write {remote}: {text(r.stderr).strip()}")
+    return remote
+
+
+def run(a):
+    command = a.get("command") or ""
+    if not command.strip():
+        raise ToolError("command is empty")
+    timeout = max(1, min(int(a.get("timeout") or 120), 600))
+    r = vmclaude(["__mcp-run", NAME, vm_info()["dir"], command], timeout)
+    if r.returncode == 255 and not r.stdout:
+        raise ToolError(f"SSH to VM {NAME} failed: {text(r.stderr).strip()}")
+    out = text(r.stdout)
+    if r.stderr:
+        out += ("\n" if out and not out.endswith("\n") else "") + "[stderr]\n" + text(r.stderr)
+    out = shorten(out)
+    return out + ("" if not out or out.endswith("\n") else "\n") + f"[exit code {r.returncode}]"
+
+
+def read_file(a):
+    remote, data = get(a.get("path", ""))
+    lines = data.decode("utf-8-sig", errors="replace").splitlines()
+    start = max(1, int(a.get("offset") or 1))
+    count = max(1, int(a.get("limit") or 2000))
+    part = lines[start - 1:start - 1 + count]
+    body = "\n".join(f"{n:6}\t{line}" for n, line in enumerate(part, start))
+    more = len(lines) - (start - 1 + len(part))
+    if more > 0:
+        body += f"\n... {more} more lines (use offset {start + len(part)})"
+    return f"{remote} ({len(lines)} lines)\n" + (body or "(empty file)")
+
+
+def write_file(a):
+    content = a.get("content")
+    if content is None:
+        raise ToolError("content is missing")
+    data = content.encode("utf-8")
+    path = a.get("path", "")
+    # Windows PowerShell 5.1 reads scripts without a BOM in the old ANSI code page.
+    if (vm_info()["os"] == "windows" and path.lower().endswith((".ps1", ".psm1", ".psd1"))
+            and not data.isascii() and not data.startswith(b"\xef\xbb\xbf")):
+        data = b"\xef\xbb\xbf" + data
+    remote = put(path, data)
+    return f"Wrote {len(data)} bytes to {remote}"
+
+
+def edit_file(a):
+    old, new = a.get("old_string"), a.get("new_string")
+    if not old:
+        raise ToolError("old_string is empty")  # (a BOM at the start of the file is kept as it is)
+    if new is None:
+        raise ToolError("new_string is missing")
+    remote, data = get(a.get("path", ""))
+    try:
+        s = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ToolError(f"{remote} is not a UTF-8 text file")
+    n = s.count(old)
+    if n == 0 and "\r\n" in s and "\r\n" not in old:  # Windows line endings
+        old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
+        n = s.count(old)
+    if n == 0:
+        raise ToolError(f"old_string not found in {remote}")
+    if n > 1 and not a.get("replace_all"):
+        raise ToolError(f"old_string occurs {n} times in {remote}; give more context or set replace_all")
+    put(remote, s.replace(old, new).encode("utf-8"))
+    return f"Edited {remote}: replaced {n if a.get('replace_all') else 1} occurrence(s)"
+
+
+where = f"VM '{NAME}'" + (" (Windows: commands run in Windows PowerShell 5.1; any non-zero exit code is reported as 1)"
+                         if OS == "windows" else " (Linux: commands run in bash)")
+start_dir = DIR or "the home directory"
+TOOLS = [
+    {"name": "run", "handler": run,
+     "description": f"Run a shell command inside {where}, in {start_dir}. Returns its output and exit code. "
+                    "Starts the VM first if it is off. Use this for everything inside the VM: building, "
+                    "testing, installing packages (sudo works without a password on VMs made by vmclaude create).",
+     "inputSchema": {"type": "object", "properties": {
+         "command": {"type": "string", "description": "The command line to run"},
+         "timeout": {"type": "integer", "description": "Seconds before it is stopped (default 120, max 600)"}},
+         "required": ["command"]}},
+    {"name": "read_file", "handler": read_file,
+     "description": f"Read a text file inside {where}. Relative paths start in {start_dir}; ~ is the home "
+                    "directory. Lines come numbered (number, tab, text).",
+     "inputSchema": {"type": "object", "properties": {
+         "path": {"type": "string"},
+         "offset": {"type": "integer", "description": "First line to show (1-based)"},
+         "limit": {"type": "integer", "description": "Number of lines (default 2000)"}},
+         "required": ["path"]}},
+    {"name": "write_file", "handler": write_file,
+     "description": f"Create or overwrite a file inside {where} with the given content. Missing folders are "
+                    f"created. Relative paths start in {start_dir}.",
+     "inputSchema": {"type": "object", "properties": {
+         "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {"name": "edit_file", "handler": edit_file,
+     "description": f"Replace exact text in a file inside {where}. old_string must match the file exactly "
+                    "(whitespace included) and occur once, unless replace_all is true.",
+     "inputSchema": {"type": "object", "properties": {
+         "path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"},
+         "replace_all": {"type": "boolean", "description": "Replace every occurrence"}},
+         "required": ["path", "old_string", "new_string"]}},
+]
+HANDLERS = {t["name"]: t.pop("handler") for t in TOOLS}
+INSTRUCTIONS = (f"These tools work inside the virtual machine '{NAME}' over SSH (vmclaude). Use them, not the "
+                f"local file and shell tools, whenever the task is about that VM. Paths and commands start in "
+                f"{start_dir} on the VM.")
+
+
+def reply(id_, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": id_}
+    if error:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def handle(msg):
+    method, id_, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if id_ is None:
+        return  # a notification
+    if method == "initialize":
+        reply(id_, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": f"vmclaude-{NAME}", "version": VERSION},
+                    "instructions": INSTRUCTIONS})
+    elif method == "ping":
+        reply(id_, {})
+    elif method == "tools/list":
+        reply(id_, {"tools": TOOLS})
+    elif method == "tools/call":
+        handler = HANDLERS.get(params.get("name"))
+        if not handler:
+            reply(id_, error={"code": -32602, "message": f"unknown tool {params.get('name')}"})
+            return
+        try:
+            reply(id_, {"content": [{"type": "text", "text": handler(params.get("arguments") or {})}], "isError": False})
+        except ToolError as e:
+            reply(id_, {"content": [{"type": "text", "text": str(e)}], "isError": True})
+        except Exception as e:  # keep serving after a bug
+            reply(id_, {"content": [{"type": "text", "text": f"internal error: {e!r}"}], "isError": True})
+    else:
+        reply(id_, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        reply(None, error={"code": -32700, "message": "parse error"})
+        continue
+    for m in msg if isinstance(msg, list) else [msg]:
+        handle(m)
+PYTHON_END
+)
+
 desktop_escape() { # quote an argument for a .desktop Exec line
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\`/\\\`}; s=${s//\$/\\\$}
@@ -1741,7 +2136,8 @@ main() {
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
-    add | create | delete | images | prune | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+    __mcp-info | __mcp-run | __mcp-get | __mcp-put) shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | mcp | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;
