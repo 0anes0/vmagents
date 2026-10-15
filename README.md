@@ -90,6 +90,7 @@ Uninstall with `./install.sh --uninstall`.
 
 ```sh
 vmclaude create dev         # new Debian VM + Claude Code, no password needed
+vmclaude login dev          # log Claude in (your browser, on this computer)
 vmclaude dev                # open Claude Code in it
 ```
 
@@ -108,8 +109,21 @@ vmclaude setup dev          # key, tmux, Claude Code, autostart
 vmclaude                    # open Claude Code on the VM
 ```
 
-The first time Claude runs on the VM, log in with `/login`. It prints a link to
-open in your browser.
+Log Claude in on the VM once, from your computer:
+
+```sh
+vmclaude login dev
+```
+
+This runs `claude setup-token` on your computer, where your browser is, takes
+the long-lived token it prints and stores it on the VM in
+`~/.config/vmclaude/claude-env` (readable only by your user there). Claude on
+the VM uses it however it is started, so it never shows its login screen,
+whose long link is hard to copy out of a terminal. It needs Claude Code on
+your computer and a Claude subscription; an API key works too
+(`echo "$ANTHROPIC_API_KEY" | vmclaude login dev`). Such tokens are for
+chatting and coding only; for other account features use `/login` inside
+Claude. `vmclaude login dev --remove` deletes the token again.
 
 ### Ways in
 
@@ -148,6 +162,7 @@ vmclaude connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmclaude shell NAME [CMD...]     plain shell or command on the VM
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
+vmclaude login NAME [--remove]   log Claude in on the VM with this computer's browser
 vmclaude mcp NAME [--add]        tools for Claude Code on this computer to work in the VM
 vmclaude mount NAME [FOLDER]     the VM's folder as a folder here (~/vm/NAME); umount NAME
 vmclaude list | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
@@ -353,6 +368,9 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_e2e.py` uses the real OpenSSH client against a local SSH server
   (needs `asyncssh`, skipped otherwise). It covers password then key login,
   host-key pinning and quoting through a real remote shell.
+- `tests/test_login.py` checks that the token reaches Claude however it is
+  started (tmux, autostart, a shell, Windows) and never appears on a command
+  line.
 - `tests/test_mount.py` checks `mount`/`umount` with a fake sshfs.
 - `tests/test_mcp.py` talks MCP to `vmclaude mcp` the way Claude Code does
   and checks every tool against a throwaway VM home.
@@ -432,7 +450,9 @@ vmclaude              # Claude Code'u VM'de aç
 ```
 
 Argümansız `vmclaude` ilk seferde VM bilgilerini sorar ve kurulumu teklif eder.
-Claude VM'de ilk kez açıldığında `/login` ile giriş yap.
+Claude'a VM'de giriş için `vmclaude login dev` çalıştır: giriş senin
+bilgisayarında, tarayıcında olur; vmclaude oluşan token'ı VM'e kendisi taşır.
+Böylece VM'de giriş ekranı ve kopyalanması zor bağlantı hiç çıkmaz.
 
 **Nasıl açılır:**
 

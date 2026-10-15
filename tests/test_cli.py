@@ -11,6 +11,9 @@ from tests import stubs
 from tests.helpers import SandboxTest, free_port, listening_port, write_exe
 from tests.ptyrun import run_in_pty
 
+# How vmclaude starts claude: through a wrapper that adds the "vmclaude login" token.
+WRAP = '[sh] [-c] [[ -r "$1" ] && { set -a; . "$1"; set +a; }; shift; exec "$@"] [vmclaude] '
+
 
 class ProfileTests(SandboxTest):
     def test_help_and_version(self):
@@ -210,7 +213,8 @@ class ConnectTests(SandboxTest):
         claude = self.sb.remote_bin / "claude"
         home = self.sb.remote_home
         self.assertEqual(self.sb.remote_calls(),
-                         [f"tmux [new-session] [-A] [-s] [claude] [-c] [{home}] [{claude}] [--resume] cwd=[{home}]"])
+                         [f"tmux [new-session] [-A] [-s] [claude] [-c] [{home}] {WRAP}[{home}/.config/vmclaude/claude-env] "
+                          f"[{claude}] [--resume] cwd=[{home}]"])
         self.sb.clear_log()
         self.sb.run("add", "vm", "--session", "work", check=0)
         self.run_remote("vm")
@@ -477,7 +481,8 @@ class AutostartHookTests(SandboxTest):
         code = self.sb.remote_home / "code"
         self.assertEqual(len(calls), 1, calls)
         self.assertTrue(calls[0].startswith(
-            f"tmux [new-session] [-A] [-s] [claude] [-c] [{code}] [{self.sb.remote_bin}/claude]"), calls)
+            f"tmux [new-session] [-A] [-s] [claude] [-c] [{code}] {WRAP}"
+            f"[{self.sb.remote_home}/.config/vmclaude/claude-env] [{self.sb.remote_bin}/claude]"), calls)
 
     def test_without_tmux_claude_runs_in_dir(self):
         calls, _ = self.login()

@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.5.0
+VERSION=0.6.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -42,6 +42,7 @@ GET STARTED
   No VM yet? Make one (Linux computer with libvirt):
     vmclaude create dev                      new Debian 13 VM with Claude Code, no password
     vmclaude create box --image arch         the same with Arch Linux
+    vmclaude login dev                       log Claude in (browser opens on this computer)
     vmclaude dev                             open Claude Code in it
 
   A VM you already have:
@@ -66,6 +67,7 @@ COMMANDS
     connect NAME         open Claude Code ("vmclaude NAME" does the same)
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
+    login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
     mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
 
@@ -336,6 +338,34 @@ Deletes the profile, its app-menu entry and remembered host key. The VM itself
 is not touched. To delete a VM made with create: "vmclaude delete NAME".
 EOF
       ;;
+    login) cat <<EOF
+vmclaude login NAME [--remove]
+
+Logs Claude Code on the VM in, so it never shows its login screen there
+(whose long link is hard to copy out of a terminal). The login happens on
+THIS computer, with its browser:
+  1. "claude setup-token" runs here and opens your browser; confirm there.
+  2. vmclaude takes the long-lived token it prints (no copy and paste) and
+     stores it on the VM in ~/.config/vmclaude/claude-env, readable only by
+     your user there.
+  3. Claude on the VM uses it from then on, however you start it.
+Needs Claude Code on this computer and a Claude subscription. If the token
+cannot be read automatically, you are asked to paste it (hidden input).
+An API key (sk-ant-api...) works too: echo "\$ANTHROPIC_API_KEY" | vmclaude login NAME
+
+Tokens made this way can only be used for chatting and coding (no remote-
+control features); for those, use /login inside Claude instead.
+
+Options:
+  --remove      delete the stored token from the VM
+
+Examples:
+  vmclaude login arch
+  vmclaude login win10
+  claude setup-token            (by hand) then: vmclaude login arch   and paste it
+  vmclaude login arch --remove
+EOF
+      ;;
     mount | umount) cat <<EOF
 vmclaude mount NAME [FOLDER]
 vmclaude umount NAME [FOLDER]
@@ -382,7 +412,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor mcp mount umount add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -645,18 +675,24 @@ cd_dir() {
 }
 '
 
+# Starts "$2 ..." with the token from file $1 ("vmclaude login") in its
+# environment. A wrapper, not tmux -e: the token stays out of command lines.
+# shellcheck disable=SC2016
+CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; shift; exec "$@"'
+
 # $1 dir, $2 tmux session ("" = no tmux), $3 profile name, rest: claude args
 # shellcheck disable=SC2016
-CONNECT_SH=$REMOTE_ENV'd=$1; s=$2; n=$3; shift 3
+CONNECT_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")"'
+d=$1; s=$2; n=$3; shift 3
 cd_dir "$d" || { echo "vmclaude: cannot use directory $d on the VM" >&2; exit 1; }
 c=$(command -v claude) || { echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127; }
 if [ -n "${TERM-}" ] && command -v tput >/dev/null 2>&1 && ! tput -T "$TERM" longname >/dev/null 2>&1; then
   TERM=xterm-256color; export TERM
 fi
 if [ -n "$s" ] && command -v tmux >/dev/null 2>&1; then
-  exec tmux new-session -A -s "$s" -c "$PWD" "$c" "$@"
+  exec tmux new-session -A -s "$s" -c "$PWD" sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/claude-env" "$c" "$@"
 fi
-exec "$c" "$@"
+exec sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/claude-env" "$c" "$@"
 '
 
 # Reads one public key on stdin and adds it to authorized_keys once.
@@ -745,8 +781,9 @@ mkdir -p "$d" || exit 1
 cat >"$hook" || exit 1
 for rc in $rcs; do
   [ -f "$rc" ] && [ -s "$rc" ] && [ "$(tail -c 1 "$rc" | wc -l)" -eq 0 ] && echo >>"$rc"
-  printf "%s\n%s\n%s\n%s\n" "$begin" \
+  printf "%s\n%s\n%s\n%s\n%s\n" "$begin" \
     "case \":\$PATH:\" in *\":\$HOME/.local/bin:\"*) ;; *) PATH=\"\$HOME/.local/bin:\$PATH\" ;; esac" \
+    "[ -r \"\$HOME/.config/vmclaude/claude-env\" ] && { set -a; . \"\$HOME/.config/vmclaude/claude-env\"; set +a; }" \
     "[ -r \"\$HOME/.config/vmclaude/autostart.sh\" ] && . \"\$HOME/.config/vmclaude/autostart.sh\"" "$end" >>"$rc" || exit 1
 done
 echo "Autostart is on: SSH logins open Claude Code (quit Claude to get a shell)."
@@ -766,9 +803,9 @@ if [ -n "\${SSH_CONNECTION-}" ] && [ -z "\${TMUX-}" ] && [ -z "\${VMCLAUDE_NO_AU
   case \$vmclaude_dir in "") vmclaude_dir=\$HOME ;; "~") vmclaude_dir=\$HOME ;; "~/"*) vmclaude_dir=\$HOME/\${vmclaude_dir#"~/"} ;; esac
   if command -v claude >/dev/null 2>&1; then
     if [ -n $(sq "$2") ] && command -v tmux >/dev/null 2>&1; then
-      tmux new-session -A -s $(sq "$2") -c "\$vmclaude_dir" "\$(command -v claude)"
+      tmux new-session -A -s $(sq "$2") -c "\$vmclaude_dir" sh -c $(sq "$CLAUDE_ENV_SH") vmclaude "\$HOME/.config/vmclaude/claude-env" "\$(command -v claude)"
     else
-      (cd "\$vmclaude_dir" 2>/dev/null; claude)
+      (cd "\$vmclaude_dir" 2>/dev/null; exec sh -c $(sq "$CLAUDE_ENV_SH") vmclaude "\$HOME/.config/vmclaude/claude-env" claude)
     fi
   fi
   unset vmclaude_dir
@@ -843,6 +880,12 @@ function Resolve-Dir($d) {
 # never exits. Raw (VT) input first, then line mode for 2 s, means it is done.
 # shellcheck disable=SC2016
 WIN_INVOKE_PS='function Invoke-Claude($exe, $line, $dir) {
+  $tf = "$env:USERPROFILE\.config\vmclaude\claude-env"
+  if (Test-Path -LiteralPath $tf) {
+    foreach ($l in Get-Content -LiteralPath $tf) {
+      if ($l -match "^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=(\S+)$") { Set-Item "env:$($Matches[1])" $Matches[2] }
+    }
+  }
   if (-not ("VmClaude.Con" -as [type])) {
     Add-Type -Namespace VmClaude -Name Con -MemberDefinition ("[DllImport(`"kernel32.dll`")] public static extern IntPtr GetStdHandle(int n);" +
       "[DllImport(`"kernel32.dll`")] public static extern bool GetConsoleMode(IntPtr h, out uint m);")
@@ -1067,6 +1110,7 @@ WIN_DOCTOR_PS=$WIN_ENV_PS'$c = Get-Command claude -CommandType Application -Erro
 $g = Get-Command git -ErrorAction SilentlyContinue
 "git=" + $(if ($g) { & $g.Source --version })
 "hook=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\autostart.ps1") { "on" })
+"login=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\claude-env") { "token" } elseif (Test-Path "$env:USERPROFILE\.claude\.credentials.json") { "login" })
 '
 
 # shellcheck disable=SC2029 # remote commands are built with remote_cmd/sq
@@ -1300,7 +1344,7 @@ cmd_setup() {
 
   say ""
   say "Done. Open Claude on the VM with:  $PROG $NAME"
-  say "First time only: log in inside Claude with /login."
+  say "Log in to Claude once (in a browser on this computer):  $PROG login $NAME"
   [[ $C_OS == windows ]] && say "Windows has no tmux: closing the connection ends Claude's session."
   say "App-menu launcher:                 $PROG desktop $NAME"
 }
@@ -1345,6 +1389,7 @@ cmd_doctor() {
 printf "claude=%s\n" "$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -n 1)"
 printf "tmux=%s\n" "$(command -v tmux >/dev/null 2>&1 && tmux -V)"
 printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
+printf "login=%s\n" "$(if [ -f "$HOME/.config/vmclaude/claude-env" ]; then echo token; elif [ -f "$HOME/.claude/.credentials.json" ]; then echo login; fi)"
 ')
   fi
   out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$probe" </dev/null 2>/dev/null | tr -d '\r') ||
@@ -1360,6 +1405,11 @@ printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
   elif [[ -n $tmux ]]; then pass "tmux on the VM: $tmux"
   elif [[ -n $C_SESSION ]]; then printf '  warn  tmux not installed; sessions end when the connection drops\n'; fi
   if [[ -n $hook ]]; then pass "autostart on SSH login: on"; else printf '  info  autostart on SSH login: off\n'; fi
+  case $(sed -n 's/^login=//p' <<<"$out") in
+    token) pass "Claude login: token from \"$PROG login\"" ;;
+    login) pass "Claude login: done inside Claude (/login)" ;;
+    *) printf '  info  Claude login: not yet (run: %s login %s)\n' "$PROG" "$NAME" ;;
+  esac
   ((ok)) && say "All good." || return 1
 }
 
@@ -2144,6 +2194,86 @@ cmd_umount() {
   say "Unmounted $dir"
 }
 
+# ------------------------------------------------------------------ login
+
+# Logs Claude Code on the VM in without a browser there: the token is made
+# here ("claude setup-token", whose browser step works on this computer) and
+# stored on the VM in ~/.config/vmclaude/claude-env, readable only by you.
+TOKEN_RE='^sk-ant-[A-Za-z0-9_-]{20,}$'
+
+cmd_login() {
+  local name='' remove=0
+  while (($#)); do
+    case $1 in
+      --remove) remove=1; shift ;;
+      -*) usage_error "login: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "login: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || name=$(default_name) || usage_error "login: missing NAME"
+  load "$name"
+
+  local token='' var
+  if ((!remove)); then
+    if [[ ! -t 0 ]]; then
+      token=$(head -c 4096 | tr -d ' \r\n\t')        # piped in: echo TOKEN | vmclaude login NAME
+    else
+      if command -v claude >/dev/null && command -v script >/dev/null; then
+        info "Making a login token with Claude Code on this computer (claude setup-token)."
+        info "Confirm in the browser that opens; vmclaude takes the token from there."
+        local log
+        log=$(mktemp)
+        # A wide terminal, so the token is printed on one line.
+        script -qefc "stty cols 1000 2>/dev/null; claude setup-token" "$log" || true
+        token=$(sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$log" | grep -oE 'sk-ant-[A-Za-z0-9_-]{20,}' | tail -n 1) || true
+        rm -f "$log"
+      fi
+      if [[ -z $token ]]; then
+        info "Paste a Claude token (from \"claude setup-token\") or an API key (sk-ant-...)."
+        read -rs -p "Token: " token || die "aborted"
+        printf '\n' >&2
+        token=${token//[[:space:]]/}
+      fi
+    fi
+    [[ $token =~ $TOKEN_RE ]] || die "that is not a Claude token or API key (they start with sk-ant-)"
+    case $token in
+      sk-ant-oat*) var=CLAUDE_CODE_OAUTH_TOKEN ;;
+      *) var=ANTHROPIC_API_KEY ;;
+    esac
+  fi
+
+  resolve_target
+  build_ssh_opts
+  if [[ $C_OS == windows ]]; then
+    # shellcheck disable=SC2016
+    local ps='$d = "$env:USERPROFILE\.config\vmclaude"; $f = "$d\claude-env"'
+    if ((remove)); then
+      ps+=$'\nRemove-Item -LiteralPath $f -ErrorAction SilentlyContinue'
+      run_ssh -T -- "$TARGET" "$(win_cmd "$ps")" </dev/null || die "could not remove the token"
+    else
+      # shellcheck disable=SC2016
+      ps+=$'\nNew-Item -ItemType Directory -Force -Path $d | Out-Null\n[IO.File]::WriteAllText($f, [Console]::In.ReadToEnd())'
+      printf '%s=%s\n' "$var" "$token" | run_ssh -T -- "$TARGET" "$(win_cmd "$ps")" || die "could not store the token"
+    fi
+  else
+    if ((remove)); then
+      # shellcheck disable=SC2016
+      run_ssh -T -- "$TARGET" 'rm -f "$HOME/.config/vmclaude/claude-env"' </dev/null || die "could not remove the token"
+    else
+      # shellcheck disable=SC2016
+      printf '%s=%s\n' "$var" "$token" | run_ssh -T -- "$TARGET" "$(remote_cmd 'umask 077
+mkdir -p "$HOME/.config/vmclaude" && cat >"$HOME/.config/vmclaude/claude-env" && chmod 600 "$HOME/.config/vmclaude/claude-env"')" ||
+        die "could not store the token"
+    fi
+  fi
+  if ((remove)); then
+    say "Removed the login token from '$NAME'."
+  else
+    say "Logged in: Claude Code on '$NAME' now uses this $([[ $var == ANTHROPIC_API_KEY ]] && echo "API key" || echo token)."
+    say "Open it with: $PROG $NAME   (a Claude session that is already running keeps its old login)"
+  fi
+}
+
 desktop_escape() { # quote an argument for a .desktop Exec line
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\`/\\\`}; s=${s//\$/\\\$}
@@ -2234,7 +2364,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

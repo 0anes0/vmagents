@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tests import stubs
 from tests.helpers import Sandbox, write_exe
+from tests.test_cli import WRAP
 
 try:
     import asyncssh
@@ -170,7 +171,8 @@ class EndToEnd(unittest.TestCase):
         proj = self.sb.remote_home / "project dir"
         claude = self.sb.remote_home / ".local" / "bin" / "claude"
         self.assertEqual(self.sb.remote_calls(), [
-            f"tmux [new-session] [-A] [-s] [claude] [-c] [{proj}] [{claude}] [-p] [it's $HOME] cwd=[{proj}]"])
+            f"tmux [new-session] [-A] [-s] [claude] [-c] [{proj}] {WRAP}[{self.sb.remote_home}/.config/vmclaude/claude-env] "
+            f"[{claude}] [-p] [it's $HOME] cwd=[{proj}]"])
 
         r = self.sb.run("doctor", "vm", timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
