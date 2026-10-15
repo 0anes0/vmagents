@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.4.0
+VERSION=0.5.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -67,6 +67,7 @@ COMMANDS
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
+    mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
 
   Profiles (one per VM, in ${CONF_DIR/#$HOME/\~}/hosts/):
     add NAME             add an existing VM, or change the settings of a profile
@@ -335,6 +336,27 @@ Deletes the profile, its app-menu entry and remembered host key. The VM itself
 is not touched. To delete a VM made with create: "vmclaude delete NAME".
 EOF
       ;;
+    mount | umount) cat <<EOF
+vmclaude mount NAME [FOLDER]
+vmclaude umount NAME [FOLDER]
+
+Makes the VM's working folder (the profile's DIR, or the home folder) appear
+as a folder on this computer, over SSH (sshfs). Programs here, Claude Code
+included, then read and edit the VM's files as if they were local.
+FOLDER defaults to ~/vm/NAME and must be empty. Needs sshfs
+(Debian/Ubuntu: sudo apt install sshfs). The VM is started if it is off.
+
+Mind: commands started in that folder still run on THIS computer, with its
+programs. To run them in the VM use "vmclaude shell NAME 'COMMAND'", or the
+run tool of "vmclaude mcp NAME --add".
+
+Examples:
+  vmclaude mount arch               ~/vm/arch is now the VM's home folder
+  cd ~/vm/arch && claude            edit the VM's files with Claude Code here
+  vmclaude shell arch 'make test'   run things in the VM
+  vmclaude umount arch
+EOF
+      ;;
     mcp) cat <<EOF
 vmclaude mcp NAME [--add]
 
@@ -360,7 +382,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor mcp add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -1693,6 +1715,10 @@ mcp_prepare() { # NAME: load, start the VM if needed, connect options
 # __mcp-info NAME: prints os=, home= and dir= (the working directory, created).
 cmd___mcp-info() {
   mcp_prepare "$1"
+  vm_info_lines
+}
+
+vm_info_lines() { # needs mcp_prepare first
   if [[ $C_OS == windows ]]; then
     # shellcheck disable=SC2016
     run_ssh -T -o BatchMode=yes -- "$TARGET" "$(win_cmd "$WIN_ENV_PS"'$d = Resolve-Dir '"$(psq "$C_DIR")"'
@@ -2047,6 +2073,77 @@ for line in sys.stdin:
 PYTHON_END
 )
 
+# ------------------------------------------------------------------ mount
+
+MOUNT_BASE=${VMCLAUDE_MOUNT_DIR:-$HOME/vm}
+
+is_mounted() { # DIR
+  local d
+  d=$(readlink -f "$1" 2>/dev/null) || return 1
+  awk -v d="$d" '$2 == d { found = 1 } END { exit !found }' "${VMCLAUDE_MOUNTS_FILE:-/proc/mounts}" 2>/dev/null
+}
+
+cmd_mount() {
+  local name='' dir=''
+  while (($#)); do
+    case $1 in
+      -*) usage_error "mount: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1
+        elif [[ -z $dir ]]; then dir=$1
+        else usage_error "mount: too many arguments"
+        fi
+        shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "mount: missing NAME"
+  command -v sshfs >/dev/null ||
+    die "sshfs is not installed (Debian/Ubuntu: sudo apt install sshfs; Fedora: sudo dnf install fuse-sshfs; Arch: sudo pacman -S sshfs)"
+  load "$name"
+  dir=${dir:-$MOUNT_BASE/$NAME}
+  if is_mounted "$dir"; then say "Already mounted: $dir"; return 0; fi
+  mkdir -p "$dir"
+  [[ -z $(ls -A "$dir") ]] || die "$dir is not empty; give an empty folder: $PROG mount $NAME FOLDER"
+
+  local remote line
+  mcp_prepare "$NAME"  # here, not in $(...): it sets TARGET
+  remote=$(vm_info_lines | sed -n 's/^dir=//p') || true
+  [[ -n $remote ]] || die "cannot reach VM $NAME (see: $PROG doctor $NAME)"
+  local -a o=(-o "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,idmap=user"
+    -o "Port=$C_PORT" -o "HostKeyAlias=vmclaude-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
+    -o StrictHostKeyChecking=accept-new -o BatchMode=yes)
+  [[ -f $C_KEY ]] && o+=(-o "IdentityFile=$C_KEY" -o IdentitiesOnly=yes)
+  if ! line=$(sshfs "${o[@]}" "$(scp_host):$(sftp_path "$remote")" "$dir" 2>&1); then
+    rmdir "$dir" 2>/dev/null || true
+    die "sshfs failed: $line"
+  fi
+  say "Mounted $NAME:$remote at $dir"
+  say ""
+  say "Files you (or Claude Code) change in $dir change in the VM."
+  say "But commands started there still run on THIS computer. To run them in the VM:"
+  say "  $PROG shell $NAME 'COMMAND'     or the run tool of: $PROG mcp $NAME --add"
+  say "Unmount with: $PROG umount $NAME"
+}
+
+cmd_umount() {
+  local name=${1:-} dir=${2:-}
+  [[ -n $name ]] || usage_error "umount: missing NAME"
+  valid_name "$name" || die "invalid name: $name"
+  dir=${dir:-$MOUNT_BASE/$name}
+  is_mounted "$dir" || { say "Not mounted: $dir"; return 0; }
+  local tool
+  for tool in fusermount3 fusermount; do
+    if command -v "$tool" >/dev/null; then
+      "$tool" -u "$dir" || die "could not unmount $dir (is a program still using it?)"
+      rmdir "$dir" 2>/dev/null || true
+      say "Unmounted $dir"
+      return 0
+    fi
+  done
+  umount "$dir" || die "could not unmount $dir"
+  say "Unmounted $dir"
+}
+
 desktop_escape() { # quote an argument for a .desktop Exec line
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\`/\\\`}; s=${s//\$/\\\$}
@@ -2137,7 +2234,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

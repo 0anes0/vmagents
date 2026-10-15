@@ -149,6 +149,7 @@ vmclaude shell NAME [CMD...]     plain shell or command on the VM
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
 vmclaude mcp NAME [--add]        tools for Claude Code on this computer to work in the VM
+vmclaude mount NAME [FOLDER]     the VM's folder as a folder here (~/vm/NAME); umount NAME
 vmclaude list | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
 ```
 
@@ -280,6 +281,19 @@ On Windows VMs, `.ps1` files with non-ASCII text are saved with a UTF-8 BOM,
 because Windows PowerShell 5.1 would read them in the old ANSI code page
 otherwise; and any non-zero exit code shows as 1 (see [Windows VMs](#windows-vms)).
 
+### Or: the VM's folder as a local folder
+
+```sh
+vmclaude mount arch          # ~/vm/arch is now the VM's working folder (sshfs)
+cd ~/vm/arch && claude       # Claude Code edits the VM's files with its normal tools
+vmclaude umount arch
+```
+
+Needs `sshfs` (`sudo apt install sshfs`). Mind that commands started in that
+folder still run on your computer; run things in the VM with
+`vmclaude shell arch 'make test'` or with the `run` tool above. Works with
+Linux and Windows VMs.
+
 ## Windows VMs
 
 Turn on the SSH server in Windows once, in an administrator PowerShell
@@ -339,6 +353,7 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_e2e.py` uses the real OpenSSH client against a local SSH server
   (needs `asyncssh`, skipped otherwise). It covers password then key login,
   host-key pinning and quoting through a real remote shell.
+- `tests/test_mount.py` checks `mount`/`umount` with a fake sshfs.
 - `tests/test_mcp.py` talks MCP to `vmclaude mcp` the way Claude Code does
   and checks every tool against a throwaway VM home.
 - `tests/test_create.py` runs `create` and `delete` against fake `curl`,
@@ -359,7 +374,8 @@ python3 -m unittest discover -s tests -t .
   the whole test suite with shellcheck, asyncssh and zsh installed.
 - By hand, `vmclaude mcp` against the Arch and Windows 10 VMs, and a real
   `claude -p` session that wrote, ran, edited and re-ran a program in the
-  Arch VM using only these tools.
+  Arch VM using only these tools. `vmclaude mount` with both VMs: files
+  written on either side show up on the other.
 - By hand, on Windows 10 22H2 (libvirt, OpenSSH for Windows 9.5): setup (key
   as administrator, Git via the fallback installer since winget failed over
   SSH, Claude Code), doctor, connect and quit,
@@ -434,6 +450,9 @@ Claude VM'de ilk kez açıldığında `/login` ile giriş yap.
 bir kez çalıştırınca, kendi bilgisayarındaki Claude Code'a VM'in içinde komut
 çalıştırma, dosya okuma, yazma ve düzenleme araçları eklenir. Sonra Claude'a
 "arch VM'inde ~/work/app.py yaz ve çalıştır" demen yeterli.
+Ya da `vmclaude mount arch` ile VM'in klasörünü `~/vm/arch` olarak bağlayıp
+Claude Code'u orada açabilirsin; dosyalar doğrudan VM'de değişir (komutlar ise
+bilgisayarında çalışır, VM'de çalıştırmak için `vmclaude shell`).
 
 **Sorun mu var?** `vmclaude doctor dev` her adımı (VM durumu, IP, sshd, anahtar
 girişi, Claude, tmux) tek tek kontrol eder.
