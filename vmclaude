@@ -692,7 +692,9 @@ Categories=Development;
 Keywords=claude;ssh;vm;
 EOF
   chmod +x "$file"
-  command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  if command -v update-desktop-database >/dev/null; then
+    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  fi
   say "Created $file — look for \"Claude Code ($1)\" in your app menu."
 }
 

@@ -25,7 +25,8 @@ if ((UNINSTALL)); then
 fi
 
 mkdir -p "$PREFIX/bin"
-SRC=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
+SRC=
+if [[ -n ${BASH_SOURCE[0]:-} ]]; then SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || SRC=; fi
 if [[ -n $SRC && -f $SRC/vmclaude ]]; then
   cp "$SRC/vmclaude" "$BIN.tmp"
 else
