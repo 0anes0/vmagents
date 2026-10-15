@@ -385,6 +385,10 @@ class SetupTests(SandboxTest):
         rc = (self.sb.remote_home / ".bashrc").read_text()
         self.assertTrue(rc.startswith("alias ll='ls -l'\n# >>> vmclaude autostart >>>\n"), rc)
         self.assertEqual(rc.count("vmclaude autostart >>>"), 1)
+        # ~/.local/bin (where Claude Code lives) is on PATH in every shell, not only for autostart.
+        r = subprocess.run(["bash", "-c", f". {self.sb.remote_home}/.bashrc; echo $PATH"], capture_output=True, text=True,
+                           env={"HOME": str(self.sb.remote_home), "PATH": "/usr/bin:/bin"}, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.stdout, f"{self.sb.remote_home}/.local/bin:/usr/bin:/bin\n")
 
     def test_authorized_keys_without_final_newline(self):
         ak = self.sb.remote_home / ".ssh" / "authorized_keys"

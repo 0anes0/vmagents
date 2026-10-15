@@ -655,8 +655,16 @@ if command -v claude >/dev/null 2>&1; then
   echo "Claude Code is already installed: $(claude --version 2>/dev/null || echo unknown version)"
 else
   command -v curl >/dev/null 2>&1 || { echo "vmclaude: curl is missing; cannot install Claude Code" >&2; exit 1; }
-  echo "Installing Claude Code..."
-  curl -fsSL https://claude.ai/install.sh | bash
+  echo "Installing Claude Code (a download of about 270 MB)..."
+  curl -fsSL https://claude.ai/install.sh | bash &
+  pid=$! i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1; i=$((i + 1))
+    if [ $((i % 10)) -eq 0 ] && kill -0 "$pid" 2>/dev/null; then
+      echo "  ...still installing, $(du -sm "$HOME/.claude/downloads" 2>/dev/null | cut -f1) MB downloaded after ${i}s"
+    fi
+  done
+  wait "$pid"
   command -v claude >/dev/null 2>&1 || { echo "vmclaude: Claude Code installation failed" >&2; exit 1; }
   echo "Installed Claude Code: $(claude --version 2>/dev/null || echo unknown version)"
 fi
@@ -689,7 +697,9 @@ mkdir -p "$d" || exit 1
 cat >"$hook" || exit 1
 for rc in $rcs; do
   [ -f "$rc" ] && [ -s "$rc" ] && [ "$(tail -c 1 "$rc" | wc -l)" -eq 0 ] && echo >>"$rc"
-  printf "%s\n%s\n%s\n" "$begin" "[ -r \"\$HOME/.config/vmclaude/autostart.sh\" ] && . \"\$HOME/.config/vmclaude/autostart.sh\"" "$end" >>"$rc" || exit 1
+  printf "%s\n%s\n%s\n%s\n" "$begin" \
+    "case \":\$PATH:\" in *\":\$HOME/.local/bin:\"*) ;; *) PATH=\"\$HOME/.local/bin:\$PATH\" ;; esac" \
+    "[ -r \"\$HOME/.config/vmclaude/autostart.sh\" ] && . \"\$HOME/.config/vmclaude/autostart.sh\"" "$end" >>"$rc" || exit 1
 done
 echo "Autostart is on: SSH logins open Claude Code (quit Claude to get a shell)."
 '
