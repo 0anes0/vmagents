@@ -46,7 +46,8 @@ if cmd == "domstate":
 if cmd == "start":
     if state == "running":
         print("error: Domain is already active", file=sys.stderr); sys.exit(1)
-    open(path, "w").write(f"running|{ip}|{polls}"); print("Domain started"); sys.exit(0)
+    new = "shut off" if os.environ.get("STUB_VIRSH_START_DIES") else "running"
+    open(path, "w").write(f"{new}|{ip}|{polls}"); print("Domain started"); sys.exit(0)
 if cmd == "resume":
     open(path, "w").write(f"running|{ip}|{polls}"); sys.exit(0)
 if cmd == "domifaddr":

@@ -14,6 +14,10 @@ Waiting for SSH on 192.168.122.48:22...
  │ ✻ Welcome to Claude Code!            │     ← running on the VM, in tmux
 ```
 
+No VM yet? `vmclaude create dev` makes one: a fresh Debian VM with Claude
+Code inside, usually in half a minute to two minutes once the image is
+downloaded, without a single password prompt.
+
 You can also skip the command. After setup, **any SSH login to the VM opens
 Claude Code directly**: a terminal, a phone SSH app, PuTTY, Termius. There is
 also an app-menu launcher.
@@ -23,6 +27,10 @@ also an app-menu launcher.
 ## Features
 
 - **One command:** `vmclaude` (or `vmclaude NAME`) connects and opens Claude.
+- **New VMs on demand:** `vmclaude create NAME` builds a libvirt VM from an
+  official cloud image (Debian 13, Debian 12 or Ubuntu 24.04) and sets it up.
+  `vmclaude delete NAME` removes it again, `vmclaude prune` the downloaded
+  images. See [Create a VM](#create-a-vm).
 - **libvirt VMs start themselves:** a stopped, paused or suspended domain is
   started. Its IP is read from libvirt (DHCP lease, guest agent or ARP).
   vmclaude then waits until sshd answers, not just until the port is open.
@@ -74,8 +82,15 @@ Uninstall with `./install.sh --uninstall`.
 
 ## Quick start
 
-Run `vmclaude` with no arguments. The first time, it asks for the VM's details
-and offers to set it up. Or do it by hand:
+**Starting from nothing** (Linux with libvirt):
+
+```sh
+vmclaude create dev         # new Debian VM + Claude Code, no password needed
+vmclaude dev                # open Claude Code in it
+```
+
+**With a VM you already have:** run `vmclaude` with no arguments. The first
+time, it asks for the VM's details and offers to set it up. Or do it by hand:
 
 ```sh
 # a libvirt VM: started on demand, IP found automatically
@@ -114,7 +129,12 @@ network, a port forward on the host, or a VPN such as Tailscale on the VM.
 ```
 vmclaude                         connect to the default VM (asks to add one if none)
 vmclaude NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmclaude dev --continue
-vmclaude add NAME [options]      add a VM, or change fields of an existing one
+vmclaude create NAME [options]   make a new Linux VM and set it up
+    --image debian13|debian12|ubuntu24.04  --memory MB  --cpus N  --disk GB
+    --user USER  --uri LIBVIRT_URI  --no-setup
+vmclaude delete NAME [--yes]     delete a VM made with create, and its disk
+vmclaude prune                   remove downloaded images no VM uses any more
+vmclaude add NAME [options]      add an existing VM, or change fields of a profile
     --host HOST  --user USER  --port PORT  --key FILE
     --domain LIBVIRT_DOMAIN  --uri LIBVIRT_URI  --dir DIR_ON_VM
     --session TMUX_SESSION  --no-tmux
@@ -165,6 +185,47 @@ Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
   before sshd is up, so an open port alone is not enough.
 - vmclaude does not change the VM's sshd settings. Once key login works, you
   may want to turn off password login (`PasswordAuthentication no`).
+
+## Create a VM
+
+```sh
+vmclaude create dev                                   # Debian 13, 4 GB RAM, 2 CPUs, 20 GB disk
+vmclaude create big --memory 16384 --cpus 8 --disk 100
+vmclaude create u --image ubuntu24.04
+vmclaude delete dev                                   # asks you to type the name
+vmclaude prune                                        # free the space of unused images
+```
+
+Needs `virsh` and `virt-install` (`sudo apt install libvirt-daemon-system
+virtinst`, and your user in the `libvirt` group). What `create` does:
+
+1. Downloads the official cloud image once into `~/.cache/vmclaude/images`
+   and checks it against the distribution's published SHA-512/SHA-256 sums.
+2. Copies it into the libvirt storage pool `default` as a shared base volume.
+   Each VM gets a thin copy-on-write disk on top of it, so a new VM takes
+   seconds and little space. While that base volume exists, later VMs need no
+   download at all.
+3. Starts the VM with a cloud-init seed on a small read-only disk.
+   cloud-init creates your user with your vmclaude SSH key and password-less
+   `sudo`, and installs tmux. The account has no password at all.
+4. Waits until the VM accepts the key, then runs `vmclaude setup`: installs
+   Claude Code and the SSH-login autostart.
+
+`prune` removes base volumes that no VM disk is built on, and the download
+cache in `~/.cache/vmclaude`.
+
+The VM is on libvirt's `default` NAT network and shows up in virt-manager
+like any other. Other pools or networks: `VMCLAUDE_POOL`, `VMCLAUDE_NETWORK`.
+
+Two details that real runs turned up: the seed is a virtio disk, not
+virt-install's `--cloud-init` CD-ROM, because the Debian 12 cloud kernel has
+no driver for that SATA CD-ROM. And the VM gets a video device even without a
+screen, because without one the GRUB of the Debian cloud images resets the VM
+in a loop.
+
+`delete` only deletes VMs that `create` made. The profile has to say so, and
+so does the VM's own libvirt description ("created by vmclaude"). Your other
+VMs cannot be deleted with it.
 
 ## Windows VMs
 
@@ -225,11 +286,19 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_e2e.py` uses the real OpenSSH client against a local SSH server
   (needs `asyncssh`, skipped otherwise). It covers password then key login,
   host-key pinning and quoting through a real remote shell.
+- `tests/test_create.py` runs `create` and `delete` against fake `curl`,
+  `virsh` and `virt-install`, including that `delete` refuses VMs it did not
+  create.
 - `tests/test_windows.py` checks OS detection and decodes the PowerShell
   commands sent to Windows VMs.
 - By hand, on a Debian 13 cloud image in qemu: setup (key, `apt-get install
   tmux`, the Claude Code installer), connect, detach and reattach, autostart on
   a plain `ssh` login, and skipping it with `LC_VMCLAUDE=off`.
+- By hand, `vmclaude create` on libvirt 11.3 (`qemu:///system`) with all
+  three images (Debian 13, Debian 12, Ubuntu 24.04): download, checksum, base
+  volume, VM, cloud-init, Claude Code, doctor, shut down and start again
+  through `vmclaude NAME`, `delete` and `prune`. These runs found the two
+  details described under [Create a VM](#create-a-vm).
 - By hand, on Windows 10 22H2 (libvirt, OpenSSH for Windows 9.5): setup (key
   as administrator, Git via the fallback installer since winget failed over
   SSH, Claude Code), doctor, connect and quit,
@@ -259,7 +328,20 @@ Gerekirse VM'i başlatır, SSH ile bağlanır ve Claude'u orada çalıştırır:
 VM'lerde tmux içinde, **Windows** VM'lerde de doğrudan. Claude böylece senin
 bilgisayarının değil, VM'in dosyaları üzerinde çalışır.
 
-**Kurulum ve ilk kullanım:**
+**Hiç VM'in yoksa:**
+
+```sh
+vmclaude create dev   # resmi Debian bulut imajından yeni VM + Claude Code, şifresiz
+vmclaude dev          # Claude Code'u içinde aç
+```
+
+İmaj (Debian 13, Debian 12 ya da `--image ubuntu24.04`) bir kez indirilip
+doğrulanır. Sonraki VM'ler genelde yarım dakika ile iki dakika arasında hazır
+olur. `vmclaude delete dev` VM'i diskiyle birlikte siler; yalnızca `create`
+ile oluşturulmuş VM'lerde çalışır, diğer VM'lerine dokunamaz.
+`vmclaude prune` artık kullanılmayan imajları silip yer açar.
+
+**Var olan bir VM ile kurulum ve ilk kullanım:**
 
 ```sh
 git clone https://github.com/emincan2000/vmclaude && cd vmclaude && ./install.sh

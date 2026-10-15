@@ -246,6 +246,13 @@ class LibvirtTests(SandboxTest):
         argv = self.sb.calls("ssh")[0]["argv"]
         self.assertEqual(argv[argv.index("--") + 1], "127.0.0.1")
 
+    def test_vm_that_stops_while_booting_fails_fast(self):
+        self.sb.set_vm("shut off", ip="")
+        r = self.sb.run("vm", env={"STUB_VIRSH_START_DIES": "1", "VMCLAUDE_BOOT_TIMEOUT": "60"}, timeout=20)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("VM testvm stopped while booting (state: shut off)", r.stderr)
+        self.assertIn("virsh -c qemu:///session console testvm", r.stderr)
+
     def test_running_vm_is_not_started(self):
         self.sb.set_vm("running")
         self.sb.run("vm", check=0)

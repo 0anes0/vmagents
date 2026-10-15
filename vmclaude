@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.2.0
+VERSION=0.3.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -11,7 +11,7 @@ KNOWN_HOSTS=$CONF_DIR/known_hosts
 DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS CREATED "
 HOLD=0
 
 say()  { printf '%s\n' "$*"; }
@@ -40,7 +40,15 @@ Usage:
   $PROG COMMAND [ARGS...]
 
 Commands:
-  add NAME [options]       add a VM profile, or change fields of an existing one
+  create NAME [options]    make a new Linux VM (libvirt) and set it up; no password needed
+      --image NAME           debian13 (default), debian12 or ubuntu24.04
+      --memory MB            default 4096        --cpus N    default 2
+      --disk GB              default 20          --user U    default: $(id -un)
+      --uri URI              libvirt URI (default: qemu:///system)
+      --no-setup             only create the VM
+  delete NAME [--yes]      delete a VM made with create, with its disk
+  prune                    remove downloaded images no VM uses any more
+  add NAME [options]       add an existing VM, or change fields of a profile
       --host HOST            hostname or IP (optional with --domain: detected)
       --user USER            login user on the VM (default: $(id -un))
       --port PORT            SSH port (default: 22)
@@ -210,9 +218,19 @@ find_ip() {
   return 1
 }
 
+# Fails early when the VM stops while we wait for it.
+check_still_running() {
+  local state
+  state=$(vsh domstate "$C_DOMAIN" 2>/dev/null) || return 0
+  state=${state%%$'\n'*}
+  [[ $state == running || $state == paused ]] ||
+    die "VM $C_DOMAIN stopped while booting (state: $state); see: virsh -c $C_URI console $C_DOMAIN"
+}
+
 wait_for_ip() {
   local deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
   until find_ip; do
+    check_still_running
     ((SECONDS < deadline)) || die "VM $C_DOMAIN has no IPv4 address after ${BOOT_TIMEOUT}s (is its network up? set --host to skip detection)"
     ((noted)) || { info "Waiting for $C_DOMAIN to get an IP address..."; noted=1; }
     sleep 2
@@ -247,6 +265,7 @@ detect_os() {
 wait_for_port() {
   local host=$1 port=$2 deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
   until ssh_ready "$host" "$port"; do
+    [[ -n $C_DOMAIN ]] && check_still_running
     ((SECONDS < deadline)) || die "no SSH server answers on $host:$port after ${BOOT_TIMEOUT}s (is sshd installed and running on the VM?)"
     ((noted)) || { info "Waiting for SSH on $host:$port..."; noted=1; }
     sleep 2
@@ -350,7 +369,12 @@ chmod 600 "$f"; chmod 700 "$HOME/.ssh"
 '
 
 # shellcheck disable=SC2016
-INSTALL_SH=$REMOTE_ENV'need=
+INSTALL_SH=$REMOTE_ENV'if command -v cloud-init >/dev/null 2>&1; then
+  case $(cloud-init status 2>/dev/null) in
+    *running* | *"not started"*) echo "Waiting for cloud-init to finish..."; cloud-init status --wait >/dev/null 2>&1 ;;
+  esac
+fi
+need=
 command -v tmux >/dev/null 2>&1 || need="$need tmux"
 command -v claude >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || need="$need curl"
 if [ -n "$need" ]; then
@@ -1025,6 +1049,265 @@ printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
   ((ok)) && say "All good." || return 1
 }
 
+# ------------------------------------------------------------------ create / delete
+
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/vmclaude
+CREATE_POOL=${VMCLAUDE_POOL:-default}
+CREATE_NETWORK=${VMCLAUDE_NETWORK:-default}
+
+# Sets IMG_URL, IMG_SUMS (checksum list), IMG_ALGO, IMG_OSINFO for an image name.
+IMG_URL='' IMG_SUMS='' IMG_ALGO='' IMG_OSINFO=''
+image_info() {
+  case $1 in
+    debian13 | debian)
+      IMG_URL=https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+      IMG_SUMS=https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
+      IMG_ALGO=sha512 IMG_OSINFO=debian13 ;;
+    debian12)
+      IMG_URL=https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+      IMG_SUMS=https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS
+      IMG_ALGO=sha512 IMG_OSINFO=debian12 ;;
+    ubuntu24.04 | ubuntu)
+      IMG_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      IMG_SUMS=https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
+      IMG_ALGO=sha256 IMG_OSINFO=ubuntu24.04 ;;
+    *) die "unknown image: $1 (choose debian13, debian12 or ubuntu24.04)" ;;
+  esac
+}
+
+# Sets IMG_HASH: the published checksum of the current image (or, offline,
+# the checksum of the cached copy).
+IMG_FILE='' IMG_HASH=''
+image_hash() {
+  local name=${IMG_URL##*/} sums
+  mkdir -p "$CACHE_DIR/images"
+  IMG_FILE=$CACHE_DIR/images/$name
+  if sums=$(curl -fsSL "$IMG_SUMS"); then
+    IMG_HASH=$(awk -v f="$name" '$2 == f || $2 == "*" f { print $1; exit }' <<<"$sums")
+    [[ -n $IMG_HASH ]] || die "no checksum for $name in $IMG_SUMS"
+  elif [[ -f $IMG_FILE ]]; then
+    warn "cannot fetch $IMG_SUMS; using the cached image unchecked"
+    IMG_HASH=$("${IMG_ALGO}sum" "$IMG_FILE" | cut -d' ' -f1)
+  else
+    die "cannot download $IMG_SUMS (offline?)"
+  fi
+}
+
+# Makes sure IMG_FILE holds the image with IMG_HASH: downloads it if needed.
+fetch_image() {
+  local got
+  if [[ -f $IMG_FILE ]] && [[ $("${IMG_ALGO}sum" "$IMG_FILE" | cut -d' ' -f1) == "$IMG_HASH" ]]; then
+    info "Using cached image $IMG_FILE"
+    return 0
+  fi
+  info "Downloading $IMG_URL"
+  local -a progress=(-s)
+  [[ -t 2 ]] && progress=(-#)
+  curl -fL "${progress[@]}" -o "$IMG_FILE.part" "$IMG_URL" || die "download failed"
+  got=$("${IMG_ALGO}sum" "$IMG_FILE.part" | cut -d' ' -f1)
+  [[ $got == "$IMG_HASH" ]] || { rm -f "$IMG_FILE.part"; die "checksum mismatch for ${IMG_URL##*/}"; }
+  mv -f "$IMG_FILE.part" "$IMG_FILE"
+}
+
+osinfo_name() { # NAME -> NAME if virt-install knows it, else a generic Linux
+  if virt-install --osinfo list 2>/dev/null | tr ',' '\n' | sed 's/^ *//' | grep -qxF "$1"; then
+    printf '%s' "$1"
+  else
+    printf 'linux2022'
+  fi
+}
+
+cloud_user_data() { # HOSTNAME USER PUBKEY
+  cat <<EOF
+#cloud-config
+hostname: $1
+users:
+  - name: $2
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - $3
+package_update: true
+packages: [tmux, curl]
+EOF
+}
+
+cmd_create() {
+  local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 k
+  user=$(id -un)
+  while (($#)); do
+    case $1 in
+      --image | --memory | --cpus | --disk | --user | --uri)
+        (($# >= 2)) || usage_error "create: $1 needs a value"
+        case $1 in
+          --image) image=$2 ;; --memory) memory=$2 ;; --cpus) cpus=$2 ;;
+          --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;;
+        esac
+        shift 2 ;;
+      --no-setup) install=0; shift ;;
+      -*) usage_error "create: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "create: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "create: missing NAME"
+  valid_name "$name" || die "invalid name: $name (letters, digits, . _ - only)"
+  profile_exists "$name" && die "a VM profile named '$name' already exists"
+  for k in "$memory" "$cpus" "$disk"; do [[ $k =~ ^[1-9][0-9]*$ ]] || die "--memory, --cpus and --disk take whole numbers"; done
+  check_value USER "$user"
+  image_info "$image"
+  local tool
+  local iso_tool=''
+  for tool in xorriso genisoimage mkisofs; do command -v "$tool" >/dev/null && { iso_tool=$tool; break; }; done
+  [[ -n $iso_tool ]] || die "xorriso not found (sudo apt install xorriso)"
+  for tool in virsh virt-install curl "${IMG_ALGO}sum"; do
+    command -v "$tool" >/dev/null || die "$tool not found (on Debian/Ubuntu: sudo apt install libvirt-clients virtinst)"
+  done
+  C_URI=$uri
+  vsh dominfo "$name" >/dev/null 2>&1 && die "libvirt already has a VM named '$name'"
+  vsh pool-info "$CREATE_POOL" >/dev/null 2>&1 || die "libvirt storage pool '$CREATE_POOL' not found (set VMCLAUDE_POOL)"
+  vsh net-info "$CREATE_NETWORK" >/dev/null 2>&1 || die "libvirt network '$CREATE_NETWORK' not found (set VMCLAUDE_NETWORK)"
+  vsh net-start "$CREATE_NETWORK" >/dev/null 2>&1 || true
+
+  C_KEY=$DEFAULT_KEY
+  ensure_key
+  image_hash
+
+  # One base volume per image release, shared by all VMs as a backing file.
+  # (--video vga below matters: without any video device the GRUB of the
+  # Debian cloud image resets the VM in a loop right after "Booting".)
+  local base="vmclaude-base-$image-${IMG_HASH:0:12}.qcow2" vol="$name.qcow2" out
+  if vsh vol-info --pool "$CREATE_POOL" "$base" >/dev/null 2>&1; then
+    info "Using base volume $base"
+  else
+    fetch_image
+    info "Copying the image into libvirt pool '$CREATE_POOL'"
+    out=$(vsh vol-create-as "$CREATE_POOL" "$base" "$(stat -c %s "$IMG_FILE")" --format qcow2 2>&1) || die "libvirt: $out"
+    out=$(vsh vol-upload --pool "$CREATE_POOL" "$base" "$IMG_FILE" 2>&1) ||
+      { vsh vol-delete --pool "$CREATE_POOL" "$base" >/dev/null 2>&1; die "libvirt: $out"; }
+    vsh pool-refresh "$CREATE_POOL" >/dev/null 2>&1 || true
+  fi
+  vsh vol-info --pool "$CREATE_POOL" "$vol" >/dev/null 2>&1 && die "volume $vol already exists in pool '$CREATE_POOL'"
+  out=$(vsh vol-create-as "$CREATE_POOL" "$vol" "${disk}G" --format qcow2 \
+    --backing-vol "$base" --backing-vol-format qcow2 2>&1) || die "libvirt: $out"
+
+  # cloud-init seed (NoCloud): our own ISO on a read-only virtio disk, kept
+  # attached. Not virt-install --cloud-init: that puts it on a SATA CD-ROM,
+  # and the Debian 12 cloud kernel has no driver for it.
+  local tmp seed="$name-seed.iso"
+  tmp=$(mktemp -d)
+  cloud_user_data "$name" "$user" "$(<"$C_KEY.pub")" >"$tmp/user-data"
+  printf 'instance-id: %s-%s\nlocal-hostname: %s\n' "$name" "$(date +%s)" "$name" >"$tmp/meta-data"
+  if [[ $iso_tool == xorriso ]]; then
+    out=$(xorriso -as mkisofs -V cidata -J -r -o "$tmp/seed.iso" "$tmp/user-data" "$tmp/meta-data" 2>&1)
+  else
+    out=$("$iso_tool" -V cidata -J -r -o "$tmp/seed.iso" "$tmp/user-data" "$tmp/meta-data" 2>&1)
+  fi || { rm -rf "$tmp"; die "creating the cloud-init seed failed: $out"; }
+  vsh vol-delete --pool "$CREATE_POOL" "$seed" >/dev/null 2>&1 || true
+  if ! out=$(vsh vol-create-as "$CREATE_POOL" "$seed" "$(stat -c %s "$tmp/seed.iso")" --format raw 2>&1) ||
+    ! out=$(vsh vol-upload --pool "$CREATE_POOL" "$seed" "$tmp/seed.iso" 2>&1); then
+    rm -rf "$tmp"
+    vsh vol-delete --pool "$CREATE_POOL" "$vol" >/dev/null 2>&1 || true
+    die "libvirt: $out"
+  fi
+  rm -rf "$tmp"
+  info "Creating VM $name ($image, ${memory} MB, $cpus CPUs, ${disk} GB)"
+  if ! out=$(virt-install --connect "$uri" --name "$name" --memory "$memory" --vcpus "$cpus" \
+    --import --disk "vol=$CREATE_POOL/$vol,bus=virtio" --disk "vol=$CREATE_POOL/$seed,device=disk,bus=virtio,readonly=on" \
+    --osinfo "$(osinfo_name "$IMG_OSINFO")" --network "network=$CREATE_NETWORK,model=virtio" \
+    --metadata description="created by vmclaude" \
+    --graphics none --video vga --console pty,target_type=serial --noautoconsole 2>&1); then
+    vsh vol-delete --pool "$CREATE_POOL" "$vol" >/dev/null 2>&1 || true
+    vsh vol-delete --pool "$CREATE_POOL" "$seed" >/dev/null 2>&1 || true
+    die "virt-install failed: $out"
+  fi
+
+  P=([DOMAIN]=$name [USER]=$user [OS]=linux [CREATED]=1)
+  [[ $uri != qemu:///system ]] && P[LIBVIRT_URI]=$uri
+  write_profile "$name"
+  info "Added VM profile '$name'."
+  if ((install)); then
+    # sshd can be up before cloud-init has created the user and its key.
+    load "$name"
+    resolve_target
+    build_ssh_opts
+    local deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
+    until key_auth_works; do
+      check_still_running
+      ((SECONDS < deadline)) ||
+        die "the new VM does not accept your SSH key after ${BOOT_TIMEOUT}s; see: virsh -c $C_URI console $name"
+      ((noted)) || { info "Waiting for cloud-init to create user $C_USER..."; noted=1; }
+      sleep 3
+    done
+    cmd_setup "$name"
+  else
+    say "Created. Next: $PROG setup $name"
+  fi
+}
+
+cmd_delete() {
+  local name='' yes=0 a
+  while (($#)); do
+    case $1 in
+      -y | --yes) yes=1; shift ;;
+      -*) usage_error "delete: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "delete: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "delete: missing NAME"
+  load "$name"
+  # Only VMs that vmclaude created, and whose libvirt description says so.
+  [[ ${P[CREATED]:-} == 1 && -n $C_DOMAIN ]] ||
+    die "'$NAME' was not created by vmclaude; delete the VM yourself (to forget it here: $PROG rm $NAME)"
+  [[ $(vsh desc "$C_DOMAIN" 2>/dev/null) == *"created by vmclaude"* ]] ||
+    die "libvirt VM '$C_DOMAIN' is not marked as created by vmclaude; not deleting it"
+  if ((!yes)); then
+    [[ -t 0 ]] || die "delete: add --yes to confirm without a terminal"
+    read -r -p "Delete VM '$C_DOMAIN' and its disk for good? Type its name: " a || a=
+    [[ $a == "$C_DOMAIN" ]] || die "not deleted"
+  fi
+  vsh destroy "$C_DOMAIN" >/dev/null 2>&1 || true
+  local out
+  out=$(vsh undefine "$C_DOMAIN" --remove-all-storage --snapshots-metadata 2>&1) || die "libvirt: $out"
+  cmd_rm "$NAME" >/dev/null
+  say "Deleted VM '$NAME' and its disk."
+}
+
+# Removes base volumes no VM disk is built on, and the downloaded images.
+cmd_prune() {
+  local uri=qemu:///system
+  while (($#)); do
+    case $1 in
+      --uri) (($# >= 2)) || usage_error "prune: --uri needs a value"; uri=$2; shift 2 ;;
+      *) usage_error "prune: unknown argument $1" ;;
+    esac
+  done
+  command -v virsh >/dev/null || die "virsh not found"
+  C_URI=$uri
+  local vols v used='' path n=0
+  vols=$(vsh vol-list "$CREATE_POOL" 2>/dev/null | awk 'NR > 2 && NF { print $1 }') ||
+    die "cannot list libvirt pool '$CREATE_POOL'"
+  for v in $vols; do
+    used+=$(vsh vol-dumpxml --pool "$CREATE_POOL" "$v" 2>/dev/null |
+      sed -n '/<backingStore>/,/<\/backingStore>/s:.*<path>\(.*\)</path>.*:\1:p')$'\n'
+  done
+  for v in $vols; do
+    [[ $v == vmclaude-base-*.qcow2 ]] || continue
+    path=$(vsh vol-path --pool "$CREATE_POOL" "$v" 2>/dev/null) || continue
+    if grep -qxF "$path" <<<"$used"; then
+      say "Kept $v (a VM uses it)"
+    elif vsh vol-delete --pool "$CREATE_POOL" "$v" >/dev/null 2>&1; then
+      say "Removed $v"
+      n=$((n + 1))
+    fi
+  done
+  if [[ -d $CACHE_DIR/images ]] && [[ -n $(ls -A "$CACHE_DIR/images") ]]; then
+    say "Removed downloaded images ($(du -sh "$CACHE_DIR/images" | cut -f1))"
+    rm -rf "${CACHE_DIR:?}/images"
+  fi
+  ((n)) || say "No unused base volumes."
+}
+
 desktop_escape() { # quote an argument for a .desktop Exec line
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\`/\\\`}; s=${s//\$/\\\$}
@@ -1098,7 +1381,7 @@ main() {
       if [[ -z $(profile_names) ]]; then first_run; else cmd_connect; fi ;;
     help | -h | --help) usage ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
-    add | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | prune | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift; "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
