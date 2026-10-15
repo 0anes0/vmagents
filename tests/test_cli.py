@@ -123,7 +123,7 @@ class ProfileTests(SandboxTest):
 class ConnectTests(SandboxTest):
     def setUp(self):
         super().setUp()
-        self.sb.run("add", "vm", "--host", "192.0.2.7", "--user", "dev", "--port", "2222", check=0)
+        self.sb.run("add", "vm", "--host", "192.0.2.7", "--user", "dev", "--port", "2222", "--os", "linux", check=0)
 
     def ssh_argv(self):
         calls = self.sb.calls("ssh")
@@ -309,7 +309,7 @@ class LibvirtTests(SandboxTest):
 class SetupTests(SandboxTest):
     def setUp(self):
         super().setUp()
-        self.sb.run("add", "vm", "--host", "192.0.2.7", check=0)
+        self.sb.run("add", "vm", "--host", "192.0.2.7", "--os", "linux", check=0)
         self.batch = self.sb.tmp / "batch"
         self.env = {"STUB_SSH_EXEC": "1", "STUB_SSH_BATCH_RC": str(self.batch)}
         for tool in ("sudo", "apt-get"):
@@ -402,7 +402,7 @@ class AutostartHookTests(SandboxTest):
 
     def setUp(self):
         super().setUp()
-        self.sb.run("add", "vm", "--host", "192.0.2.7", "--dir", "~/code", check=0)
+        self.sb.run("add", "vm", "--host", "192.0.2.7", "--dir", "~/code", "--os", "linux", check=0)
         self.batch = self.sb.tmp / "batch"
         self.batch.write_text("0")
         self.sb.run("setup", "vm", "--no-install",
@@ -535,25 +535,26 @@ class DoctorAndDesktopTests(SandboxTest):
 class FirstRunTests(SandboxTest):
     def test_wizard_adds_and_connects(self):
         self.sb.set_vm("shut off")
+        port = free_port()  # refused at once, so OS detection does not wait
         env = dict(self.sb.env)
         out = run_in_pty(
             [str(Path(__file__).parent.parent / "vmclaude")], env, cwd=str(self.sb.tmp),
             answers=[
                 ("Name for this VM", "box\n"),
                 ("libvirt VM to use", "\n"),
-                ("Host or IP of the VM", "192.0.2.9\n"),
+                ("Host or IP of the VM", "127.0.0.1\n"),
                 ("User on the VM", "tester\n"),
-                ("SSH port", "\n"),
+                ("SSH port", f"{port}\n"),
                 ("Set up the VM now", "n\n"),
             ])
         self.assertIn("libvirt VMs: testvm", out)
         text = (self.sb.conf / "hosts" / "box.conf").read_text()
-        self.assertIn("HOST=192.0.2.9\n", text)
+        self.assertIn("HOST=127.0.0.1\n", text)
         self.assertIn("USER=tester\n", text)
-        self.assertIn("PORT=22\n", text)
+        self.assertIn(f"PORT={port}\n", text)
         argv = self.sb.calls("ssh")[0]["argv"]
         self.assertIn("-t", argv)  # a real terminal this time
-        self.assertEqual(argv[argv.index("--") + 1], "192.0.2.9")
+        self.assertEqual(argv[argv.index("--") + 1], "127.0.0.1")
 
 
 if __name__ == "__main__":

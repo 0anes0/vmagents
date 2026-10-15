@@ -8,12 +8,15 @@ args = sys.argv[1:]
 stdin = b"" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read()
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps({"prog": "ssh", "argv": args, "stdin": stdin.decode(errors="replace")}) + "\n")
-# Key-login probes (`ssh ... true`) pop their exit code from a list.
-if args[-1] == "true" and os.environ.get("STUB_SSH_BATCH_RC"):
+# Key-login probes (`ssh ... "exit 0"`) pop their exit code from a list.
+if args[-1] == "exit 0" and os.environ.get("STUB_SSH_BATCH_RC"):
     rc_file = os.environ["STUB_SSH_BATCH_RC"]
     codes = open(rc_file).read().split()
     open(rc_file, "w").write(" ".join(codes[1:] or codes))
     sys.exit(int(codes[0]))
+if os.environ.get("STUB_SSH_OUTPUT") is not None:
+    sys.stdout.write(os.environ["STUB_SSH_OUTPUT"])
+    sys.exit(0)
 if os.environ.get("STUB_SSH_EXEC") == "1":
     i = args.index("--")
     cmd = " ".join(args[i + 2:])

@@ -1,8 +1,9 @@
 # vmclaude
 
 Open **Claude Code inside a virtual machine** with one command. It starts the
-VM if needed, connects over SSH and runs Claude in tmux there. Claude then works
-on the VM's files, not your computer's.
+VM if needed, connects over SSH and runs Claude there: in tmux on **Linux**
+VMs, and also on **Windows** VMs. Claude then works on the VM's files, not
+your computer's.
 
 ```
 $ vmclaude
@@ -36,6 +37,8 @@ also an app-menu launcher.
 - **App-menu launcher:** `vmclaude desktop NAME`.
 - **`vmclaude doctor`** checks each step: VM state, IP, sshd, key login,
   Claude, tmux, autostart.
+- **Windows VMs too:** detected from the SSH banner. Setup installs Git for
+  Windows and Claude Code there; see [Windows VMs](#windows-vms).
 - Several VMs, one default. Plain-text profiles. A single Bash script with no
   dependencies beyond OpenSSH.
 
@@ -43,9 +46,11 @@ also an app-menu launcher.
 
 - **Your computer:** Linux, bash 4+, OpenSSH client (`ssh`, `ssh-keygen`).
   `virsh` only if you use libvirt VMs.
-- **The VM:** Linux with an SSH server (`openssh-server`), `curl`, and a user
-  that can log in with a password once (or already has your key). `sudo` is
-  needed only to install tmux.
+- **A Linux VM:** an SSH server (`openssh-server`), `curl`, and a user that
+  can log in with a password once (or already has your key). `sudo` is needed
+  only to install tmux.
+- **A Windows VM:** Windows 10 1809+ or 11 with the OpenSSH Server feature on;
+  see [Windows VMs](#windows-vms).
 
 Any VM works: libvirt/virt-manager/GNOME Boxes (qemu), VirtualBox, VMware,
 Proxmox, a cloud server. Only libvirt VMs are started automatically. Start
@@ -138,6 +143,7 @@ DOMAIN=debian13         # libvirt domain
 LIBVIRT_URI=qemu:///system
 DIR=~/work              # where Claude starts on the VM (created if missing)
 SESSION=claude          # tmux session; empty = no tmux
+OS=linux                # or windows; detected from the SSH banner on first use
 ```
 
 Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
@@ -160,6 +166,52 @@ Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
 - vmclaude does not change the VM's sshd settings. Once key login works, you
   may want to turn off password login (`PasswordAuthentication no`).
 
+## Windows VMs
+
+Turn on the SSH server in Windows once, in an administrator PowerShell
+(or Settings → Apps → Optional features → OpenSSH Server):
+
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Start-Service sshd; Set-Service sshd -StartupType Automatic
+```
+
+Then it works as on Linux:
+
+```sh
+vmclaude add win10 --domain win10 --user emin   # or --host IP
+vmclaude setup win10
+vmclaude win10
+```
+
+What is different:
+
+- **No tmux.** Closing the connection ends Claude's session; `claude
+  --continue` picks the conversation up again.
+- **setup** puts your key in `~\.ssh\authorized_keys`, and for administrators
+  also in `C:\ProgramData\ssh\administrators_authorized_keys`, which is the
+  only file Windows OpenSSH reads for them. It installs Git for Windows
+  (Claude Code uses its Bash): it tries winget, which often fails over SSH
+  ("Failed when searching source"), then the official installer from the
+  git-for-windows GitHub releases. It
+  installs Claude Code like `https://claude.ai/install.ps1` does: same
+  download, same SHA-256 check, same `claude install`. The download uses
+  `curl.exe`, because `Invoke-WebRequest` in Windows PowerShell 5.1 times out
+  on the 270 MB binary.
+- **Autostart** goes into your PowerShell profile. That needs Windows
+  PowerShell as OpenSSH's default shell (the `DefaultShell` registry value),
+  and an execution policy that runs profile scripts. If your user's policy is
+  `Restricted`, setup sets it to `RemoteSigned` for your user and says so.
+  `vmclaude shell NAME` opens PowerShell without starting Claude.
+- Commands are sent as `powershell -EncodedCommand`. That works under both
+  `cmd.exe` and PowerShell as the default shell and needs no quoting. Claude's
+  arguments are passed through Windows' own command-line rules, so quotes,
+  spaces and trailing backslashes arrive unchanged.
+- Claude Code on Windows sometimes does not exit after you quit it under
+  OpenSSH: it gives the console back but the process stays. vmclaude notices
+  the console switching back to line mode and ends the leftover process, so
+  the connection closes.
+
 ## Tests
 
 ```sh
@@ -173,14 +225,23 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_e2e.py` uses the real OpenSSH client against a local SSH server
   (needs `asyncssh`, skipped otherwise). It covers password then key login,
   host-key pinning and quoting through a real remote shell.
+- `tests/test_windows.py` checks OS detection and decodes the PowerShell
+  commands sent to Windows VMs.
 - By hand, on a Debian 13 cloud image in qemu: setup (key, `apt-get install
   tmux`, the Claude Code installer), connect, detach and reattach, autostart on
   a plain `ssh` login, and skipping it with `LC_VMCLAUDE=off`.
+- By hand, on Windows 10 22H2 (libvirt, OpenSSH for Windows 9.5): setup (key
+  as administrator, Git via the fallback installer since winget failed over
+  SSH, Claude Code), doctor, connect and quit,
+  autostart on a plain `ssh` login, `vmclaude shell`. Also 13 hard arguments
+  (quotes, trailing backslash, empty, `%PATH%`, `&|<>^`, Turkish and curly
+  quotes) checked byte for byte.
 
 ## Limitations
 
-- Linux VMs only. A Windows VM has no `sh`/tmux; for Windows, SSH in and run
-  `claude` yourself.
+- Windows VMs have no tmux, so sessions end with the connection.
+- Skipping autostart for one login with `LC_VMCLAUDE=off` works on Linux VMs
+  only. Windows OpenSSH does not accept the variable; use `vmclaude shell`.
 - Tested on Linux hosts. macOS needs bash 4+ (Homebrew) and `timeout`
   (coreutils).
 - Only libvirt VMs are started automatically.
@@ -194,9 +255,9 @@ MIT
 ## Türkçe
 
 **vmclaude**, Claude Code'u tek komutla bir **sanal makinenin içinde** açar.
-Gerekirse VM'i başlatır, SSH ile bağlanır ve Claude'u orada tmux içinde
-çalıştırır. Claude böylece senin bilgisayarının değil, VM'in dosyaları üzerinde
-çalışır.
+Gerekirse VM'i başlatır, SSH ile bağlanır ve Claude'u orada çalıştırır: Linux
+VM'lerde tmux içinde, **Windows** VM'lerde de doğrudan. Claude böylece senin
+bilgisayarının değil, VM'in dosyaları üzerinde çalışır.
 
 **Kurulum ve ilk kullanım:**
 
@@ -227,8 +288,16 @@ Claude VM'de ilk kez açıldığında `/login` ile giriş yap.
 **Sorun mu var?** `vmclaude doctor dev` her adımı (VM durumu, IP, sshd, anahtar
 girişi, Claude, tmux) tek tek kontrol eder.
 
-**Notlar:** VM Linux olmalı (Windows VM desteklenmez). Otomatik başlatma
-yalnızca libvirt VM'lerinde çalışır. VirtualBox gibi diğer VM'leri kendin
+**Windows VM:** Windows'ta bir kez OpenSSH Sunucusu'nu aç (Ayarlar →
+Uygulamalar → İsteğe bağlı özellikler → OpenSSH Sunucusu). Gerisi aynı:
+`vmclaude add win10 --domain win10 --user KULLANICI`, `vmclaude setup win10`,
+`vmclaude win10`. vmclaude Windows'u kendisi tanır. Kurulum Git for Windows'u
+ve Claude Code'u kurar; SSH ile girişte Claude'un açılması için kullanıcının
+PowerShell çalıştırma ilkesini `RemoteSigned` yapar. Windows'ta tmux olmadığı
+için bağlantı kapanınca Claude oturumu da kapanır (`claude --continue` ile
+konuşmaya devam edebilirsin).
+
+**Notlar:** Otomatik başlatma yalnızca libvirt VM'lerinde çalışır. VirtualBox gibi diğer VM'leri kendin
 başlatıp `--host`/`--port` ver. Telefondan erişmek için VM'in ağdan
 erişilebilir olması gerekir (köprü ağ, port yönlendirme ya da Tailscale).
 

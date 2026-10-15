@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.1.0
+VERSION=0.2.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -11,7 +11,7 @@ KNOWN_HOSTS=$CONF_DIR/known_hosts
 DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS "
 HOLD=0
 
 say()  { printf '%s\n' "$*"; }
@@ -50,7 +50,9 @@ Commands:
       --dir DIR              working directory on the VM (default: home)
       --session NAME         tmux session name (default: claude)
       --no-tmux              run Claude without tmux
+      --os linux|windows     the VM's system (default: detected on first use)
   setup NAME [options]     install the SSH key, tmux and Claude Code on the VM
+                           (on Windows: Git for Windows instead of tmux)
       --no-install           only install the SSH key
       --no-autostart         do not start Claude when you log in over SSH
   connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
@@ -67,7 +69,8 @@ Commands:
   help, version
 
 Claude keeps running in tmux when the connection drops; connecting again
-reattaches. Detach on purpose with Ctrl-b d.
+reattaches. Detach on purpose with Ctrl-b d. Windows VMs have no tmux: there
+Claude ends with the connection.
 EOF
 }
 
@@ -128,18 +131,19 @@ check_value() { # KEY VALUE
     PORT) if ! [[ $v =~ ^[0-9]+$ ]] || ((v < 1 || v > 65535)); then die "invalid port: $v"; fi ;;
     DOMAIN) [[ -n $v && $v != -* ]] || die "invalid libvirt domain: $v" ;;
     SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
+    OS) [[ $v == linux || $v == windows ]] || die "invalid OS: $v (linux or windows)" ;;
   esac
 }
 
 # Load NAME into the effective connection settings (C_*).
-NAME='' C_HOST='' C_USER='' C_PORT='' C_KEY='' C_DOMAIN='' C_URI='' C_DIR='' C_SESSION=''
+NAME='' C_HOST='' C_USER='' C_PORT='' C_KEY='' C_DOMAIN='' C_URI='' C_DIR='' C_SESSION='' C_OS=''
 load() {
   NAME=$1
   valid_name "$NAME" || die "invalid profile name: $NAME"
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION; do
+  for k in HOST USER PORT DOMAIN SESSION OS; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -152,6 +156,7 @@ load() {
   C_URI=${P[LIBVIRT_URI]:-qemu:///system}
   C_DIR=${P[DIR]:-}
   C_SESSION=${P[SESSION]-claude}
+  C_OS=${P[OS]:-}
   [[ -n $C_HOST || -n $C_DOMAIN ]] || die "profile '$NAME' has neither HOST nor DOMAIN"
 }
 
@@ -217,10 +222,26 @@ wait_for_ip() {
 # True once an SSH server answers with its banner. A bare TCP connect is not
 # enough: NAT port forwards (passt, slirp, VirtualBox) accept connections
 # before the VM's sshd is up.
+# Sets BANNER, e.g. "SSH-2.0-OpenSSH_for_Windows_9.5".
+BANNER=
 # shellcheck disable=SC2016
 ssh_ready() {
-  timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && IFS= read -r -t 4 line <&3 && [[ $line == SSH-* ]]' \
-    _ "$1" "$2" 2>/dev/null
+  local b
+  b=$(timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && IFS= read -r -t 4 line <&3 && printf "%s" "$line"' \
+    _ "$1" "$2" 2>/dev/null) || return 1
+  [[ $b == SSH-* ]] || return 1
+  BANNER=${b%$'\r'}
+}
+
+# Sets C_OS from the profile, or once from the SSH banner (then saved).
+detect_os() {
+  [[ -n $C_OS ]] && return 0
+  [[ -n $BANNER ]] || ssh_ready "$TARGET" "$C_PORT" || { C_OS=linux; return 0; }
+  if [[ $BANNER == *[Ww]indows* ]]; then C_OS=windows; else C_OS=linux; fi
+  P[OS]=$C_OS
+  write_profile "$NAME"
+  [[ $C_OS == windows ]] && info "Detected a Windows VM."
+  return 0
 }
 
 wait_for_port() {
@@ -247,6 +268,7 @@ resolve_target() {
   else
     TARGET=$C_HOST
   fi
+  detect_os
 }
 
 # ------------------------------------------------------------------ ssh
@@ -416,10 +438,304 @@ fi
 EOF
 }
 
+# ------------------------------------------------------------------ Windows VMs
+# Windows OpenSSH runs commands with cmd.exe or PowerShell, depending on its
+# DefaultShell. Both can start `powershell -EncodedCommand BASE64`, which needs
+# no quoting at all; values go into the script as PowerShell literals.
+
+# Quote for PowerShell as a single-quoted literal. PowerShell also takes the
+# curly quotes U+2018..U+201B as single quotes, so those are doubled too.
+psq() {
+  local s=$1 q
+  for q in "'" $'\xe2\x80\x98' $'\xe2\x80\x99' $'\xe2\x80\x9a' $'\xe2\x80\x9b'; do
+    s=${s//"$q"/"$q$q"}
+  done
+  printf "'%s'" "$s"
+}
+
+ps_array() { # ARGS... -> @('a', 'b')
+  local out="@(" a sep=""
+  for a in "$@"; do out+="$sep$(psq "$a")"; sep=", "; done
+  printf '%s)' "$out"
+}
+
+# win_cmd [-i] [-noexit] SCRIPT -> a command line for the VM's default shell
+win_cmd() {
+  local flags="-NoLogo -NoProfile -NonInteractive" script enc
+  while [[ $1 == -* ]]; do
+    case $1 in
+      -i) flags="-NoLogo -NoProfile" ;;
+      -noexit) flags="-NoLogo -NoProfile -NoExit" ;;
+    esac
+    shift
+  done
+  script="\$ProgressPreference = 'SilentlyContinue'"$'\n'"try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }"$'\n'$1
+  enc=$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0) || die "iconv/base64 failed"
+  # cmd.exe accepts at most 8191 characters per command line.
+  ((${#enc} < 8000)) || die "internal error: Windows command too long (${#enc})"
+  printf 'powershell %s -ExecutionPolicy Bypass -EncodedCommand %s' "$flags" "$enc"
+}
+
+# Runs a longer script: it travels gzipped inside the command line and runs
+# from a temporary .ps1 file, so `exit N` works. (Not on stdin: with
+# PowerShell as OpenSSH's DefaultShell, stdin over 4 KB hangs. And with that
+# DefaultShell every non-zero exit code reaches us as 1.)
+win_run() { # SCRIPT
+  local gz
+  gz=$(printf '%s' "$1" | gzip -9n | base64 -w 0) || die "gzip/base64 failed"
+  run_ssh -T -- "$TARGET" "$(win_cmd "\$z = New-Object IO.Compression.GZipStream (New-Object IO.MemoryStream (,[Convert]::FromBase64String('$gz'))), ([IO.Compression.CompressionMode]::Decompress)
+\$f = Join-Path \$env:TEMP (\"vmclaude-\" + [guid]::NewGuid() + \".ps1\")
+[IO.File]::WriteAllText(\$f, (New-Object IO.StreamReader \$z, ([Text.Encoding]::UTF8)).ReadToEnd(), (New-Object Text.UTF8Encoding \$true))
+try { & \$f; \$rc = \$LASTEXITCODE } finally { Remove-Item -LiteralPath \$f -ErrorAction SilentlyContinue }
+exit \$rc")" </dev/null
+}
+
+# shellcheck disable=SC2016
+WIN_ENV_PS='$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+function Err($m) { [Console]::Error.WriteLine("vmclaude: $m") }
+function Resolve-Dir($d) {
+  if ($d -eq "" -or $d -eq "~") { return $env:USERPROFILE }
+  if ($d -match "^~[\\/]") { return Join-Path $env:USERPROFILE $d.Substring(2) }
+  return $d
+}
+'
+
+# Starts Claude and waits for it. Claude Code on Windows can hang after you
+# quit it under OpenSSH's ConPTY: it puts the console back into line mode but
+# never exits. Raw (VT) input first, then line mode for 2 s, means it is done.
+# shellcheck disable=SC2016
+WIN_INVOKE_PS='function Invoke-Claude($exe, $line, $dir) {
+  if (-not ("VmClaude.Con" -as [type])) {
+    Add-Type -Namespace VmClaude -Name Con -MemberDefinition ("[DllImport(`"kernel32.dll`")] public static extern IntPtr GetStdHandle(int n);" +
+      "[DllImport(`"kernel32.dll`")] public static extern bool GetConsoleMode(IntPtr h, out uint m);")
+  }
+  $si = New-Object System.Diagnostics.ProcessStartInfo $exe, $line
+  $si.UseShellExecute = $false
+  $si.WorkingDirectory = $dir
+  $p = [System.Diagnostics.Process]::Start($si)
+  $h = [VmClaude.Con]::GetStdHandle(-10)
+  $raw = $false
+  $since = $null
+  while (-not $p.WaitForExit(250)) {
+    $m = [uint32]0
+    if (-not [VmClaude.Con]::GetConsoleMode($h, [ref]$m)) { continue }
+    if ($m -band 0x200) { $raw = $true; $since = $null }
+    elseif ($raw -and ($m -band 2)) {
+      if (-not $since) { $since = Get-Date }
+      elseif (((Get-Date) - $since).TotalSeconds -ge 2) { $p.Kill(); $p.WaitForExit(); return 0 }
+    }
+  }
+  $p.ExitCode
+}
+'
+
+# shellcheck disable=SC2016
+win_connect_ps() { # DIR NAME CLAUDE_ARGS...
+  local dir=$1 name=$2
+  shift 2
+  printf '%s' "$WIN_ENV_PS" "$WIN_INVOKE_PS"
+  cat <<EOF
+\$d = Resolve-Dir $(psq "$dir")
+if (-not (Test-Path -LiteralPath \$d)) { New-Item -ItemType Directory -Force -Path \$d | Out-Null; Err "created \$d on the VM" }
+Set-Location -LiteralPath \$d
+\$c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not \$c) { Err "Claude Code is not installed on the VM. Run: vmclaude setup $name"; exit 127 }
+# Build the command line ourselves: Windows PowerShell 5.1 mangles quotes in
+# arguments of native programs.
+\$line = (@(foreach (\$a in $(ps_array "$@")) {
+  if (\$a -ne "" -and \$a -notmatch '[\s"]') { \$a }
+  else { '"' + [regex]::Replace(\$a, '(\\\\*)("|\$)', { param(\$m) \$m.Groups[1].Value * 2 + \$(if (\$m.Groups[2].Value) { '\\"' } else { "" }) }) + '"' }
+})) -join " "
+exit (Invoke-Claude \$c.Source \$line \$d)
+EOF
+}
+
+# Adds the key for the user, and for administrators where Windows OpenSSH
+# looks for it by default (administrators_authorized_keys, owned by
+# Administrators and SYSTEM only; SIDs work on every Windows language).
+# shellcheck disable=SC2016
+win_addkey_ps() { # PUBKEY
+  cat <<EOF
+\$k = $(psq "$1")
+function Add-Key(\$f) {
+  \$dir = Split-Path -Parent \$f
+  if (-not (Test-Path -LiteralPath \$dir)) { New-Item -ItemType Directory -Force -Path \$dir | Out-Null }
+  \$lines = @()
+  if (Test-Path -LiteralPath \$f) { \$lines = @(Get-Content -LiteralPath \$f | Where-Object { \$_ -ne "" }) }
+  if (\$lines -notcontains \$k) { Set-Content -LiteralPath \$f -Value (\$lines + \$k) -Encoding Ascii }
+}
+Add-Key "\$env:USERPROFILE\.ssh\authorized_keys"
+\$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ((New-Object Security.Principal.WindowsPrincipal \$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  \$f = "\$env:ProgramData\ssh\administrators_authorized_keys"
+  Add-Key \$f
+  icacls.exe \$f /inheritance:r /grant "*S-1-5-32-544:F" /grant "*S-1-5-18:F" | Out-Null
+}
+EOF
+}
+
+# shellcheck disable=SC2016
+WIN_INSTALL_PS=$WIN_ENV_PS'[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+function Find-Bash {
+  foreach ($p in @("$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe", "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe")) {
+    if ($p -and (Test-Path -LiteralPath $p)) { return $p }
+  }
+}
+$bash = Find-Bash
+if ($bash) { "Git Bash is already installed: $bash" } else {
+  "Installing Git for Windows (Claude Code uses its Bash)..."
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install --id Git.Git --exact --silent --source winget --accept-source-agreements --accept-package-agreements | Out-Null
+  }
+  $bash = Find-Bash
+  if (-not $bash) {
+    try {
+      $rel = Invoke-RestMethod -UseBasicParsing https://api.github.com/repos/git-for-windows/git/releases/latest
+      $asset = $rel.assets | Where-Object { $_.name -match "^Git-[0-9.]+-64-bit\.exe$" } | Select-Object -First 1
+      $exe = Join-Path $env:TEMP $asset.name
+      Invoke-WebRequest -UseBasicParsing $asset.browser_download_url -OutFile $exe
+      Start-Process $exe -ArgumentList "/VERYSILENT", "/NORESTART", "/NOCANCEL", "/SP-", "/SUPPRESSMSGBOXES" -Wait
+      Remove-Item -LiteralPath $exe -ErrorAction SilentlyContinue
+    } catch { Err "downloading Git for Windows failed: $_" }
+    $bash = Find-Bash
+  }
+  if (-not $bash) { Err "could not install Git for Windows; install it from https://git-scm.com and run setup again"; exit 1 }
+  "Installed Git Bash: $bash"
+}
+$c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($c) { "Claude Code is already installed: " + (& $c.Source --version) } else {
+  # What https://claude.ai/install.ps1 does, but downloading with curl.exe:
+  # Invoke-WebRequest in Windows PowerShell 5.1 times out on the ~270 MB binary.
+  "Installing Claude Code..."
+  $base = "https://downloads.claude.ai/claude-code-releases"
+  $plat = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "win32-arm64" } else { "win32-x64" }
+  $exe = $null
+  try {
+    $ver = "$(Invoke-RestMethod -UseBasicParsing "$base/latest")".Trim()
+    if ($ver -notmatch "^\d+\.\d+\.\d+") { throw "unexpected answer from downloads.claude.ai: $ver" }
+    $sum = (Invoke-RestMethod -UseBasicParsing "$base/$ver/manifest.json").platforms.$plat.checksum
+    if (-not $sum) { throw "no $plat build in the manifest of $ver" }
+    $dl = "$env:USERPROFILE\.claude\downloads"
+    New-Item -ItemType Directory -Force -Path $dl | Out-Null
+    $exe = "$dl\claude-$ver-$plat.exe"
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+      curl.exe -fsSL --retry 2 -o $exe "$base/$ver/$plat/claude.exe"
+      if ($LASTEXITCODE) { throw "download failed (curl exit code $LASTEXITCODE)" }
+    } else {
+      Invoke-WebRequest -UseBasicParsing "$base/$ver/$plat/claude.exe" -OutFile $exe
+    }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower() -ne $sum) { throw "checksum mismatch" }
+    & $exe install latest
+    if ($LASTEXITCODE) { throw "claude install exited with code $LASTEXITCODE" }
+  } catch { Err "installing Claude Code failed: $_" }
+  finally { if ($exe) { Start-Sleep -Seconds 1; Remove-Item -LiteralPath $exe -ErrorAction SilentlyContinue } }
+  $c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $c) { Err "Claude Code installation failed"; exit 1 }
+  "Installed Claude Code: " + (& $c.Source --version)
+}
+exit 0
+'
+
+# The hook dot-sourced from the PowerShell profile on the VM.
+win_autostart_hook() { # DIR
+  cat <<EOF
+# Installed by vmclaude: open Claude Code on interactive SSH logins.
+# Quit Claude to get a normal PowerShell prompt. Turn off: vmclaude autostart NAME off
+$WIN_INVOKE_PS
+if (\$env:SSH_CONNECTION -and -not \$env:VMCLAUDE_NO_AUTOSTART -and [Environment]::GetCommandLineArgs().Count -le 1 -and -not [Console]::IsInputRedirected) {
+  \$env:VMCLAUDE_NO_AUTOSTART = "1"
+  \$env:Path = "\$env:USERPROFILE\.local\bin;\$env:Path"
+  \$vmclaudeDir = $(psq "$1")
+  if (\$vmclaudeDir -eq "" -or \$vmclaudeDir -eq "~") { \$vmclaudeDir = \$env:USERPROFILE }
+  elseif (\$vmclaudeDir -match "^~[\\\\/]") { \$vmclaudeDir = Join-Path \$env:USERPROFILE \$vmclaudeDir.Substring(2) }
+  \$vmclaudeExe = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (\$vmclaudeExe -and (Test-Path -LiteralPath \$vmclaudeDir)) {
+    [void](Invoke-Claude \$vmclaudeExe.Source "" (Resolve-Path -LiteralPath \$vmclaudeDir).Path)
+  }
+  Remove-Variable vmclaudeDir, vmclaudeExe -ErrorAction SilentlyContinue
+}
+EOF
+}
+
+# Writes the hook file; win_autostart_ps then links it from the profile.
+# (Two steps: together they do not fit in one Windows command line.)
+win_hook_ps() { # DIR
+  cat <<EOF
+New-Item -ItemType Directory -Force -Path "\$env:USERPROFILE\.config\vmclaude" | Out-Null
+Set-Content -LiteralPath "\$env:USERPROFILE\.config\vmclaude\autostart.ps1" -Value $(psq "$(win_autostart_hook "$1")") -Encoding UTF8
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+win_autostart_ps() { # on|off
+  printf '%s' "$WIN_ENV_PS"
+  cat <<EOF
+\$mode = $(psq "$1")
+\$dir = "\$env:USERPROFILE\.config\vmclaude"
+\$hook = "\$dir\autostart.ps1"
+\$prof = \$PROFILE.CurrentUserCurrentHost
+\$begin = "# >>> vmclaude autostart >>>"
+\$end = "# <<< vmclaude autostart <<<"
+\$out = New-Object System.Collections.Generic.List[string]
+\$skip = \$false
+if (Test-Path -LiteralPath \$prof) {
+  foreach (\$l in @(Get-Content -LiteralPath \$prof)) {
+    if (\$l -eq \$begin) { \$skip = \$true } elseif (\$l -eq \$end) { \$skip = \$false } elseif (-not \$skip) { \$out.Add(\$l) }
+  }
+}
+if (\$mode -eq "off") {
+  if (Test-Path -LiteralPath \$prof) { Set-Content -LiteralPath \$prof -Value \$out -Encoding UTF8 }
+  Remove-Item -LiteralPath \$hook -ErrorAction SilentlyContinue
+  "Autostart is off."
+  exit 0
+}
+if (-not (Test-Path -LiteralPath \$hook)) { Err "the hook \$hook is missing"; exit 1 }
+\$out.Add(\$begin)
+\$out.Add('if (Test-Path "\$env:USERPROFILE\.config\vmclaude\autostart.ps1") { . "\$env:USERPROFILE\.config\vmclaude\autostart.ps1" }')
+\$out.Add(\$end)
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent \$prof) | Out-Null
+Set-Content -LiteralPath \$prof -Value \$out -Encoding UTF8
+# The policy an SSH login will have (this script itself runs with Bypass).
+function Get-LoginPolicy {
+  foreach (\$s in "MachinePolicy", "UserPolicy", "CurrentUser", "LocalMachine") {
+    \$p = "\$(Get-ExecutionPolicy -Scope \$s)"
+    if (\$p -ne "Undefined") { return \$p }
+  }
+  "Restricted"
+}
+\$pol = Get-LoginPolicy
+if (@("Restricted", "AllSigned") -contains \$pol) {
+  # Throws "overridden by a more specific scope" (our Bypass) even when it worked.
+  try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { }
+  if (@("Restricted", "AllSigned") -contains (Get-LoginPolicy)) {
+    Err "PowerShell does not run profile scripts here (execution policy \$pol, set by policy); autostart will not work"
+  } else {
+    "Execution policy for this user: RemoteSigned (was \$pol), so the PowerShell profile can run."
+  }
+}
+\$shell = (Get-ItemProperty HKLM:\SOFTWARE\OpenSSH -ErrorAction SilentlyContinue).DefaultShell
+if ("\$shell" -notmatch "powershell\.exe\$") {
+  Err "autostart needs Windows PowerShell as the OpenSSH default shell (now: \$(if (\$shell) { \$shell } else { 'cmd.exe' }))"
+}
+"Autostart is on: SSH logins open Claude Code (quit Claude to get a shell)."
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+WIN_DOCTOR_PS=$WIN_ENV_PS'$c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+"claude=" + $(if ($c) { & $c.Source --version 2>$null | Select-Object -First 1 })
+$g = Get-Command git -ErrorAction SilentlyContinue
+"git=" + $(if ($g) { & $g.Source --version })
+"hook=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\autostart.ps1") { "on" })
+'
+
 # shellcheck disable=SC2029 # remote commands are built with remote_cmd/sq
 run_ssh() { ssh "${SSH_OPTS[@]}" "$@"; }
 
-key_auth_works() { run_ssh -o BatchMode=yes -T -- "$TARGET" true </dev/null >/dev/null 2>&1; }
+# "exit 0" works in sh, cmd.exe and PowerShell alike.
+key_auth_works() { run_ssh -o BatchMode=yes -T -- "$TARGET" "exit 0" </dev/null >/dev/null 2>&1; }
 
 ensure_key() {
   [[ -f $C_KEY ]] && return 0
@@ -439,7 +755,7 @@ cmd_add() {
   declare -A opts=()
   while (($#)); do
     case $1 in
-      --host | --user | --port | --key | --domain | --uri | --dir | --session)
+      --host | --user | --port | --key | --domain | --uri | --dir | --session | --os)
         (($# >= 2)) || usage_error "add: $1 needs a value"
         case $1 in
           --key) k=IDENTITY ;;
@@ -477,6 +793,7 @@ cmd_list() {
     target=${P[USER]:-$(id -un)}@${P[HOST]:-"(auto)"}
     [[ ${P[PORT]:-22} != 22 ]] && target+=":${P[PORT]}"
     [[ -n ${P[DOMAIN]:-} ]] && target+="  libvirt:${P[DOMAIN]}"
+    [[ ${P[OS]:-} == windows ]] && target+="  (Windows)"
     printf '%s %-16s %s\n' "$([[ $name == "$def" ]] && echo '*' || echo ' ')" "$name" "$target"
   done <<<"$names"
 }
@@ -535,7 +852,13 @@ cmd_connect() {
   resolve_target
   build_ssh_opts
   local rc=0
-  run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "${cargs[@]}")" || rc=$?
+  local cmd
+  if [[ $C_OS == windows ]]; then
+    cmd=$(win_cmd -i "$(win_connect_ps "$C_DIR" "$NAME" "${cargs[@]}")")
+  else
+    cmd=$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "${cargs[@]}")
+  fi
+  run_ssh "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
   if ((rc == 255)); then
     info "$PROG: SSH connection to $C_USER@$TARGET:$C_PORT failed. Try: $PROG doctor $NAME"
   fi
@@ -550,6 +873,10 @@ cmd_shell() {
   build_ssh_opts
   if (($#)); then
     run_ssh -- "$TARGET" "$@"
+  elif [[ $C_OS == windows ]]; then
+    # shellcheck disable=SC2016
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(win_cmd -noexit '$env:VMCLAUDE_NO_AUTOSTART = "1"
+if (Test-Path -LiteralPath $PROFILE) { . $PROFILE }')"
   else
     # shellcheck disable=SC2016
     run_ssh "$TTY_FLAG" -- "$TARGET" 'VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l'
@@ -563,7 +890,14 @@ cmd_autostart() {
   load "$1"
   resolve_target
   build_ssh_opts
-  if [[ $mode == on ]]; then
+  install_autostart "$mode"
+}
+
+install_autostart() { # on|off
+  if [[ $C_OS == windows ]]; then
+    if [[ $1 == on ]]; then win_run "$(win_hook_ps "$C_DIR")" || return 1; fi
+    win_run "$(win_autostart_ps "$1")"
+  elif [[ $1 == on ]]; then
     autostart_hook "$C_DIR" "$C_SESSION" | run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" on)"
   else
     run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" off)" </dev/null
@@ -592,24 +926,36 @@ cmd_setup() {
     info "  key login already works"
   else
     info "  installing $C_KEY.pub for $C_USER@$TARGET (enter the VM password if asked)"
+    local addkey
+    if [[ $C_OS == windows ]]; then
+      addkey=$(win_cmd "$(win_addkey_ps "$(<"$C_KEY.pub")")")
+    else
+      addkey=$(remote_cmd "$ADDKEY_SH")
+    fi
     run_ssh -T -o PreferredAuthentications=keyboard-interactive,password,publickey -- \
-      "$TARGET" "$(remote_cmd "$ADDKEY_SH")" <"$C_KEY.pub" ||
+      "$TARGET" "$addkey" <"$C_KEY.pub" ||
       die "could not install the key (wrong password? is password login enabled on the VM?)"
-    key_auth_works || die "key installed, but key login still fails (check PubkeyAuthentication and home directory permissions on the VM)"
+    if ! key_auth_works; then
+      [[ $C_OS == windows ]] &&
+        die "key installed, but key login still fails (for administrators Windows reads C:\\ProgramData\\ssh\\administrators_authorized_keys; was the session elevated?)"
+      die "key installed, but key login still fails (check PubkeyAuthentication and home directory permissions on the VM)"
+    fi
     info "  key login works"
   fi
 
-  if ((install)); then
+  if ((install)) && [[ $C_OS == windows ]]; then
+    info "[2/3] Git for Windows and Claude Code"
+    win_run "$WIN_INSTALL_PS" || die "installing on the VM failed"
+  elif ((install)); then
     info "[2/3] tmux and Claude Code"
     run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$INSTALL_SH")" || die "installing on the VM failed"
   else
-    info "[2/3] skipped installing tmux and Claude Code"
+    info "[2/3] skipped installing Claude Code"
   fi
 
   if ((autostart)); then
     info "[3/3] autostart on SSH login"
-    autostart_hook "$C_DIR" "$C_SESSION" | run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" on)" ||
-      die "could not install the autostart hook"
+    install_autostart on || die "could not install the autostart hook"
   else
     info "[3/3] skipped autostart"
   fi
@@ -617,6 +963,7 @@ cmd_setup() {
   say ""
   say "Done. Open Claude on the VM with:  $PROG $NAME"
   say "First time only: log in inside Claude with /login."
+  [[ $C_OS == windows ]] && say "Windows has no tmux: closing the connection ends Claude's session."
   say "App-menu launcher:                 $PROG desktop $NAME"
 }
 
@@ -645,23 +992,34 @@ cmd_doctor() {
   else
     TARGET=$C_HOST
   fi
-  if ssh_ready "$TARGET" "$C_PORT"; then pass "SSH server answers on $TARGET:$C_PORT"
+  if ssh_ready "$TARGET" "$C_PORT"; then pass "SSH server answers on $TARGET:$C_PORT ($BANNER)"
   else fail "no SSH server answers on $TARGET:$C_PORT"; return 1; fi
+  detect_os
   build_ssh_opts
   if key_auth_works; then pass "key login as $C_USER"
   else fail "key login as $C_USER failed (run: $PROG setup $NAME)"; return 1; fi
-  # shellcheck disable=SC2016
-  out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$(remote_cmd "$REMOTE_ENV"'
+  local probe
+  if [[ $C_OS == windows ]]; then
+    probe=$(win_cmd "$WIN_DOCTOR_PS")
+  else
+    # shellcheck disable=SC2016
+    probe=$(remote_cmd "$REMOTE_ENV"'
 printf "claude=%s\n" "$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -n 1)"
 printf "tmux=%s\n" "$(command -v tmux >/dev/null 2>&1 && tmux -V)"
 printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
-')" </dev/null 2>/dev/null) || { fail "running a command on the VM failed"; return 1; }
-  local claude tmux hook
+')
+  fi
+  out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$probe" </dev/null 2>/dev/null | tr -d '\r') ||
+    { fail "running a command on the VM failed"; return 1; }
+  local claude tmux hook git
   claude=$(sed -n 's/^claude=//p' <<<"$out")
   tmux=$(sed -n 's/^tmux=//p' <<<"$out")
+  git=$(sed -n 's/^git=//p' <<<"$out")
   hook=$(sed -n 's/^hook=//p' <<<"$out")
   if [[ -n $claude ]]; then pass "Claude Code on the VM: $claude"; else fail "Claude Code not installed on the VM (run: $PROG setup $NAME)"; fi
-  if [[ -n $tmux ]]; then pass "tmux on the VM: $tmux"
+  if [[ $C_OS == windows ]]; then
+    if [[ -n $git ]]; then pass "Git for Windows: $git"; else fail "Git for Windows not installed (run: $PROG setup $NAME)"; fi
+  elif [[ -n $tmux ]]; then pass "tmux on the VM: $tmux"
   elif [[ -n $C_SESSION ]]; then printf '  warn  tmux not installed; sessions end when the connection drops\n'; fi
   if [[ -n $hook ]]; then pass "autostart on SSH login: on"; else printf '  info  autostart on SSH login: off\n'; fi
   ((ok)) && say "All good." || return 1
