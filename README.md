@@ -28,7 +28,8 @@ also an app-menu launcher.
 
 - **One command:** `vmclaude` (or `vmclaude NAME`) connects and opens Claude.
 - **New VMs on demand:** `vmclaude create NAME` builds a libvirt VM from an
-  official cloud image (Debian 13, Debian 12 or Ubuntu 24.04) and sets it up.
+  official cloud image (Debian 13, Debian 12, Ubuntu 24.04 or Arch Linux)
+  and sets it up.
   `vmclaude delete NAME` removes it again, `vmclaude prune` the downloaded
   images. See [Create a VM](#create-a-vm).
 - **libvirt VMs start themselves:** a stopped, paused or suspended domain is
@@ -130,7 +131,7 @@ network, a port forward on the host, or a VPN such as Tailscale on the VM.
 vmclaude                         connect to the default VM (asks to add one if none)
 vmclaude NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmclaude dev --continue
 vmclaude create NAME [options]   make a new Linux VM and set it up
-    --image debian13|debian12|ubuntu24.04  --memory MB  --cpus N  --disk GB
+    --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
     --user USER  --uri LIBVIRT_URI  --no-setup
 vmclaude delete NAME [--yes]     delete a VM made with create, and its disk
 vmclaude prune                   remove downloaded images no VM uses any more
@@ -192,6 +193,7 @@ Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
 vmclaude create dev                                   # Debian 13, 4 GB RAM, 2 CPUs, 20 GB disk
 vmclaude create big --memory 16384 --cpus 8 --disk 100
 vmclaude create u --image ubuntu24.04
+vmclaude create a --image arch
 vmclaude delete dev                                   # asks you to type the name
 vmclaude prune                                        # free the space of unused images
 ```
@@ -216,6 +218,11 @@ cache in `~/.cache/vmclaude`.
 
 The VM is on libvirt's `default` NAT network and shows up in virt-manager
 like any other. Other pools or networks: `VMCLAUDE_POOL`, `VMCLAUDE_NETWORK`.
+
+Arch's image comes from `geo.mirror.pkgbuild.com`, which can be slow from some
+places. Pick another mirror with `VMCLAUDE_ARCH_MIRROR`, e.g.
+`VMCLAUDE_ARCH_MIRROR=https://mirrors.dotsrc.org/archlinux vmclaude create a --image arch`.
+The checksum still comes from Arch's own server.
 
 Two details that real runs turned up: the seed is a virtio disk, not
 virt-install's `--cloud-init` CD-ROM, because the Debian 12 cloud kernel has
@@ -295,10 +302,13 @@ python3 -m unittest discover -s tests -t .
   tmux`, the Claude Code installer), connect, detach and reattach, autostart on
   a plain `ssh` login, and skipping it with `LC_VMCLAUDE=off`.
 - By hand, `vmclaude create` on libvirt 11.3 (`qemu:///system`) with all
-  three images (Debian 13, Debian 12, Ubuntu 24.04): download, checksum, base
+  four images (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux): download, checksum, base
   volume, VM, cloud-init, Claude Code, doctor, shut down and start again
   through `vmclaude NAME`, `delete` and `prune`. These runs found the two
   details described under [Create a VM](#create-a-vm).
+- Inside that Arch Linux VM (kernel 7.2, `/bin/sh` is bash there): connect,
+  detach and reattach the tmux session, autostart on a plain `ssh` login, and
+  the whole test suite with shellcheck, asyncssh and zsh installed.
 - By hand, on Windows 10 22H2 (libvirt, OpenSSH for Windows 9.5): setup (key
   as administrator, Git via the fallback installer since winget failed over
   SSH, Claude Code), doctor, connect and quit,
@@ -335,7 +345,7 @@ vmclaude create dev   # resmi Debian bulut imajından yeni VM + Claude Code, şi
 vmclaude dev          # Claude Code'u içinde aç
 ```
 
-İmaj (Debian 13, Debian 12 ya da `--image ubuntu24.04`) bir kez indirilip
+İmaj (Debian 13, Debian 12, `--image ubuntu24.04` ya da `--image arch`) bir kez indirilip
 doğrulanır. Sonraki VM'ler genelde yarım dakika ile iki dakika arasında hazır
 olur. `vmclaude delete dev` VM'i diskiyle birlikte siler; yalnızca `create`
 ile oluşturulmuş VM'lerde çalışır, diğer VM'lerine dokunamaz.

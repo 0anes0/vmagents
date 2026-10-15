@@ -41,7 +41,7 @@ Usage:
 
 Commands:
   create NAME [options]    make a new Linux VM (libvirt) and set it up; no password needed
-      --image NAME           debian13 (default), debian12 or ubuntu24.04
+      --image NAME           debian13 (default), debian12, ubuntu24.04 or arch
       --memory MB            default 4096        --cpus N    default 2
       --disk GB              default 20          --user U    default: $(id -un)
       --uri URI              libvirt URI (default: qemu:///system)
@@ -1071,7 +1071,14 @@ image_info() {
       IMG_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
       IMG_SUMS=https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
       IMG_ALGO=sha256 IMG_OSINFO=ubuntu24.04 ;;
-    *) die "unknown image: $1 (choose debian13, debian12 or ubuntu24.04)" ;;
+    arch | archlinux)
+      # The checksum always comes from Arch itself; the image may come from
+      # a faster mirror (VMCLAUDE_ARCH_MIRROR, e.g. https://mirrors.dotsrc.org/archlinux).
+      IMG_URL=${VMCLAUDE_ARCH_MIRROR:-https://geo.mirror.pkgbuild.com}
+      IMG_URL=${IMG_URL%/}/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
+      IMG_SUMS=https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256
+      IMG_ALGO=sha256 IMG_OSINFO=archlinux ;;
+    *) die "unknown image: $1 (choose debian13, debian12, ubuntu24.04 or arch)" ;;
   esac
 }
 
@@ -1105,7 +1112,8 @@ fetch_image() {
   [[ -t 2 ]] && progress=(-#)
   curl -fL "${progress[@]}" -o "$IMG_FILE.part" "$IMG_URL" || die "download failed"
   got=$("${IMG_ALGO}sum" "$IMG_FILE.part" | cut -d' ' -f1)
-  [[ $got == "$IMG_HASH" ]] || { rm -f "$IMG_FILE.part"; die "checksum mismatch for ${IMG_URL##*/}"; }
+  [[ $got == "$IMG_HASH" ]] ||
+    { rm -f "$IMG_FILE.part"; die "checksum mismatch for ${IMG_URL##*/} (a mirror may not have synced the latest image yet)"; }
   mv -f "$IMG_FILE.part" "$IMG_FILE"
 }
 

@@ -169,7 +169,7 @@ class CreateTests(SandboxTest):
         self.lv.write_text(json.dumps(st))
         self.assertIn("already has a VM named 'win10'", self.create("win10", check=1).stderr)
         self.assertIn("whole numbers", self.create("x", "--memory", "4G", check=1).stderr)
-        self.assertIn("unknown image", self.create("x", "--image", "arch", check=1).stderr)
+        self.assertIn("unknown image", self.create("x", "--image", "gentoo", check=1).stderr)
         self.sb.run("add", "taken", "--host", "h", check=0)
         self.assertIn("already exists", self.create("taken", check=1).stderr)
 
