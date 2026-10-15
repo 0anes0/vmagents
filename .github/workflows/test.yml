@@ -1,0 +1,16 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck zsh openssh-client desktop-file-utils
+          pip install asyncssh
+      - name: shellcheck
+        run: shellcheck vmclaude install.sh
+      - name: tests
+        run: python3 -m unittest discover -v -s tests -t .

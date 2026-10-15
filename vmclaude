@@ -1,0 +1,753 @@
+#!/usr/bin/env bash
+# vmclaude — open Claude Code inside a virtual machine over SSH, in one step.
+# https://github.com/emincan2000/vmclaude
+set -euo pipefail
+
+VERSION=0.1.0
+PROG=${0##*/}
+CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
+HOSTS_DIR=$CONF_DIR/hosts
+KNOWN_HOSTS=$CONF_DIR/known_hosts
+DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
+BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
+APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION "
+HOLD=0
+
+say()  { printf '%s\n' "$*"; }
+info() { printf '%s\n' "$*" >&2; }
+warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
+die()  {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  hold_prompt
+  exit 1
+}
+usage_error() { printf '%s: %s\n' "$PROG" "$*" >&2; printf "Try '%s help'.\n" "$PROG" >&2; exit 2; }
+# In a desktop launcher the terminal closes as soon as we exit; keep it open on errors.
+hold_prompt() {
+  if [[ $HOLD = 1 && -t 0 ]]; then
+    read -r -p "Press Enter to close." _ || true
+  fi
+}
+
+usage() {
+  cat <<EOF
+vmclaude $VERSION — open Claude Code inside a virtual machine over SSH.
+
+Usage:
+  $PROG                         connect to the default VM (asks to add one if none)
+  $PROG NAME [CLAUDE_ARGS...]   connect to VM NAME
+  $PROG COMMAND [ARGS...]
+
+Commands:
+  add NAME [options]       add a VM profile, or change fields of an existing one
+      --host HOST            hostname or IP (optional with --domain: detected)
+      --user USER            login user on the VM (default: $(id -un))
+      --port PORT            SSH port (default: 22)
+      --key FILE             private key (default: ~/.ssh/vmclaude_ed25519)
+      --domain NAME          libvirt domain: start it on connect, find its IP
+      --uri URI              libvirt URI (default: qemu:///system)
+      --dir DIR              working directory on the VM (default: home)
+      --session NAME         tmux session name (default: claude)
+      --no-tmux              run Claude without tmux
+  setup NAME [options]     install the SSH key, tmux and Claude Code on the VM
+      --no-install           only install the SSH key
+      --no-autostart         do not start Claude when you log in over SSH
+  connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+                           open Claude Code on the VM (the default command)
+  shell NAME [CMD...]      plain shell (or a command) on the VM, no Claude
+  autostart NAME on|off    start Claude Code on every interactive SSH login
+  doctor NAME              check every step of the connection
+  list                     list VM profiles
+  default NAME             make NAME the default VM
+  desktop NAME             add an app-menu launcher that opens Claude on NAME
+  edit NAME                open the profile in \$EDITOR
+  forget NAME              forget the VM's SSH host key (after reinstalling it)
+  rm NAME                  delete a profile and its launcher
+  help, version
+
+Claude keeps running in tmux when the connection drops; connecting again
+reattaches. Detach on purpose with Ctrl-b d.
+EOF
+}
+
+# ------------------------------------------------------------------ profiles
+
+valid_name() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+profile_file() { printf '%s/%s.conf' "$HOSTS_DIR" "$1"; }
+profile_exists() { valid_name "$1" && [[ -f $(profile_file "$1") ]]; }
+
+profile_names() {
+  local f
+  [[ -d $HOSTS_DIR ]] || return 0
+  for f in "$HOSTS_DIR"/*.conf; do
+    [[ -f $f ]] || continue
+    f=${f##*/}
+    printf '%s\n' "${f%.conf}"
+  done
+}
+
+# Profiles are KEY=VALUE files. They are parsed, never sourced.
+declare -A P=()
+read_profile() {
+  local name=$1 file line k v n=0
+  file=$(profile_file "$name")
+  P=()
+  [[ -f $file ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "$file:$n: expected KEY=VALUE"
+    k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
+    [[ $PROFILE_KEYS == *" $k "* ]] || die "$file:$n: unknown key $k"
+    P[$k]=$v
+  done <"$file"
+}
+
+write_profile() {
+  local name=$1 file tmp k
+  file=$(profile_file "$name")
+  mkdir -p "$HOSTS_DIR"
+  tmp=$(mktemp "$HOSTS_DIR/.tmp.XXXXXX")
+  {
+    printf '# vmclaude profile "%s"\n' "$name"
+    for k in $PROFILE_KEYS; do
+      [[ -v P[$k] ]] && printf '%s=%s\n' "$k" "${P[$k]}"
+    done
+  } >"$tmp"
+  mv -f "$tmp" "$file"
+}
+
+HOST_RE='^[]A-Za-z0-9._:%[-]+$' # names, IPv4, IPv6 (optionally [bracketed], %zone)
+check_value() { # KEY VALUE
+  local k=$1 v=$2
+  [[ $v != *$'\n'* ]] || die "$k must be a single line"
+  case $k in
+    HOST) [[ $v =~ $HOST_RE && $v != -* ]] || die "invalid host: $v" ;;
+    USER) [[ $v =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*$ ]] || die "invalid user: $v" ;;
+    PORT) if ! [[ $v =~ ^[0-9]+$ ]] || ((v < 1 || v > 65535)); then die "invalid port: $v"; fi ;;
+    DOMAIN) [[ -n $v && $v != -* ]] || die "invalid libvirt domain: $v" ;;
+    SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
+  esac
+}
+
+# Load NAME into the effective connection settings (C_*).
+NAME='' C_HOST='' C_USER='' C_PORT='' C_KEY='' C_DOMAIN='' C_URI='' C_DIR='' C_SESSION=''
+load() {
+  NAME=$1
+  valid_name "$NAME" || die "invalid profile name: $NAME"
+  profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
+  read_profile "$NAME"
+  local k
+  for k in HOST USER PORT DOMAIN SESSION; do
+    [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
+  done
+  C_HOST=${P[HOST]:-}
+  C_USER=${P[USER]:-$(id -un)}
+  C_PORT=${P[PORT]:-22}
+  C_KEY=${P[IDENTITY]:-$DEFAULT_KEY}
+  # shellcheck disable=SC2088 # a literal "~/" from the profile file
+  [[ $C_KEY == "~/"* ]] && C_KEY=$HOME/${C_KEY#"~/"}
+  C_DOMAIN=${P[DOMAIN]:-}
+  C_URI=${P[LIBVIRT_URI]:-qemu:///system}
+  C_DIR=${P[DIR]:-}
+  C_SESSION=${P[SESSION]-claude}
+  [[ -n $C_HOST || -n $C_DOMAIN ]] || die "profile '$NAME' has neither HOST nor DOMAIN"
+}
+
+default_name() {
+  local d names count
+  if [[ -f $CONF_DIR/default ]]; then
+    d=$(<"$CONF_DIR/default")
+    if profile_exists "$d"; then printf '%s\n' "$d"; return 0; fi
+  fi
+  names=$(profile_names)
+  count=$(grep -c . <<<"$names" || true)
+  if ((count == 1)); then printf '%s\n' "$names"; return 0; fi
+  return 1
+}
+
+# ------------------------------------------------------------------ libvirt
+
+vsh() { virsh -c "$C_URI" "$@"; }
+
+ensure_running() {
+  local out state
+  command -v virsh >/dev/null || die "virsh not found, but profile '$NAME' uses libvirt domain '$C_DOMAIN'"
+  out=$(vsh domstate "$C_DOMAIN" 2>&1) || die "libvirt: ${out:-cannot read state of $C_DOMAIN}"
+  state=${out%%$'\n'*}
+  case $state in
+    running) ;;
+    paused)
+      info "Resuming VM $C_DOMAIN..."
+      out=$(vsh resume "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
+    pmsuspended)
+      info "Waking VM $C_DOMAIN..."
+      out=$(vsh dompmwakeup "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
+    "in shutdown")
+      die "VM $C_DOMAIN is shutting down; try again in a moment" ;;
+    *)
+      info "Starting VM $C_DOMAIN..."
+      out=$(vsh start "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
+  esac
+}
+
+# Sets FOUND_IP to the first IPv4 address of the domain (not on lo).
+FOUND_IP=
+find_ip() {
+  local src
+  FOUND_IP=
+  for src in lease agent arp; do
+    FOUND_IP=$(vsh domifaddr "$C_DOMAIN" --source "$src" 2>/dev/null |
+      awk '$1 != "-" { iface = $1 } $3 == "ipv4" && iface != "lo" { sub(/\/.*/, "", $4); print $4; exit }') || true
+    [[ -n $FOUND_IP ]] && return 0
+  done
+  return 1
+}
+
+wait_for_ip() {
+  local deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
+  until find_ip; do
+    ((SECONDS < deadline)) || die "VM $C_DOMAIN has no IPv4 address after ${BOOT_TIMEOUT}s (is its network up? set --host to skip detection)"
+    ((noted)) || { info "Waiting for $C_DOMAIN to get an IP address..."; noted=1; }
+    sleep 2
+  done
+}
+
+# True once an SSH server answers with its banner. A bare TCP connect is not
+# enough: NAT port forwards (passt, slirp, VirtualBox) accept connections
+# before the VM's sshd is up.
+# shellcheck disable=SC2016
+ssh_ready() {
+  timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && IFS= read -r -t 4 line <&3 && [[ $line == SSH-* ]]' \
+    _ "$1" "$2" 2>/dev/null
+}
+
+wait_for_port() {
+  local host=$1 port=$2 deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
+  until ssh_ready "$host" "$port"; do
+    ((SECONDS < deadline)) || die "no SSH server answers on $host:$port after ${BOOT_TIMEOUT}s (is sshd installed and running on the VM?)"
+    ((noted)) || { info "Waiting for SSH on $host:$port..."; noted=1; }
+    sleep 2
+  done
+}
+
+# Sets TARGET: starts the VM and waits for it when it is a libvirt domain.
+TARGET=
+resolve_target() {
+  if [[ -n $C_DOMAIN ]]; then
+    ensure_running
+    if [[ -n $C_HOST ]]; then
+      TARGET=$C_HOST
+    else
+      wait_for_ip
+      TARGET=$FOUND_IP
+    fi
+    wait_for_port "$TARGET" "$C_PORT"
+  else
+    TARGET=$C_HOST
+  fi
+}
+
+# ------------------------------------------------------------------ ssh
+
+# The host key is stored under an alias, so a VM whose DHCP address changes
+# keeps its identity, and in vmclaude's own known_hosts file.
+SSH_OPTS=()
+build_ssh_opts() {
+  mkdir -p "$CONF_DIR"
+  SSH_OPTS=(-l "$C_USER" -p "$C_PORT"
+    -o "HostKeyAlias=vmclaude-$NAME"
+    -o "UserKnownHostsFile=$KNOWN_HOSTS"
+    -o StrictHostKeyChecking=accept-new
+    -o ConnectTimeout=15
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+  if [[ -f $C_KEY ]]; then
+    SSH_OPTS+=(-i "$C_KEY" -o IdentitiesOnly=yes)
+  fi
+}
+
+# -t (allocate a terminal on the VM) when we have one, else -T. Not called
+# as $(...): stdout would be a pipe there.
+TTY_FLAG=-T
+[[ -t 0 && -t 1 ]] && TTY_FLAG=-t
+
+# Quote for a POSIX shell (also safe in bash, zsh and fish).
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+# remote_cmd SCRIPT ARGS... -> one command line that runs SCRIPT with ARGS
+# under sh on the VM, whatever the user's login shell is.
+remote_cmd() {
+  local out a
+  out="sh -c $(sq "$1") vmclaude"
+  shift
+  for a in "$@"; do out+=" $(sq "$a")"; done
+  printf '%s' "$out"
+}
+
+# --- scripts that run on the VM (POSIX sh) ---
+
+# shellcheck disable=SC2016
+REMOTE_ENV='PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/bin:$PATH"; export PATH
+cd_dir() {
+  case $1 in
+    "") cd || return 1; return 0 ;;
+    "~") set -- "$HOME" ;;
+    "~/"*) set -- "$HOME/${1#"~/"}" ;;
+  esac
+  [ -d "$1" ] || { mkdir -p "$1" && echo "vmclaude: created $1 on the VM" >&2; } || return 1
+  cd "$1"
+}
+'
+
+# $1 dir, $2 tmux session ("" = no tmux), $3 profile name, rest: claude args
+# shellcheck disable=SC2016
+CONNECT_SH=$REMOTE_ENV'd=$1; s=$2; n=$3; shift 3
+cd_dir "$d" || { echo "vmclaude: cannot use directory $d on the VM" >&2; exit 1; }
+c=$(command -v claude) || { echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127; }
+if [ -n "${TERM-}" ] && command -v tput >/dev/null 2>&1 && ! tput -T "$TERM" longname >/dev/null 2>&1; then
+  TERM=xterm-256color; export TERM
+fi
+if [ -n "$s" ] && command -v tmux >/dev/null 2>&1; then
+  exec tmux new-session -A -s "$s" -c "$PWD" "$c" "$@"
+fi
+exec "$c" "$@"
+'
+
+# Reads one public key on stdin and adds it to authorized_keys once.
+# shellcheck disable=SC2016
+ADDKEY_SH='umask 077
+k=$(cat)
+case $k in ssh-*|ecdsa-*|sk-*) ;; *) echo "vmclaude: not a public key" >&2; exit 1 ;; esac
+mkdir -p "$HOME/.ssh" || exit 1
+f=$HOME/.ssh/authorized_keys
+touch "$f" || exit 1
+if [ -s "$f" ] && [ "$(tail -c 1 "$f" | wc -l)" -eq 0 ]; then echo >>"$f"; fi
+grep -qxF "$k" "$f" || printf "%s\n" "$k" >>"$f"
+chmod 600 "$f"; chmod 700 "$HOME/.ssh"
+'
+
+# shellcheck disable=SC2016
+INSTALL_SH=$REMOTE_ENV'need=
+command -v tmux >/dev/null 2>&1 || need="$need tmux"
+command -v claude >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || need="$need curl"
+if [ -n "$need" ]; then
+  echo "Installing:$need"
+  if [ "$(id -u)" = 0 ]; then su_=
+  elif command -v sudo >/dev/null 2>&1; then su_=sudo
+  else su_=none
+  fi
+  if [ "$su_" = none ]; then
+    echo "vmclaude: cannot install$need without root or sudo; install it yourself" >&2
+  elif command -v apt-get >/dev/null 2>&1; then
+    $su_ apt-get update -qq && $su_ env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Use-Pty=0 $need
+  elif command -v dnf >/dev/null 2>&1; then $su_ dnf install -y $need
+  elif command -v yum >/dev/null 2>&1; then $su_ yum install -y $need
+  elif command -v pacman >/dev/null 2>&1; then $su_ pacman -S --needed --noconfirm $need
+  elif command -v zypper >/dev/null 2>&1; then $su_ zypper --non-interactive install $need
+  elif command -v apk >/dev/null 2>&1; then $su_ apk add $need
+  else echo "vmclaude: no known package manager; install$need yourself" >&2
+  fi || echo "vmclaude: installing$need failed" >&2
+fi
+if command -v claude >/dev/null 2>&1; then
+  echo "Claude Code is already installed: $(claude --version 2>/dev/null || echo unknown version)"
+else
+  command -v curl >/dev/null 2>&1 || { echo "vmclaude: curl is missing; cannot install Claude Code" >&2; exit 1; }
+  echo "Installing Claude Code..."
+  curl -fsSL https://claude.ai/install.sh | bash
+  command -v claude >/dev/null 2>&1 || { echo "vmclaude: Claude Code installation failed" >&2; exit 1; }
+  echo "Installed Claude Code: $(claude --version 2>/dev/null || echo unknown version)"
+fi
+command -v tmux >/dev/null 2>&1 || echo "vmclaude: tmux is not available; Claude will stop when the connection drops" >&2
+exit 0
+'
+
+# $1 on|off; with "on" the hook body comes on stdin.
+# shellcheck disable=SC2016
+AUTOSTART_SH='umask 022
+d=$HOME/.config/vmclaude
+hook=$d/autostart.sh
+begin="# >>> vmclaude autostart >>>"
+end="# <<< vmclaude autostart <<<"
+strip() {
+  [ -f "$1" ] || return 0
+  awk -v b="$begin" -v e="$end" "\$0 == b { skip = 1; next } \$0 == e { skip = 0; next } !skip" "$1" >"$1.vmclaude.tmp" &&
+    cat "$1.vmclaude.tmp" >"$1" && rm -f "$1.vmclaude.tmp"
+}
+rcs="$HOME/.bashrc"
+case ${SHELL-} in */zsh) rcs="$rcs $HOME/.zshrc" ;; esac
+[ -f "$HOME/.zshrc" ] && case $rcs in *zshrc*) ;; *) rcs="$rcs $HOME/.zshrc" ;; esac
+for rc in $rcs; do strip "$rc" || exit 1; done
+if [ "$1" = off ]; then
+  rm -f "$hook"
+  echo "Autostart is off."
+  exit 0
+fi
+mkdir -p "$d" || exit 1
+cat >"$hook" || exit 1
+for rc in $rcs; do
+  [ -f "$rc" ] && [ -s "$rc" ] && [ "$(tail -c 1 "$rc" | wc -l)" -eq 0 ] && echo >>"$rc"
+  printf "%s\n%s\n%s\n" "$begin" "[ -r \"\$HOME/.config/vmclaude/autostart.sh\" ] && . \"\$HOME/.config/vmclaude/autostart.sh\"" "$end" >>"$rc" || exit 1
+done
+echo "Autostart is on: SSH logins open Claude Code (quit Claude to get a shell)."
+'
+
+# The hook sourced from ~/.bashrc / ~/.zshrc on the VM.
+autostart_hook() { # DIR SESSION
+  cat <<EOF
+# Installed by vmclaude: open Claude Code on interactive SSH logins.
+# Quit Claude (or detach tmux with Ctrl-b d) to get a normal shell.
+# Skip it once:  ssh -o SetEnv=LC_VMCLAUDE=off ...   Turn it off:  vmclaude autostart NAME off
+case \$- in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+if [ -n "\${SSH_CONNECTION-}" ] && [ -z "\${TMUX-}" ] && [ -z "\${VMCLAUDE_NO_AUTOSTART-}" ] && [ "\${LC_VMCLAUDE-}" != off ] && [ -t 0 ] && [ -t 1 ]; then
+  VMCLAUDE_NO_AUTOSTART=1; export VMCLAUDE_NO_AUTOSTART
+  case ":\$PATH:" in *":\$HOME/.local/bin:"*) ;; *) PATH="\$HOME/.local/bin:\$PATH"; export PATH ;; esac
+  vmclaude_dir=$(sq "$1")
+  case \$vmclaude_dir in "") vmclaude_dir=\$HOME ;; "~") vmclaude_dir=\$HOME ;; "~/"*) vmclaude_dir=\$HOME/\${vmclaude_dir#"~/"} ;; esac
+  if command -v claude >/dev/null 2>&1; then
+    if [ -n $(sq "$2") ] && command -v tmux >/dev/null 2>&1; then
+      tmux new-session -A -s $(sq "$2") -c "\$vmclaude_dir" "\$(command -v claude)"
+    else
+      (cd "\$vmclaude_dir" 2>/dev/null; claude)
+    fi
+  fi
+  unset vmclaude_dir
+fi
+EOF
+}
+
+# shellcheck disable=SC2029 # remote commands are built with remote_cmd/sq
+run_ssh() { ssh "${SSH_OPTS[@]}" "$@"; }
+
+key_auth_works() { run_ssh -o BatchMode=yes -T -- "$TARGET" true </dev/null >/dev/null 2>&1; }
+
+ensure_key() {
+  [[ -f $C_KEY ]] && return 0
+  [[ $C_KEY == "$DEFAULT_KEY" ]] || die "key file not found: $C_KEY"
+  command -v ssh-keygen >/dev/null || die "ssh-keygen not found (install openssh-client)"
+  mkdir -p "$(dirname "$C_KEY")"
+  chmod 700 "$(dirname "$C_KEY")"
+  info "Creating SSH key $C_KEY"
+  ssh-keygen -q -t ed25519 -N '' -C "vmclaude@$(hostname 2>/dev/null || echo host)" -f "$C_KEY" ||
+    die "ssh-keygen failed"
+}
+
+# ------------------------------------------------------------------ commands
+
+cmd_add() {
+  local name='' k v created=0
+  declare -A opts=()
+  while (($#)); do
+    case $1 in
+      --host | --user | --port | --key | --domain | --uri | --dir | --session)
+        (($# >= 2)) || usage_error "add: $1 needs a value"
+        case $1 in
+          --key) k=IDENTITY ;;
+          --uri) k=LIBVIRT_URI ;;
+          *) k=${1#--}; k=${k^^} ;;
+        esac
+        opts[$k]=$2; shift 2 ;;
+      --no-tmux) opts[SESSION]=; shift ;;
+      -*) usage_error "add: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "add: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "add: missing NAME"
+  valid_name "$name" || die "invalid profile name: $name (letters, digits, . _ - only)"
+  for k in "${!opts[@]}"; do
+    v=${opts[$k]}
+    [[ -z $v && $k != SESSION ]] || check_value "$k" "$v"
+  done
+  if profile_exists "$name"; then read_profile "$name"; else P=(); created=1; fi
+  for k in "${!opts[@]}"; do
+    if [[ -z ${opts[$k]} && $k != SESSION ]]; then unset "P[$k]"; else P[$k]=${opts[$k]}; fi
+  done
+  [[ -n ${P[HOST]:-} || -n ${P[DOMAIN]:-} ]] || die "add: give --host, --domain, or both"
+  write_profile "$name"
+  if ((created)); then say "Added VM '$name'. Next: $PROG setup $name"; else say "Updated VM '$name'."; fi
+}
+
+cmd_list() {
+  local names name def target
+  names=$(profile_names)
+  if [[ -z $names ]]; then say "No VMs yet. Add one: $PROG add NAME --host IP  (or --domain LIBVIRT_DOMAIN)"; return 0; fi
+  def=$(default_name || true)
+  while IFS= read -r name; do
+    read_profile "$name"
+    target=${P[USER]:-$(id -un)}@${P[HOST]:-"(auto)"}
+    [[ ${P[PORT]:-22} != 22 ]] && target+=":${P[PORT]}"
+    [[ -n ${P[DOMAIN]:-} ]] && target+="  libvirt:${P[DOMAIN]}"
+    printf '%s %-16s %s\n' "$([[ $name == "$def" ]] && echo '*' || echo ' ')" "$name" "$target"
+  done <<<"$names"
+}
+
+cmd_default() {
+  [[ $# = 1 ]] || usage_error "default: give one NAME"
+  profile_exists "$1" || die "no VM profile named '$1'"
+  mkdir -p "$CONF_DIR"
+  printf '%s\n' "$1" >"$CONF_DIR/default"
+  say "Default VM: $1"
+}
+
+cmd_rm() {
+  [[ $# = 1 ]] || usage_error "rm: give one NAME"
+  profile_exists "$1" || die "no VM profile named '$1'"
+  rm -f "$(profile_file "$1")" "$APPS_DIR/vmclaude-$1.desktop"
+  if [[ -f $CONF_DIR/default && $(<"$CONF_DIR/default") == "$1" ]]; then rm -f "$CONF_DIR/default"; fi
+  if [[ -f $KNOWN_HOSTS ]]; then ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true; rm -f "$KNOWN_HOSTS.old"; fi
+  say "Removed VM '$1'."
+}
+
+cmd_edit() {
+  [[ $# = 1 ]] || usage_error "edit: give one NAME"
+  profile_exists "$1" || die "no VM profile named '$1'"
+  "${VISUAL:-${EDITOR:-vi}}" "$(profile_file "$1")"
+}
+
+cmd_forget() {
+  [[ $# = 1 ]] || usage_error "forget: give one NAME"
+  profile_exists "$1" || die "no VM profile named '$1'"
+  if [[ -f $KNOWN_HOSTS ]] && ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1; then
+    rm -f "$KNOWN_HOSTS.old"
+  fi
+  say "Forgot the host key of '$1'; the next connection will accept the new one."
+}
+
+cmd_connect() {
+  local name='' notmux=0
+  local -a cargs=()
+  while (($#)); do
+    case $1 in
+      --hold) HOLD=1; shift ;;
+      --no-tmux) notmux=1; shift ;;
+      --) shift; cargs+=("$@"); break ;;
+      *)
+        if [[ -z $name ]] && [[ $1 != -* ]]; then name=$1; shift
+        else cargs+=("$@"); break
+        fi ;;
+    esac
+  done
+  if [[ -z $name ]]; then
+    name=$(default_name) || die "several VMs and no default; name one, or: $PROG default NAME"
+  fi
+  load "$name"
+  ((notmux)) && C_SESSION=
+  resolve_target
+  build_ssh_opts
+  local rc=0
+  run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "${cargs[@]}")" || rc=$?
+  if ((rc == 255)); then
+    info "$PROG: SSH connection to $C_USER@$TARGET:$C_PORT failed. Try: $PROG doctor $NAME"
+  fi
+  ((rc == 0)) || hold_prompt
+  return "$rc"
+}
+
+cmd_shell() {
+  (($#)) || usage_error "shell: missing NAME"
+  load "$1"; shift
+  resolve_target
+  build_ssh_opts
+  if (($#)); then
+    run_ssh -- "$TARGET" "$@"
+  else
+    # shellcheck disable=SC2016
+    run_ssh "$TTY_FLAG" -- "$TARGET" 'VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l'
+  fi
+}
+
+cmd_autostart() {
+  [[ $# = 2 ]] || usage_error "autostart: give NAME and on|off"
+  local mode=$2
+  [[ $mode == on || $mode == off ]] || usage_error "autostart: say on or off"
+  load "$1"
+  resolve_target
+  build_ssh_opts
+  if [[ $mode == on ]]; then
+    autostart_hook "$C_DIR" "$C_SESSION" | run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" on)"
+  else
+    run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" off)" </dev/null
+  fi
+}
+
+cmd_setup() {
+  local name='' install=1 autostart=1
+  while (($#)); do
+    case $1 in
+      --no-install) install=0; shift ;;
+      --no-autostart) autostart=0; shift ;;
+      -*) usage_error "setup: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "setup: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || name=$(default_name) || usage_error "setup: missing NAME"
+  load "$name"
+  command -v ssh >/dev/null || die "ssh not found (install openssh-client)"
+  ensure_key
+  resolve_target
+  build_ssh_opts
+
+  info "[1/3] SSH key"
+  if key_auth_works; then
+    info "  key login already works"
+  else
+    info "  installing $C_KEY.pub for $C_USER@$TARGET (enter the VM password if asked)"
+    run_ssh -T -o PreferredAuthentications=keyboard-interactive,password,publickey -- \
+      "$TARGET" "$(remote_cmd "$ADDKEY_SH")" <"$C_KEY.pub" ||
+      die "could not install the key (wrong password? is password login enabled on the VM?)"
+    key_auth_works || die "key installed, but key login still fails (check PubkeyAuthentication and home directory permissions on the VM)"
+    info "  key login works"
+  fi
+
+  if ((install)); then
+    info "[2/3] tmux and Claude Code"
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$INSTALL_SH")" || die "installing on the VM failed"
+  else
+    info "[2/3] skipped installing tmux and Claude Code"
+  fi
+
+  if ((autostart)); then
+    info "[3/3] autostart on SSH login"
+    autostart_hook "$C_DIR" "$C_SESSION" | run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" on)" ||
+      die "could not install the autostart hook"
+  else
+    info "[3/3] skipped autostart"
+  fi
+
+  say ""
+  say "Done. Open Claude on the VM with:  $PROG $NAME"
+  say "First time only: log in inside Claude with /login."
+  say "App-menu launcher:                 $PROG desktop $NAME"
+}
+
+cmd_doctor() {
+  local name=${1:-} ok=1 out
+  [[ -n $name ]] || name=$(default_name) || usage_error "doctor: missing NAME"
+  load "$name"
+  pass() { printf '  ok    %s\n' "$*"; }
+  fail() { printf '  FAIL  %s\n' "$*"; ok=0; }
+  say "Checking '$NAME'"
+  if command -v ssh >/dev/null; then pass "ssh: $(ssh -V 2>&1)"; else fail "ssh not installed"; fi
+  if [[ -f $C_KEY ]]; then pass "key: $C_KEY"; else fail "key $C_KEY missing (run: $PROG setup $NAME)"; fi
+  if [[ -n $C_DOMAIN ]]; then
+    if ! command -v virsh >/dev/null; then fail "virsh not installed"; return 1; fi
+    if out=$(vsh domstate "$C_DOMAIN" 2>&1); then
+      out=${out%%$'\n'*}
+      if [[ $out == running ]]; then pass "libvirt domain $C_DOMAIN: running"
+      else fail "libvirt domain $C_DOMAIN: $out (connecting starts it)"; return 1; fi
+    else
+      fail "libvirt: $out"; return 1
+    fi
+    if [[ -n $C_HOST ]]; then TARGET=$C_HOST
+    elif find_ip; then TARGET=$FOUND_IP; pass "IP address: $TARGET"
+    else fail "no IPv4 address yet (still booting? network down?)"; return 1
+    fi
+  else
+    TARGET=$C_HOST
+  fi
+  if ssh_ready "$TARGET" "$C_PORT"; then pass "SSH server answers on $TARGET:$C_PORT"
+  else fail "no SSH server answers on $TARGET:$C_PORT"; return 1; fi
+  build_ssh_opts
+  if key_auth_works; then pass "key login as $C_USER"
+  else fail "key login as $C_USER failed (run: $PROG setup $NAME)"; return 1; fi
+  # shellcheck disable=SC2016
+  out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$(remote_cmd "$REMOTE_ENV"'
+printf "claude=%s\n" "$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -n 1)"
+printf "tmux=%s\n" "$(command -v tmux >/dev/null 2>&1 && tmux -V)"
+printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
+')" </dev/null 2>/dev/null) || { fail "running a command on the VM failed"; return 1; }
+  local claude tmux hook
+  claude=$(sed -n 's/^claude=//p' <<<"$out")
+  tmux=$(sed -n 's/^tmux=//p' <<<"$out")
+  hook=$(sed -n 's/^hook=//p' <<<"$out")
+  if [[ -n $claude ]]; then pass "Claude Code on the VM: $claude"; else fail "Claude Code not installed on the VM (run: $PROG setup $NAME)"; fi
+  if [[ -n $tmux ]]; then pass "tmux on the VM: $tmux"
+  elif [[ -n $C_SESSION ]]; then printf '  warn  tmux not installed; sessions end when the connection drops\n'; fi
+  if [[ -n $hook ]]; then pass "autostart on SSH login: on"; else printf '  info  autostart on SSH login: off\n'; fi
+  ((ok)) && say "All good." || return 1
+}
+
+desktop_escape() { # quote an argument for a .desktop Exec line
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\`/\\\`}; s=${s//\$/\\\$}
+  printf '"%s"' "${s//%/%%}"
+}
+
+cmd_desktop() {
+  [[ $# = 1 ]] || usage_error "desktop: give one NAME"
+  profile_exists "$1" || die "no VM profile named '$1'"
+  local self file
+  self=$(readlink -f "$0")
+  file=$APPS_DIR/vmclaude-$1.desktop
+  mkdir -p "$APPS_DIR"
+  cat >"$file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Claude Code ($1)
+Comment=Open Claude Code on the virtual machine $1 over SSH
+Exec=$(desktop_escape "$self") connect --hold $1
+Terminal=true
+Icon=utilities-terminal
+Categories=Development;
+Keywords=claude;ssh;vm;
+EOF
+  chmod +x "$file"
+  command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  say "Created $file — look for \"Claude Code ($1)\" in your app menu."
+}
+
+ask() { # VAR PROMPT DEFAULT
+  local __a
+  read -r -p "$2${3:+ [$3]}: " __a || die "aborted"
+  printf -v "$1" '%s' "${__a:-$3}"
+}
+
+first_run() {
+  [[ -t 0 && -t 1 ]] || die "no VM configured. Add one: $PROG add NAME --host IP"
+  local name domain='' host='' user port doms yn
+  say "No VM configured yet — let's add one."
+  ask name "Name for this VM" vm
+  if command -v virsh >/dev/null; then
+    doms=$(virsh -c qemu:///system list --all --name 2>/dev/null | sed '/^$/d' | tr '\n' ' ' || true)
+    if [[ -n $doms ]]; then
+      say "libvirt VMs: $doms"
+      ask domain "libvirt VM to use (empty if it is not a libvirt VM)" ""
+    fi
+  fi
+  if [[ -n $domain ]]; then
+    ask host "Host or IP (empty: detect automatically)" ""
+  else
+    while [[ -z $host ]]; do ask host "Host or IP of the VM" ""; done
+  fi
+  ask user "User on the VM" "$(id -un)"
+  ask port "SSH port" 22
+  local -a args=("$name" --user "$user" --port "$port")
+  [[ -n $host ]] && args+=(--host "$host")
+  [[ -n $domain ]] && args+=(--domain "$domain")
+  cmd_add "${args[@]}"
+  ask yn "Set up the VM now (SSH key, tmux, Claude Code)? [Y/n]" ""
+  [[ $yn == [nN]* ]] || cmd_setup "$name"
+  cmd_connect "$name"
+}
+
+main() {
+  ((BASH_VERSINFO[0] >= 4)) || { echo "$PROG: bash 4 or newer is required" >&2; exit 1; }
+  local cmd=${1-}
+  case $cmd in
+    "")
+      if [[ -z $(profile_names) ]]; then first_run; else cmd_connect; fi ;;
+    help | -h | --help) usage ;;
+    version | -V | --version) say "vmclaude $VERSION" ;;
+    add | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+      shift; "cmd_$cmd" "$@" ;;
+    ls) shift; cmd_list "$@" ;;
+    remove) shift; cmd_rm "$@" ;;
+    --hold | --no-tmux) cmd_connect "$@" ;;
+    -*) usage_error "unknown option $cmd" ;;
+    *)
+      profile_exists "$cmd" || usage_error "unknown command or VM: $cmd"
+      cmd_connect "$@" ;;
+  esac
+}
+
+main "$@"
