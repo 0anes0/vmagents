@@ -42,7 +42,22 @@ cmd = args[0]
 if args[1:2] and args[1] != os.environ.get("STUB_VIRSH_DOMAIN", "testvm") and cmd != "list":
     print(f"error: failed to get domain '{args[1]}'", file=sys.stderr); sys.exit(1)
 if cmd == "domstate":
+    # "in shutdown" lasts <polls> more reads, then the VM is off.
+    if state == "in shutdown":
+        if polls > 0:
+            open(path, "w").write(f"{state}|{ip}|{polls - 1}")
+        else:
+            state = "shut off"
+            open(path, "w").write(f"{state}|{ip}|0")
     print(state); print(); sys.exit(0)
+if cmd == "shutdown":
+    if state != "running":
+        print("error: domain is not running", file=sys.stderr); sys.exit(1)
+    if not os.environ.get("STUB_VIRSH_SHUTDOWN_IGNORED"):
+        open(path, "w").write(f"shut off|{ip}|{polls}")
+    print("Domain is being shutdown"); sys.exit(0)
+if cmd == "destroy":
+    open(path, "w").write(f"shut off|{ip}|{polls}"); print("Domain destroyed"); sys.exit(0)
 if cmd == "start":
     if state == "running":
         print("error: Domain is already active", file=sys.stderr); sys.exit(1)

@@ -37,6 +37,11 @@ also an app-menu launcher.
   vmclaude then waits until sshd answers, not just until the port is open.
 - **Sessions survive disconnects:** Claude runs in tmux on the VM. Close the
   window, lose Wi-Fi, connect again: you get the same session back.
+- **…and the VM shuts down when you are done:** quit Claude and a libvirt VM
+  powers off (autostop), unless something still uses it: Claude left running
+  with `Ctrl-b d`, another `vmclaude shell` or `mount`, an SSH login. Then it
+  stays on and tells you why. `vmclaude stop NAME` / `start NAME` by hand,
+  `--keep` once, `vmclaude autostop NAME off` for good.
 - **One-step setup:** `vmclaude setup NAME` creates an SSH key and installs it
   on the VM (you type the VM password once). It installs tmux with the VM's
   package manager and Claude Code with the official installer.
@@ -134,6 +139,25 @@ Claude. `vmclaude login dev --remove` deletes the token again.
 | Any SSH client | `ssh dev@VM` opens Claude (autostart) |
 | A shell, not Claude | `vmclaude shell dev`, or quit Claude / `Ctrl-b d` |
 
+### When you leave
+
+With a libvirt VM, quitting Claude (`/exit`, or `Ctrl-C` twice) shuts the VM
+down, the clean way (ACPI, like its power button), and waits until it is off.
+It stays on, and says why, when something still uses it:
+
+- Claude still runs in tmux because you detached with `Ctrl-b d`
+  (`vmclaude dev` takes you back);
+- another vmclaude connection to it is open on this computer
+  (`vmclaude shell`, `vmclaude mount`, a second `vmclaude dev`);
+- someone is logged in on the VM (an SSH login; on Windows, the screen),
+  or a Claude process still runs there;
+- the connection broke instead of ending.
+
+`vmclaude dev --keep` leaves it on this time, `vmclaude autostop dev off`
+always. `vmclaude stop dev` shuts it down by hand (`--force` pulls the plug),
+`vmclaude start dev` boots it ahead of time, and `vmclaude list` shows which
+VMs are running. Machines added with `--host` only are never shut down.
+
 Skip autostart for one login with `ssh -o SetEnv=LC_VMCLAUDE=off dev@VM`. This
 works with the default `AcceptEnv LANG LC_*` of Debian and Ubuntu. Turn
 autostart off with `vmclaude autostart dev off`.
@@ -158,8 +182,11 @@ vmclaude add NAME [options]      add an existing VM, or change fields of a profi
     --domain LIBVIRT_DOMAIN  --uri LIBVIRT_URI  --dir DIR_ON_VM
     --session TMUX_SESSION  --no-tmux
 vmclaude setup NAME [--no-install] [--no-autostart]
-vmclaude connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
-vmclaude shell NAME [CMD...]     plain shell or command on the VM
+vmclaude connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmclaude shell [--keep] NAME [CMD...]   plain shell or command on the VM
+vmclaude start NAME              boot a libvirt VM and wait for SSH
+vmclaude stop NAME [--force]     shut a libvirt VM down
+vmclaude autostop NAME on|off    shut the VM down when you leave Claude (default on)
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
 vmclaude login NAME [--remove]   log Claude in on the VM with this computer's browser
@@ -189,10 +216,12 @@ LIBVIRT_URI=qemu:///system
 DIR=~/work              # where Claude starts on the VM (created if missing)
 SESSION=claude          # tmux session; empty = no tmux
 OS=linux                # or windows; detected from the SSH banner on first use
+AUTOSTOP=on             # off: the VM keeps running after you leave Claude
 ```
 
 Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
-`VMCLAUDE_BOOT_TIMEOUT` (seconds to wait for the VM, default 180).
+`VMCLAUDE_BOOT_TIMEOUT` (seconds to wait for the VM, default 180),
+`VMCLAUDE_STOP_TIMEOUT` (seconds to wait for a shutdown, default 120).
 
 ## How it works
 
@@ -379,6 +408,12 @@ python3 -m unittest discover -s tests -t .
   create.
 - `tests/test_windows.py` checks OS detection and decodes the PowerShell
   commands sent to Windows VMs.
+- `tests/test_stop.py` covers autostop, `start` and `stop`: every reason to
+  keep a VM on, with the Linux check really running against fake
+  `tmux`/`who`/`pgrep`.
+- By hand, autostop on the Arch VM (quit Claude, exit `vmclaude shell`: off;
+  `Ctrl-b d`, a second connection, an SSH login: stays on) and on the
+  Windows 10 VM (quit Claude: off within seconds).
 - By hand, on a Debian 13 cloud image in qemu: setup (key, `apt-get install
   tmux`, the Claude Code installer), connect, detach and reattach, autostart on
   a plain `ssh` login, and skipping it with `LC_VMCLAUDE=off`.
@@ -408,7 +443,8 @@ python3 -m unittest discover -s tests -t .
   only. Windows OpenSSH does not accept the variable; use `vmclaude shell`.
 - Tested on Linux hosts. macOS needs bash 4+ (Homebrew) and `timeout`
   (coreutils).
-- Only libvirt VMs are started automatically.
+- Only libvirt VMs are started and shut down automatically. A plain `ssh`
+  login (autostart) never shuts the VM down: vmclaude is not running then.
 
 ## License
 
@@ -465,6 +501,14 @@ Böylece VM'de giriş ekranı ve kopyalanması zor bağlantı hiç çıkmaz.
   `vmclaude autostart dev off`.
 - Bağlantı koparsa Claude tmux içinde çalışmaya devam eder. Tekrar
   bağlandığında aynı oturuma dönersin.
+
+**Çıkınca VM kapanır:** libvirt VM'lerinde Claude'dan çıkınca (`/exit` ya da
+iki kez `Ctrl-C`) VM düzgünce kapatılır. Hâlâ kullanılıyorsa açık kalır ve
+nedenini söyler: `Ctrl-b d` ile Claude'u arkada bıraktıysan, açık bir
+`vmclaude shell` / `mount` ya da başka bir SSH girişi varsa. Bir seferlik açık
+bırakmak: `vmclaude dev --keep`; hiç kapatmamak: `vmclaude autostop dev off`.
+Elle: `vmclaude stop dev` (`--force` fişi çeker), `vmclaude start dev`.
+`vmclaude list` hangi VM'in açık olduğunu gösterir.
 
 **Bilgisayarındaki Claude Code'dan VM'e müdahale:** `vmclaude mcp arch --add`
 bir kez çalıştırınca, kendi bilgisayarındaki Claude Code'a VM'in içinde komut

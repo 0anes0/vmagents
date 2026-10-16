@@ -3,15 +3,16 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.6.0
+VERSION=0.7.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
 KNOWN_HOSTS=$CONF_DIR/known_hosts
 DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
+STOP_TIMEOUT=${VMCLAUDE_STOP_TIMEOUT:-120}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AUTOSTOP CREATED "
 HOLD=0
 
 say()  { printf '%s\n' "$*"; }
@@ -37,6 +38,7 @@ vmclaude $VERSION — run Claude Code inside a virtual machine, over SSH.
 Claude Code then works on the VM's files and programs, not on your computer's.
 vmclaude starts the VM, logs in with its own SSH key and opens Claude there:
 in tmux on Linux VMs, so Claude keeps running if the connection drops.
+When you leave Claude, a libvirt VM that nothing else uses shuts down again.
 
 GET STARTED
   No VM yet? Make one (Linux computer with libvirt):
@@ -66,6 +68,8 @@ COMMANDS
   Use a VM:
     connect NAME         open Claude Code ("vmclaude NAME" does the same)
     shell NAME [CMD]     a normal shell on the VM, or run one command there
+    start NAME           start a libvirt VM and wait until SSH answers
+    stop NAME            shut a libvirt VM down (--force: pull the plug)
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
     login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
@@ -77,6 +81,7 @@ COMMANDS
     list                 show all profiles; * marks the default
     default NAME         choose the VM that plain "vmclaude" opens
     autostart NAME on|off   open Claude on every SSH login, or stop doing so
+    autostop NAME on|off    shut the VM down when you leave Claude (default: on)
     desktop NAME         add "Claude Code (NAME)" to your app menu
     edit NAME            open the profile file in your editor
     forget NAME          forget the VM's SSH host key (after reinstalling the VM)
@@ -180,7 +185,7 @@ Example:
 EOF
       ;;
     connect) cat <<EOF
-vmclaude connect [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmclaude connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmclaude NAME [CLAUDE_ARGS...]
 vmclaude
 
@@ -192,7 +197,13 @@ Claude keeps running and the next connect returns to it. Leave it running on
 purpose with Ctrl-b d. Arguments for Claude only apply when a new session
 starts. Windows VMs have no tmux; there Claude ends with the connection.
 
+When you quit Claude, a libvirt VM shuts down (autostop), unless something
+still uses it: Claude left running in tmux (Ctrl-b d), another vmclaude shell,
+mount or connection, someone logged in on the VM. It then stays on and says
+why. Keep it on every time: "vmclaude autostop NAME off".
+
 Options:
+  --keep        leave the VM running this time
   --no-tmux     run Claude directly, without tmux
   --hold        keep the terminal open after an error (used by app-menu launchers)
   -- ARGS       everything after -- goes to Claude
@@ -205,10 +216,12 @@ Examples:
 EOF
       ;;
     shell) cat <<EOF
-vmclaude shell NAME [COMMAND...]
+vmclaude shell [--keep] NAME [COMMAND...]
 
 Opens a normal shell on the VM (without starting Claude), or runs one command
-there and prints its output.
+there and prints its output. A libvirt VM is started if it is off. When you
+leave the shell, the VM shuts down like after connect (see "vmclaude help
+autostop"); --keep leaves it on. A single COMMAND never shuts it down.
 
 Examples:
   vmclaude shell dev
@@ -274,6 +287,53 @@ Example:
   vmclaude add srv --host 192.168.1.50 --user dev && vmclaude setup srv
 EOF
       ;;
+    start) cat <<EOF
+vmclaude start NAME
+
+Starts a libvirt VM (or resumes a paused one) and waits until it has an IP
+address and its SSH server answers. connect, shell, mount and mcp do this by
+themselves; use start to boot a VM ahead of time.
+
+Example:
+  vmclaude start dev
+EOF
+      ;;
+    stop) cat <<EOF
+vmclaude stop NAME [--force]
+
+Shuts a libvirt VM down the clean way, like pressing its power button, and
+waits until it is off (at most ${STOP_TIMEOUT}s; VMCLAUDE_STOP_TIMEOUT changes this).
+Claude sessions still running in tmux on the VM end with it.
+
+Options:
+  --force       pull the plug at once (virsh destroy): unsaved data in the VM is lost
+
+Examples:
+  vmclaude stop dev
+  vmclaude stop win10 --force         when Windows does not react
+EOF
+      ;;
+    autostop) cat <<EOF
+vmclaude autostop NAME on|off
+
+With "on" (the default for libvirt VMs), the VM shuts down when you leave
+Claude ("vmclaude NAME") or "vmclaude shell NAME", so it does not use RAM and
+CPU in the background. It stays on, and says why, while something still uses
+it:
+  - Claude left running in tmux (you pressed Ctrl-b d)
+  - another vmclaude connect, shell or mount to this VM from this computer
+  - someone logged in on the VM (another SSH login; on Windows, the screen)
+  - a Claude process still running on the VM
+It also stays on when the connection broke rather than ended.
+"vmclaude NAME --keep" leaves it on once. Plain ssh logins (autostart) do not
+shut it down: vmclaude is not running then.
+
+Examples:
+  vmclaude autostop dev off          the VM keeps running after you leave
+  vmclaude autostop dev on
+  vmclaude stop dev                  shut it down by hand
+EOF
+      ;;
     autostart) cat <<EOF
 vmclaude autostart NAME on|off
 
@@ -292,7 +352,8 @@ EOF
     list | ls) cat <<EOF
 vmclaude list
 
-Shows all profiles: name, user@host[:port], libvirt VM and system. A * marks
+Shows all profiles: name, user@host[:port], libvirt VM with its state
+(running, shut off, ...) and system. A * marks
 the default VM, the one plain "vmclaude" opens.
 EOF
       ;;
@@ -319,7 +380,8 @@ vmclaude edit NAME
 
 Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
 The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
-SESSION OS (see "vmclaude help add" for what they mean).
+SESSION OS (see "vmclaude help add" for what they mean) and AUTOSTOP=on|off
+(see "vmclaude help autostop").
 EOF
       ;;
     forget) cat <<EOF
@@ -412,7 +474,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop autostop doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -474,6 +536,7 @@ check_value() { # KEY VALUE
     DOMAIN) [[ -n $v && $v != -* ]] || die "invalid libvirt domain: $v" ;;
     SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
     OS) [[ $v == linux || $v == windows ]] || die "invalid OS: $v (linux or windows)" ;;
+    AUTOSTOP) [[ $v == on || $v == off ]] || die "invalid AUTOSTOP: $v (on or off)" ;;
   esac
 }
 
@@ -485,7 +548,7 @@ load() {
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS; do
+  for k in HOST USER PORT DOMAIN SESSION OS AUTOSTOP; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -532,11 +595,55 @@ ensure_running() {
       info "Waking VM $C_DOMAIN..."
       out=$(vsh dompmwakeup "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
     "in shutdown")
-      die "VM $C_DOMAIN is shutting down; try again in a moment" ;;
+      info "VM $C_DOMAIN is shutting down; waiting to start it again..."
+      wait_off "$STOP_TIMEOUT" || die "VM $C_DOMAIN is still shutting down after ${STOP_TIMEOUT}s"
+      info "Starting VM $C_DOMAIN..."
+      out=$(vsh start "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
     *)
       info "Starting VM $C_DOMAIN..."
       out=$(vsh start "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
   esac
+}
+
+domstate() { local s; s=$(vsh domstate "$C_DOMAIN" 2>/dev/null) || return 1; printf '%s' "${s%%$'\n'*}"; }
+
+# True once the VM is off (or gone); false after $1 seconds.
+wait_off() {
+  local deadline=$((SECONDS + $1)) s
+  while s=$(domstate) && [[ $s != "shut off" && $s != crashed ]]; do
+    ((SECONDS < deadline)) || return 1
+    sleep 1
+  done
+  return 0
+}
+
+# Shuts the VM down like its power button would (ACPI), and waits for it.
+stop_vm() { # 0|1 (1: pull the plug)
+  command -v virsh >/dev/null || die "virsh not found"
+  local state out
+  state=$(domstate) || die "libvirt: cannot read the state of $C_DOMAIN"
+  case $state in
+    "shut off" | crashed) info "VM $C_DOMAIN is already off."; return 0 ;;
+  esac
+  if (($1)); then
+    out=$(vsh destroy "$C_DOMAIN" 2>&1) || die "libvirt: $out"
+    info "VM $C_DOMAIN is off (forced)."
+    return 0
+  fi
+  case $state in
+    paused) out=$(vsh resume "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
+    pmsuspended) out=$(vsh dompmwakeup "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
+  esac
+  if [[ $state != "in shutdown" ]]; then
+    out=$(vsh shutdown "$C_DOMAIN" 2>&1) || die "libvirt: $out"
+  fi
+  info "Shutting down VM $C_DOMAIN... (Ctrl-C stops the waiting, not the shutdown)"
+  if wait_off "$STOP_TIMEOUT"; then
+    info "VM $C_DOMAIN is off."
+  else
+    warn "VM $C_DOMAIN is still running after ${STOP_TIMEOUT}s. Pull the plug: $PROG stop $NAME --force"
+    return 1
+  fi
 }
 
 # Sets FOUND_IP to the first IPv4 address of the domain (not on lo).
@@ -1113,6 +1220,21 @@ $g = Get-Command git -ErrorAction SilentlyContinue
 "login=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\claude-env") { "token" } elseif (Test-Path "$env:USERPROFILE\.claude\.credentials.json") { "login" })
 '
 
+# What still uses the VM, one reason per line; nothing when it is free.
+# shellcheck disable=SC2016
+BUSY_SH='s=$(tmux list-sessions -F "#S" 2>/dev/null | tr "\n" " ")
+[ -n "$s" ] && echo "tmux on the VM still has session(s): ${s% }"
+u=$(who 2>/dev/null | while read -r a b c; do case $c in *"(tmux("*) ;; *) printf "%s@%s " "$a" "$b" ;; esac; done)
+[ -n "$u" ] && echo "logged in on the VM: ${u% }"
+[ -z "$s" ] && pgrep -x claude >/dev/null 2>&1 && echo "Claude Code still runs on the VM"
+exit 0
+'
+# shellcheck disable=SC2016
+BUSY_PS='$u = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+if ($u) { "logged in on the VM screen: $u" }
+if (Get-Process claude -ErrorAction SilentlyContinue) { "Claude Code still runs on the VM" }
+'
+
 # shellcheck disable=SC2029 # remote commands are built with remote_cmd/sq
 run_ssh() { ssh "${SSH_OPTS[@]}" "$@"; }
 
@@ -1166,7 +1288,7 @@ cmd_add() {
 }
 
 cmd_list() {
-  local names name def target
+  local names name def target state
   names=$(profile_names)
   if [[ -z $names ]]; then say "No VMs yet. Add one: $PROG add NAME --host IP  (or --domain LIBVIRT_DOMAIN)"; return 0; fi
   def=$(default_name || true)
@@ -1174,7 +1296,14 @@ cmd_list() {
     read_profile "$name"
     target=${P[USER]:-$(id -un)}@${P[HOST]:-"(auto)"}
     [[ ${P[PORT]:-22} != 22 ]] && target+=":${P[PORT]}"
-    [[ -n ${P[DOMAIN]:-} ]] && target+="  libvirt:${P[DOMAIN]}"
+    if [[ -n ${P[DOMAIN]:-} ]]; then
+      target+="  libvirt:${P[DOMAIN]}"
+      if command -v virsh >/dev/null; then
+        state=$(timeout 5 virsh -c "${P[LIBVIRT_URI]:-qemu:///system}" domstate "${P[DOMAIN]}" 2>/dev/null) || state=
+        state=${state%%$'\n'*}
+        [[ -n $state ]] && target+=" ($state)"
+      fi
+    fi
     [[ ${P[OS]:-} == windows ]] && target+="  (Windows)"
     printf '%s %-16s %s\n' "$([[ $name == "$def" ]] && echo '*' || echo ' ')" "$name" "$target"
   done <<<"$names"
@@ -1213,12 +1342,13 @@ cmd_forget() {
 }
 
 cmd_connect() {
-  local name='' notmux=0
+  local name='' notmux=0 keep=0
   local -a cargs=()
   while (($#)); do
     case $1 in
       --hold) HOLD=1; shift ;;
       --no-tmux) notmux=1; shift ;;
+      --keep) keep=1; shift ;;
       --) shift; cargs+=("$@"); break ;;
       *)
         if [[ -z $name ]] && [[ $1 != -* ]]; then name=$1; shift
@@ -1243,26 +1373,33 @@ cmd_connect() {
   run_ssh "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
   if ((rc == 255)); then
     info "$PROG: SSH connection to $C_USER@$TARGET:$C_PORT failed. Try: $PROG doctor $NAME"
+  elif ((!keep)); then
+    autostop
   fi
   ((rc == 0)) || hold_prompt
   return "$rc"
 }
 
 cmd_shell() {
+  local keep=0 rc=0
+  [[ ${1-} == --keep ]] && { keep=1; shift; }
   (($#)) || usage_error "shell: missing NAME"
   load "$1"; shift
   resolve_target
   build_ssh_opts
   if (($#)); then
     run_ssh -- "$TARGET" "$@"
+    return
   elif [[ $C_OS == windows ]]; then
     # shellcheck disable=SC2016
     run_ssh "$TTY_FLAG" -- "$TARGET" "$(win_cmd -noexit '$env:VMCLAUDE_NO_AUTOSTART = "1"
-if (Test-Path -LiteralPath $PROFILE) { . $PROFILE }')"
+if (Test-Path -LiteralPath $PROFILE) { . $PROFILE }')" || rc=$?
   else
     # shellcheck disable=SC2016
-    run_ssh "$TTY_FLAG" -- "$TARGET" 'VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l'
+    run_ssh "$TTY_FLAG" -- "$TARGET" 'VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l' || rc=$?
   fi
+  ((rc == 255 || keep)) || autostop
+  return "$rc"
 }
 
 cmd_autostart() {
@@ -1283,6 +1420,82 @@ install_autostart() { # on|off
     autostart_hook "$C_DIR" "$C_SESSION" | run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" on)"
   else
     run_ssh -T -- "$TARGET" "$(remote_cmd "$AUTOSTART_SH" off)" </dev/null
+  fi
+}
+
+# Why the VM should stay on ("" when nothing uses it): other connections from
+# here (vmclaude shell, mount, another connect), tmux sessions, logins.
+vm_busy() {
+  local pid args n=0 out
+  while read -r pid args; do
+    [[ $pid == "$$" ]] && continue
+    [[ " $args " == *"HostKeyAlias=vmclaude-$NAME "* ]] && n=$((n + 1))
+  done < <(ps -eo pid=,args= 2>/dev/null || true)
+  if ((n)); then
+    printf 'another connection from this computer is open (vmclaude shell, mount, ...)'
+    return 0
+  fi
+  if [[ $C_OS == windows ]]; then
+    out=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "$(win_cmd "$BUSY_PS")" </dev/null 2>/dev/null) ||
+      { printf 'could not check the VM over SSH'; return 0; }
+  else
+    out=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$BUSY_SH")" </dev/null 2>/dev/null) ||
+      { printf 'could not check the VM over SSH'; return 0; }
+  fi
+  out=${out//$'\r'/}
+  out=$(sed '/^$/d' <<<"$out")
+  printf '%s' "${out//$'\n'/; }"
+}
+
+# After a session: shut the libvirt VM down unless something else uses it.
+autostop() {
+  [[ -n $C_DOMAIN && ${P[AUTOSTOP]:-on} == on ]] || return 0
+  local why
+  why=$(vm_busy)
+  if [[ -n $why ]]; then
+    info "VM $C_DOMAIN stays on: $why."
+    [[ $why == *tmux* ]] && info "Back to Claude: $PROG $NAME"
+    info "Shut it down: $PROG stop $NAME"
+    return 0
+  fi
+  stop_vm 0 || true
+}
+
+cmd_start() {
+  [[ $# = 1 ]] || usage_error "start: give one NAME"
+  load "$1"
+  [[ -n $C_DOMAIN ]] || die "'$NAME' is not a libvirt VM (no --domain); start it yourself"
+  resolve_target
+  say "VM $NAME is running: $C_USER@$TARGET"
+}
+
+cmd_stop() {
+  local name='' force=0
+  while (($#)); do
+    case $1 in
+      -f | --force) force=1; shift ;;
+      -*) usage_error "stop: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "stop: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || name=$(default_name) || usage_error "stop: missing NAME"
+  load "$name"
+  [[ -n $C_DOMAIN ]] || die "'$NAME' is not a libvirt VM (no --domain); shut it down yourself, e.g.: $PROG shell $NAME 'sudo poweroff'"
+  stop_vm "$force"
+}
+
+cmd_autostop() {
+  [[ $# = 2 ]] || usage_error "autostop: give NAME and on|off"
+  local mode=$2
+  [[ $mode == on || $mode == off ]] || usage_error "autostop: say on or off"
+  load "$1"
+  [[ -n $C_DOMAIN ]] || die "autostop needs a libvirt VM; '$NAME' has no --domain"
+  P[AUTOSTOP]=$mode
+  write_profile "$NAME"
+  if [[ $mode == on ]]; then
+    say "Autostop is on: the VM shuts down when you leave Claude (unless something else still uses it)."
+  else
+    say "Autostop is off: the VM keeps running after you leave Claude ($PROG stop $NAME shuts it down)."
   fi
 }
 
@@ -2345,7 +2558,8 @@ wants_help() { # COMMAND ARGS...
   local cmd=$1 a
   shift
   case $cmd in
-    connect | shell) [[ ${1-} == -h || ${1-} == --help ]]; return ;;
+    connect) [[ ${1-} == -h || ${1-} == --help ]]; return ;;
+    shell) [[ ${1-} == --keep ]] && shift; [[ ${1-} == -h || ${1-} == --help ]]; return ;;
   esac
   for a in "$@"; do
     [[ $a == -- ]] && return 1
@@ -2364,13 +2578,13 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
-    --hold | --no-tmux) cmd_connect "$@" ;;
+    --hold | --no-tmux | --keep) cmd_connect "$@" ;;
     -*) usage_error "unknown option $cmd" ;;
     *)
       profile_exists "$cmd" || usage_error "unknown command or VM: $cmd"
