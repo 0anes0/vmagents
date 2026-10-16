@@ -12,7 +12,13 @@ from tests.helpers import SandboxTest, free_port, listening_port, write_exe
 from tests.ptyrun import run_in_pty
 
 # How vmclaude starts claude: through a wrapper that adds the "vmclaude login" token.
-WRAP = '[sh] [-c] [[ -r "$1" ] && { set -a; . "$1"; set +a; }; shift; exec "$@"] [vmclaude] '
+WRAP = ('[sh] [-c] [[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; '
+        '[ -r "$s" ] && exec "$c" --settings "$s" "$@"; exec "$c" "$@"] [vmclaude] ')
+
+
+def settings(home):
+    """The arguments with which vmclaude's launcher passes its hooks to Claude."""
+    return f" [--settings] [{home}/.config/vmclaude/claude-settings.json]"
 
 
 class ProfileTests(SandboxTest):
@@ -103,7 +109,7 @@ class ProfileTests(SandboxTest):
         self.assertRegex(self.sb.run("list", check=0).stdout, r"\* a\s")
 
     def test_help_for_every_command(self):
-        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "doctor", "mcp", "add", "setup",
+        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "undo", "snapshot", "snapshots", "autosnap", "idle", "notify", "doctor", "mcp", "add", "setup",
                     "autostart", "list", "default", "desktop", "edit", "forget", "rm"):
             with self.subTest(cmd=cmd):
                 r = self.sb.run("help", cmd, check=0)
@@ -194,7 +200,7 @@ class ConnectTests(SandboxTest):
         tricky = ["it's", "$HOME", "`id`", "a b", '"q"', "back\\slash", "*", ";touch /tmp/x", "", "-p"]
         self.sb.run("add", "vm", "--dir", "~/my 'proj' $x", check=0)
         self.run_remote("vm", "--no-tmux", "--", *tricky)
-        expected = "claude" + "".join(f" [{a}]" for a in tricky)
+        expected = "claude" + settings(self.sb.remote_home) + "".join(f" [{a}]" for a in tricky)
         proj = self.sb.remote_home / "my 'proj' $x"
         self.assertTrue(proj.is_dir())
         self.assertEqual(self.sb.remote_log.read_text(), f"{expected} cwd=[{proj}]\n")
@@ -204,7 +210,8 @@ class ConnectTests(SandboxTest):
         self.run_remote("vm", "--no-tmux", "--continue")
         self.run_remote("connect", "--no-tmux", "vm", "--", "--hold")
         self.assertEqual([l.split(" cwd=")[0] for l in self.sb.remote_calls()],
-                         ["claude [--continue]", "claude [--hold]"])
+                         [f"claude{settings(self.sb.remote_home)} [--continue]",
+                          f"claude{settings(self.sb.remote_home)} [--hold]"])
 
     def test_tmux_session(self):
         self.sb.remote_tool("claude")
@@ -223,7 +230,7 @@ class ConnectTests(SandboxTest):
     def test_claude_on_local_bin_is_found(self):
         write_exe(self.sb.remote_home / ".local" / "bin" / "claude", self.sb.recorder.read_text())
         self.run_remote("vm", "--no-tmux")
-        self.assertTrue(self.sb.remote_calls()[0].startswith("claude cwd="))
+        self.assertTrue(self.sb.remote_calls()[0].startswith(f"claude{settings(self.sb.remote_home)} cwd="))
 
     def test_missing_claude(self):
         r = self.run_remote("vm", check=127)
@@ -272,7 +279,7 @@ class LibvirtTests(SandboxTest):
         self.assertIn("Starting VM testvm", r.stderr)
         self.assertIn("Waiting for testvm to get an IP address", r.stderr)
         cmds = self.virsh_cmds()
-        self.assertEqual(cmds[:2], ["domstate", "start"])
+        self.assertEqual(cmds[:4], ["domstate", "snapshot-create-as", "snapshot-list", "start"])
         self.assertIn("domifaddr", cmds)
         self.assertTrue(all(c["argv"][:2] == ["-c", "qemu:///session"] for c in self.sb.calls("virsh")))
         argv = self.sb.calls("ssh")[0]["argv"]

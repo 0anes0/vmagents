@@ -76,13 +76,15 @@ class LoginTests(SandboxTest):
         calls = self.sb.remote_calls()
         self.assertTrue(calls[0].startswith("tmux new-session -A -s claude -c"), calls[0])
         self.assertNotIn(TOKEN, calls[0])  # not in tmux's command line either
-        self.assertEqual(calls[1], f"token={TOKEN} key= args=--continue")
-        self.assertEqual(calls[2], f"token={TOKEN} key= args=")
+        hooks = f"--settings {self.sb.remote_home}/.config/vmclaude/claude-settings.json"
+        self.assertEqual(calls[1], f"token={TOKEN} key= args={hooks} --continue")
+        self.assertEqual(calls[2], f"token={TOKEN} key= args={hooks}")
 
     def test_no_token_no_change(self):
         self.sb.remote_tool("claude", CLAUDE_ENV)
         self.sb.run("vm", "--no-tmux", env=self.env, check=0)
-        self.assertEqual(self.sb.remote_calls(), ["token= key= args="])
+        hooks = f"--settings {self.sb.remote_home}/.config/vmclaude/claude-settings.json"
+        self.assertEqual(self.sb.remote_calls(), [f"token= key= args={hooks}"])
 
     def test_shells_and_autostart_get_it(self):
         self.login(TOKEN)

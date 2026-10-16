@@ -148,6 +148,8 @@ class EndToEnd(unittest.TestCase):
         self.addCleanup(self.vm.close)
         self.sb.run("add", "vm", "--host", "127.0.0.1", "--port", str(self.vm.port), "--user", "tester",
                     "--dir", "~/project dir", check=0)
+        # DISPLAY is set for SSH_ASKPASS: no desktop notifications here.
+        self.sb.run("notify", "vm", "off", check=0)
 
     def test_setup_connect_doctor(self):
         r = self.sb.run("setup", "vm", timeout=60)

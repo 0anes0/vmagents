@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.7.0
+VERSION=0.8.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -12,7 +12,7 @@ DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
 STOP_TIMEOUT=${VMCLAUDE_STOP_TIMEOUT:-120}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AUTOSTOP CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AUTOSTOP AUTOSNAP IDLE NOTIFY CREATED "
 HOLD=0
 
 say()  { printf '%s\n' "$*"; }
@@ -38,7 +38,10 @@ vmclaude $VERSION — run Claude Code inside a virtual machine, over SSH.
 Claude Code then works on the VM's files and programs, not on your computer's.
 vmclaude starts the VM, logs in with its own SSH key and opens Claude there:
 in tmux on Linux VMs, so Claude keeps running if the connection drops.
-When you leave Claude, a libvirt VM that nothing else uses shuts down again.
+When you leave Claude, a libvirt VM that nothing else uses shuts down again;
+one left running shuts itself down after 30 idle minutes ("vmclaude idle").
+Each start takes a snapshot first: "vmclaude undo" takes back what Claude did.
+When Claude needs you, a desktop notification appears on this computer.
 
 GET STARTED
   No VM yet? Make one (Linux computer with libvirt):
@@ -70,6 +73,11 @@ COMMANDS
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     start NAME           start a libvirt VM and wait until SSH answers
     stop NAME            shut a libvirt VM down (--force: pull the plug)
+
+  Undo (libvirt):
+    undo NAME [SNAPSHOT] put the VM back to how it was before this session
+    snapshot NAME [NOTE] take a snapshot now; snapshots NAME lists them
+    autosnap NAME N|off  how many automatic snapshots to keep (default: 3)
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
     login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
@@ -82,6 +90,8 @@ COMMANDS
     default NAME         choose the VM that plain "vmclaude" opens
     autostart NAME on|off   open Claude on every SSH login, or stop doing so
     autostop NAME on|off    shut the VM down when you leave Claude (default: on)
+    idle NAME MINUTES|off   the VM shuts itself down after MINUTES unused (create: 30)
+    notify NAME on|off      desktop notifications when Claude needs you (default: on)
     desktop NAME         add "Claude Code (NAME)" to your app menu
     edit NAME            open the profile file in your editor
     forget NAME          forget the VM's SSH host key (after reinstalling the VM)
@@ -123,6 +133,7 @@ Options:
   --disk GB        disk size in gigabytes    (default 20)
   --user USER      user created in the VM    (default: $u)
   --uri URI        libvirt connection        (default: qemu:///system)
+  --idle MINUTES   the VM shuts itself down after MINUTES unused (default 30; off)
   --no-setup       only make the VM; run "vmclaude setup NAME" later
 
 Examples:
@@ -201,6 +212,11 @@ When you quit Claude, a libvirt VM shuts down (autostop), unless something
 still uses it: Claude left running in tmux (Ctrl-b d), another vmclaude shell,
 mount or connection, someone logged in on the VM. It then stays on and says
 why. Keep it on every time: "vmclaude autostop NAME off".
+
+Before a libvirt VM is started from "shut off", a snapshot is taken:
+"vmclaude undo NAME" returns to it. While Claude runs (also after Ctrl-b d),
+this computer shows a desktop notification when Claude needs you, on Linux
+VMs (see "vmclaude help notify").
 
 Options:
   --keep        leave the VM running this time
@@ -334,6 +350,98 @@ Examples:
   vmclaude stop dev                  shut it down by hand
 EOF
       ;;
+    snapshot | snapshots) cat <<EOF
+vmclaude snapshots NAME
+vmclaude snapshot NAME [NOTE]
+vmclaude snapshot NAME --delete SNAPSHOT
+
+A snapshot saves the whole VM (its disk; for a running VM its memory too),
+so "vmclaude undo" can return to it. vmclaude takes one by itself each time
+it starts the VM ("auto-..."; see "vmclaude help autosnap"). snapshot takes
+one now ("snap-..."), with an optional note; these are never deleted
+automatically. snapshots lists them all, oldest first.
+
+They live inside the VM's disk file (libvirt internal snapshots) and need
+a qcow2 disk. They take space as the VM changes after them.
+
+Examples:
+  vmclaude snapshot dev "before the big refactor"
+  vmclaude snapshots dev
+  vmclaude snapshot dev --delete snap-20261016-224927
+EOF
+      ;;
+    undo) cat <<EOF
+vmclaude undo NAME [SNAPSHOT] [--yes]
+
+Puts the VM back to a snapshot: by default the newest one, which vmclaude
+took right before it last started the VM, so this takes back everything
+done since then: Claude's changes, installed programs, deleted files. A
+running VM is stopped first. Asks before it does anything, unless --yes.
+
+Examples:
+  vmclaude undo dev                         back to before this session
+  vmclaude snapshots dev                    which snapshots there are
+  vmclaude undo dev snap-20261016-224927    back to a particular one
+EOF
+      ;;
+    autosnap) cat <<EOF
+vmclaude autosnap NAME on|off|N
+
+Each time vmclaude starts a libvirt VM that is off (connect, shell, mount,
+mcp, start), it first takes a snapshot named auto-DATE-TIME. That takes a
+moment, since the VM is off. The newest N are kept (default 3), older
+automatic ones are deleted; snapshots you took with "vmclaude snapshot"
+are never deleted.
+
+Examples:
+  vmclaude autosnap dev 10      keep the newest 10
+  vmclaude autosnap dev off     take none
+  vmclaude autosnap dev on      back to 3
+EOF
+      ;;
+    idle) cat <<EOF
+vmclaude idle NAME MINUTES|off
+
+Installs a small service on the VM that shuts it down after MINUTES in which
+nothing used it. "vmclaude create" sets 30. This covers what autostop cannot:
+Claude left running in tmux after it finished, a plain ssh login that ended,
+a VM you forgot. Used means:
+  Linux:   an SSH session (a shell, a command, a mount), a console login,
+           Claude Code working (from its hooks, see "vmclaude help notify"),
+           or a busy CPU (load average 1 or more)
+  Windows: an SSH connection, someone signed in on the screen, Claude running
+Claude waiting for you counts as unused; its conversation is saved, so
+"vmclaude NAME --continue" resumes it.
+
+Linux VMs need systemd and sudo (asked for the password if needed); Windows
+VMs an administrator account (a scheduled task runs as SYSTEM).
+
+Examples:
+  vmclaude idle dev 30
+  vmclaude idle dev 120     for long jobs that do not keep the CPU busy
+  vmclaude idle dev off
+EOF
+      ;;
+    notify) cat <<EOF
+vmclaude notify NAME on|off
+
+While Claude runs on a Linux VM, also after you detached with Ctrl-b d,
+this computer shows a desktop notification when Claude needs you: it asks
+for permission, or it finished and waited a minute for your answer.
+
+How: "vmclaude NAME" keeps two files in ~/.config/vmclaude on the VM:
+hook.sh and claude-settings.json, which vmclaude passes to Claude with
+--settings (your own ~/.claude/settings.json is not changed). Claude's hooks
+note there what Claude does. A small background process here asks the VM
+every 15 seconds and stops when Claude has ended or the VM is off.
+Needs notify-send here (Debian/Ubuntu: sudo apt install libnotify-bin).
+Not yet for Windows VMs.
+
+Examples:
+  vmclaude notify dev off
+  vmclaude notify dev on
+EOF
+      ;;
     autostart) cat <<EOF
 vmclaude autostart NAME on|off
 
@@ -380,8 +488,8 @@ vmclaude edit NAME
 
 Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
 The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
-SESSION OS (see "vmclaude help add" for what they mean) and AUTOSTOP=on|off
-(see "vmclaude help autostop").
+SESSION OS (see "vmclaude help add" for what they mean), AUTOSTOP=on|off,
+AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle" set up) and NOTIFY=on|off.
 EOF
       ;;
     forget) cat <<EOF
@@ -474,7 +582,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop autostop doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop autostop undo snapshot snapshots autosnap idle notify doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -536,7 +644,8 @@ check_value() { # KEY VALUE
     DOMAIN) [[ -n $v && $v != -* ]] || die "invalid libvirt domain: $v" ;;
     SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
     OS) [[ $v == linux || $v == windows ]] || die "invalid OS: $v (linux or windows)" ;;
-    AUTOSTOP) [[ $v == on || $v == off ]] || die "invalid AUTOSTOP: $v (on or off)" ;;
+    AUTOSTOP | NOTIFY) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
+    AUTOSNAP | IDLE) [[ $v =~ ^[0-9]+$ ]] || die "invalid $k: $v (a number)" ;;
   esac
 }
 
@@ -548,7 +657,7 @@ load() {
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS AUTOSTOP; do
+  for k in HOST USER PORT DOMAIN SESSION OS AUTOSTOP AUTOSNAP IDLE NOTIFY; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -597,9 +706,11 @@ ensure_running() {
     "in shutdown")
       info "VM $C_DOMAIN is shutting down; waiting to start it again..."
       wait_off "$STOP_TIMEOUT" || die "VM $C_DOMAIN is still shutting down after ${STOP_TIMEOUT}s"
+      auto_snapshot
       info "Starting VM $C_DOMAIN..."
       out=$(vsh start "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
     *)
+      [[ $state == "shut off" ]] && auto_snapshot
       info "Starting VM $C_DOMAIN..."
       out=$(vsh start "$C_DOMAIN" 2>&1) || die "libvirt: $out" ;;
   esac
@@ -783,13 +894,197 @@ cd_dir() {
 '
 
 # Starts "$2 ..." with the token from file $1 ("vmclaude login") in its
-# environment. A wrapper, not tmux -e: the token stays out of command lines.
+# environment, and vmclaude's hooks (claude-settings.json in the same folder).
+# A wrapper, not tmux -e: the token stays out of command lines.
 # shellcheck disable=SC2016
-CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; shift; exec "$@"'
+CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; [ -r "$s" ] && exec "$c" --settings "$s" "$@"; exec "$c" "$@"'
+
+# ------------------------------------------------------------------ hooks, idle shutdown, notifications
+# Claude Code on the VM runs hook.sh from its hooks (loaded with --settings
+# by vmclaude's launcher). It records whether Claude is working, for the idle
+# shutdown, and queues "Claude needs you" messages, which the watcher on this
+# computer shows as desktop notifications. connect keeps both files current.
+IFS= read -r -d '' HOOK_SH <<'EOS' || true
+#!/bin/sh
+# Installed by vmclaude: Claude Code runs this from the hooks in
+# claude-settings.json next to it. It tells the VM's idle shutdown whether
+# Claude is working, and queues "Claude needs you" messages that vmclaude
+# shows on your computer as desktop notifications.
+d=$HOME/.config/vmclaude
+case ${1-} in
+  busy | idle) cat >/dev/null; echo "$1" >"$d/claude-state" ;;
+  notify)
+    echo idle >"$d/claude-state"
+    m=$(sed -n 's/.*"message" *: *"\([^"]*\)".*/\1/p' | head -n 1 | tr '\t' ' ')
+    t=$(date +%s%3N 2>/dev/null)
+    case $t in "" | *[!0-9]*) t=$(date +%s)000 ;; esac
+    printf '%s\t%s\t%s\n' "$t" "${PWD##*/}" "${m:-Claude is waiting for you}" >>"$d/events"
+    if [ "$(wc -l <"$d/events")" -gt 200 ]; then
+      tail -n 100 "$d/events" >"$d/events.tmp" && mv -f "$d/events.tmp" "$d/events"
+    fi ;;
+esac
+exit 0
+EOS
+HOOK_SH=${HOOK_SH%$'\n'}
+
+hook_entry() { # MATCHER|"" ARG
+  # shellcheck disable=SC2016 # $HOME is for the VM's shell
+  printf '[{%s"hooks": [{"type": "command", "command": "sh \\"$HOME/.config/vmclaude/hook.sh\\" %s"}]}]' \
+    "${1:+\"matcher\": \"$1\", }" "$2"
+}
+CLAUDE_SETTINGS="{
+  \"hooks\": {
+    \"UserPromptSubmit\": $(hook_entry '' busy),
+    \"PreToolUse\": $(hook_entry '*' busy),
+    \"PostToolUse\": $(hook_entry '*' busy),
+    \"Stop\": $(hook_entry '' idle),
+    \"Notification\": $(hook_entry '' notify)
+  }
+}"
+
+# Runs as root on the VM (systemd service vmclaude-idle): powers it off after
+# $1 minutes in which nothing used it.
+IFS= read -r -d '' IDLE_LOOP_SH <<'EOS' || true
+#!/bin/sh
+# Installed by vmclaude ("vmclaude idle NAME MINUTES"): powers this VM off
+# after MINUTES in which nothing used it. Used means: an SSH session (a shell,
+# a command, an sftp mount; not vmclaude's notification watcher), a console
+# login, Claude Code working (its vmclaude hooks say so), or load >= 1.
+limit=$((${1:-30} * 60)) step=${2:-60}
+
+in_use() {
+  for p in $(cat /proc/[0-9]*/status 2>/dev/null | awk '
+      /^Name:/ { n = $2 } /^Pid:/ { p = $2 } /^PPid:/ { name[p] = n; pp[p] = $2 }
+      END { for (p in pp) if (name[pp[p]] ~ /^sshd(-session)?$/ && name[p] !~ /^sshd(-session|-auth)?$/) print p }'); do
+    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q vmclaude-watch || { echo "SSH session"; return 0; }
+  done
+  who 2>/dev/null | grep -qv '(tmux(' && { echo "login"; return 0; }
+  for u in $(ps -C claude -o uid= 2>/dev/null | sort -u); do
+    f=$(getent passwd "$u" | cut -d: -f6)/.config/vmclaude/claude-state
+    [ "$(cat "$f" 2>/dev/null)" = idle ] && continue
+    # "busy" left by an interrupted answer (no Stop hook then) expires
+    [ -f "$f" ] && [ -z "$(find "$f" -mmin -120 2>/dev/null)" ] && continue
+    echo "Claude Code working"; return 0
+  done
+  awk '{ exit !($2 >= 1) }' /proc/loadavg && { echo "load"; return 0; }
+  return 1
+}
+
+since=$(date +%s) prev=$since
+while sleep "$step"; do
+  now=$(date +%s)
+  # A jump in time: the VM was paused or suspended. Count again from now.
+  [ $((now - prev)) -gt $((step * 5)) ] && since=$now
+  prev=$now
+  if in_use >/dev/null; then since=$now; continue; fi
+  if [ $((now - since)) -ge "$limit" ]; then
+    echo "vmclaude: unused for ${1:-30} minutes, powering off"
+    systemctl poweroff
+    exit 0
+  fi
+done
+EOS
+
+# $1 minutes (0: remove), $2 the idle script. Needs root or sudo.
+IFS= read -r -d '' IDLE_INSTALL_SH <<'EOS' || true
+m=$1
+if [ "$(id -u)" = 0 ]; then su_=
+elif command -v sudo >/dev/null 2>&1; then su_=sudo
+else echo "vmclaude: idle shutdown needs root or sudo on the VM" >&2; exit 1
+fi
+command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] ||
+  { echo "vmclaude: idle shutdown needs systemd on the VM" >&2; exit 1; }
+unit=/etc/systemd/system/vmclaude-idle.service
+if [ "$m" = 0 ]; then
+  $su_ sh -c "systemctl disable --now vmclaude-idle.service >/dev/null 2>&1; rm -f $unit /usr/local/libexec/vmclaude-idle; systemctl daemon-reload" || exit 1
+  echo "Idle shutdown is off."
+  exit 0
+fi
+printf '%s' "$2" | $su_ sh -c 'mkdir -p /usr/local/libexec && cat >/usr/local/libexec/vmclaude-idle && chmod 755 /usr/local/libexec/vmclaude-idle' || exit 1
+printf '%s\n' "[Unit]" "Description=vmclaude: power off after $m minutes without use" "" "[Service]" \
+  "ExecStart=/bin/sh /usr/local/libexec/vmclaude-idle $m" "Restart=always" "" "[Install]" "WantedBy=multi-user.target" |
+  $su_ sh -c "cat >$unit" || exit 1
+$su_ systemctl daemon-reload && $su_ systemctl enable vmclaude-idle.service >/dev/null 2>&1 &&
+  $su_ systemctl restart vmclaude-idle.service || exit 1
+echo "Idle shutdown is on: the VM powers off after $m minutes without use."
+EOS
+
+# Windows: the same as a SYSTEM task that starts with Windows.
+IFS= read -r -d '' WIN_IDLE_LOOP_PS <<'EOS' || true
+param([int]$Minutes = 30, [int]$Step = 60)
+# Installed by vmclaude ("vmclaude idle NAME MINUTES"): shuts this VM down
+# after $Minutes minutes in which nothing used it: no SSH connection, nobody
+# signed in on the screen, no Claude Code running.
+$since = Get-Date
+$prev = $since
+while ($true) {
+  Start-Sleep -Seconds $Step
+  $now = Get-Date
+  # A jump in time: the VM was paused, suspended or woke from fast startup.
+  if (($now - $prev).TotalSeconds -gt $Step * 5) { $since = $now }
+  $prev = $now
+  $sshd = @(Get-Process sshd -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  $ports = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $sshd -contains $_.OwningProcess } | ForEach-Object { $_.LocalPort })
+  $use = @(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }).Count -gt 0
+  if (-not $use) { $use = [bool](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName }
+  if (-not $use) { $use = [bool](Get-Process claude -ErrorAction SilentlyContinue) }
+  if ($use) { $since = $now; continue }
+  if (($now - $since).TotalMinutes -ge $Minutes) { Stop-Computer -Force; break }
+}
+EOS
+
+win_idle_ps() { # MINUTES
+  cat <<EOF
+\$ErrorActionPreference = "Stop"
+\$m = $1
+\$d = Join-Path \$env:ProgramData "vmclaude"
+\$f = Join-Path \$d "idle.ps1"
+try {
+  if (Get-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName vmclaude-idle -Confirm:\$false
+  }
+  if (\$m -eq 0) { Remove-Item -LiteralPath \$f -ErrorAction SilentlyContinue; "Idle shutdown is off."; exit 0 }
+  New-Item -ItemType Directory -Force -Path \$d | Out-Null
+  [IO.File]::WriteAllText(\$f, $(psq "$WIN_IDLE_LOOP_PS"), (New-Object Text.UTF8Encoding \$true))
+  \$a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \`"\$f\`" -Minutes \$m"
+  \$t = New-ScheduledTaskTrigger -AtStartup
+  \$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+  \$p = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+  Register-ScheduledTask -TaskName vmclaude-idle -Action \$a -Trigger \$t -Settings \$s -Principal \$p -Force | Out-Null
+  Start-ScheduledTask -TaskName vmclaude-idle
+} catch {
+  [Console]::Error.WriteLine("vmclaude: setting up idle shutdown failed (an administrator account is needed): \$_")
+  exit 1
+}
+"Idle shutdown is on: the VM shuts down after \$m minutes without use."
+EOF
+}
+
+# Polled by the watcher ($1: last event id seen, "" on the first poll).
+# The marker on the first line lets the idle shutdown ignore this session.
+IFS= read -r -d '' WATCH_SH <<'EOS' || true
+: vmclaude-watch
+n=$(pgrep -c -x claude 2>/dev/null) || true
+echo "claude=${n:-0}"
+t=$(date +%s%3N 2>/dev/null)
+case $t in "" | *[!0-9]*) t=$(date +%s)000 ;; esac
+echo "now=$t"
+f=$HOME/.config/vmclaude/events
+[ -n "$1" ] && [ -f "$f" ] && awk -F '\t' -v t="$1" '$1 + 0 > t + 0' "$f"
+exit 0
+EOS
 
 # $1 dir, $2 tmux session ("" = no tmux), $3 profile name, rest: claude args
 # shellcheck disable=SC2016
-CONNECT_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")"'
+CONNECT_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")
+VMCLAUDE_HOOK=$(sq "$HOOK_SH")
+VMCLAUDE_SETTINGS=$(sq "$CLAUDE_SETTINGS")"'
+h=$HOME/.config/vmclaude
+if mkdir -p "$h" 2>/dev/null; then
+  [ "$(cat "$h/hook.sh" 2>/dev/null)" = "$VMCLAUDE_HOOK" ] || printf "%s\n" "$VMCLAUDE_HOOK" >"$h/hook.sh"
+  [ "$(cat "$h/claude-settings.json" 2>/dev/null)" = "$VMCLAUDE_SETTINGS" ] || printf "%s\n" "$VMCLAUDE_SETTINGS" >"$h/claude-settings.json"
+fi
 d=$1; s=$2; n=$3; shift 3
 cd_dir "$d" || { echo "vmclaude: cannot use directory $d on the VM" >&2; exit 1; }
 c=$(command -v claude) || { echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127; }
@@ -1218,6 +1513,8 @@ $g = Get-Command git -ErrorAction SilentlyContinue
 "git=" + $(if ($g) { & $g.Source --version })
 "hook=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\autostart.ps1") { "on" })
 "login=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\claude-env") { "token" } elseif (Test-Path "$env:USERPROFILE\.claude\.credentials.json") { "login" })
+$t = Get-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue
+"idle=" + $(if ($t) { [regex]::Match($t.Actions[0].Arguments, "-Minutes (\d+)").Groups[1].Value + " " + $(if ($t.State -eq "Running") { "active" } else { "$($t.State)".ToLower() }) })
 '
 
 # What still uses the VM, one reason per line; nothing when it is free.
@@ -1370,6 +1667,7 @@ cmd_connect() {
   else
     cmd=$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "${cargs[@]}")
   fi
+  start_watcher
   run_ssh "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
   if ((rc == 255)); then
     info "$PROG: SSH connection to $C_USER@$TARGET:$C_PORT failed. Try: $PROG doctor $NAME"
@@ -1428,7 +1726,7 @@ install_autostart() { # on|off
 vm_busy() {
   local pid args n=0 out
   while read -r pid args; do
-    [[ $pid == "$$" ]] && continue
+    [[ $pid == "$$" || $args == *vmclaude-watch* ]] && continue
     [[ " $args " == *"HostKeyAlias=vmclaude-$NAME "* ]] && n=$((n + 1))
   done < <(ps -eo pid=,args= 2>/dev/null || true)
   if ((n)); then
@@ -1603,6 +1901,8 @@ printf "claude=%s\n" "$(command -v claude >/dev/null 2>&1 && claude --version 2>
 printf "tmux=%s\n" "$(command -v tmux >/dev/null 2>&1 && tmux -V)"
 printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
 printf "login=%s\n" "$(if [ -f "$HOME/.config/vmclaude/claude-env" ]; then echo token; elif [ -f "$HOME/.claude/.credentials.json" ]; then echo login; fi)"
+printf "hooks=%s\n" "$([ -f "$HOME/.config/vmclaude/claude-settings.json" ] && echo on)"
+printf "idle=%s\n" "$(sed -n "s/^ExecStart=.* \([0-9][0-9]*\)\$/\1/p" /etc/systemd/system/vmclaude-idle.service 2>/dev/null) $(systemctl is-active vmclaude-idle 2>/dev/null)"
 ')
   fi
   out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$probe" </dev/null 2>/dev/null | tr -d '\r') ||
@@ -1623,6 +1923,24 @@ printf "login=%s\n" "$(if [ -f "$HOME/.config/vmclaude/claude-env" ]; then echo 
     login) pass "Claude login: done inside Claude (/login)" ;;
     *) printf '  info  Claude login: not yet (run: %s login %s)\n' "$PROG" "$NAME" ;;
   esac
+  if [[ $C_OS != windows ]]; then
+    if [[ -n $(sed -n 's/^hooks=//p' <<<"$out") ]]; then pass "Claude hooks (idle state, notifications): installed"
+    else printf '  info  Claude hooks: not yet (the next "%s %s" installs them)\n' "$PROG" "$NAME"; fi
+  fi
+  local idle
+  idle=$(sed -n 's/^idle=//p' <<<"$out")
+  if [[ $idle =~ ^([0-9]+)\ active$ ]]; then pass "idle shutdown: after ${BASH_REMATCH[1]} minutes without use"
+  elif [[ $idle =~ ^[0-9]+ ]]; then printf '  warn  idle shutdown is set up but not running (%s)\n' "$idle"
+  else printf '  info  idle shutdown: off (turn on: %s idle %s 30)\n' "$PROG" "$NAME"; fi
+  if [[ -n $C_DOMAIN ]]; then
+    local snaps
+    snaps=$(snapshot_rows)
+    if [[ -n $snaps ]]; then
+      printf '  info  snapshots: %s, newest %s\n' "$(grep -c . <<<"$snaps")" "$(tail -n 1 <<<"$snaps" | cut -f1)"
+    else
+      printf '  info  snapshots: none yet\n'
+    fi
+  fi
   ((ok)) && say "All good." || return 1
 }
 
@@ -1719,15 +2037,15 @@ EOF
 }
 
 cmd_create() {
-  local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 k
+  local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 idle=30 k
   user=$(id -un)
   while (($#)); do
     case $1 in
-      --image | --memory | --cpus | --disk | --user | --uri)
+      --image | --memory | --cpus | --disk | --user | --uri | --idle)
         (($# >= 2)) || usage_error "create: $1 needs a value"
         case $1 in
           --image) image=$2 ;; --memory) memory=$2 ;; --cpus) cpus=$2 ;;
-          --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;;
+          --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;; --idle) idle=$2 ;;
         esac
         shift 2 ;;
       --no-setup) install=0; shift ;;
@@ -1739,6 +2057,8 @@ cmd_create() {
   valid_name "$name" || die "invalid name: $name (letters, digits, . _ - only)"
   profile_exists "$name" && die "a VM profile named '$name' already exists"
   for k in "$memory" "$cpus" "$disk"; do [[ $k =~ ^[1-9][0-9]*$ ]] || die "--memory, --cpus and --disk take whole numbers"; done
+  [[ $idle == off ]] && idle=0
+  [[ $idle =~ ^[0-9]+$ ]] || die "--idle takes minutes, or off"
   check_value USER "$user"
   image_info "$image"
   local tool
@@ -1825,6 +2145,10 @@ cmd_create() {
       sleep 3
     done
     cmd_setup "$name"
+    if ((idle > 0)); then
+      info "Idle shutdown"
+      if install_idle "$idle"; then P[IDLE]=$idle; write_profile "$NAME"; else warn "idle shutdown not set up (later: $PROG idle $NAME $idle)"; fi
+    fi
   else
     say "Created. Next: $PROG setup $name"
   fi
@@ -2336,6 +2660,232 @@ for line in sys.stdin:
 PYTHON_END
 )
 
+# ------------------------------------------------------------------ snapshots
+
+need_domain() { # WHAT
+  [[ -n $C_DOMAIN ]] || die "$1 needs a libvirt VM; '$NAME' has no --domain"
+  command -v virsh >/dev/null || die "virsh not found"
+}
+
+# The VM's snapshots, oldest first: NAME<TAB>DATE TIME<TAB>STATE
+snapshot_rows() {
+  vsh snapshot-list "$C_DOMAIN" 2>/dev/null |
+    awk 'NR > 2 && NF >= 5 { print $1 "\t" $2 " " $3 "\t" $5 }' | sort -t $'\t' -k2,2 -k1,1
+}
+
+# Taken each time vmclaude starts the VM from "shut off" (instant then, and
+# without memory), so "vmclaude undo" can return to before the session.
+auto_snapshot() {
+  local keep=${P[AUTOSNAP]:-3} snap out old
+  ((keep > 0)) || return 0
+  snap=auto-$(date +%Y%m%d-%H%M%S)
+  if ! out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "taken by vmclaude before starting the VM" 2>&1); then
+    warn "no automatic snapshot: ${out%%$'\n'*} (turn them off: $PROG autosnap $NAME off)"
+    return 0
+  fi
+  info "Snapshot $snap taken (\"$PROG undo $NAME\" goes back to it)."
+  while IFS= read -r old; do
+    vsh snapshot-delete "$C_DOMAIN" "$old" >/dev/null 2>&1 || warn "could not delete old snapshot $old"
+  done < <(snapshot_rows | awk -F '\t' -v keep="$keep" '$1 ~ /^auto-/ { s[n++] = $1 } END { for (i = 0; i < n - keep; i++) print s[i] }')
+}
+
+cmd_snapshot() {
+  local name='' note='' del='' snap out
+  while (($#)); do
+    case $1 in
+      --delete)
+        (($# >= 2)) || usage_error "snapshot: --delete needs a snapshot name"
+        del=$2; shift 2 ;;
+      -*) usage_error "snapshot: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1; elif [[ -z $note ]]; then note=$1; else usage_error "snapshot: too many arguments"; fi
+        shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "snapshot: missing NAME"
+  load "$name"
+  need_domain snapshot
+  if [[ -n $del ]]; then
+    out=$(vsh snapshot-delete "$C_DOMAIN" "$del" 2>&1) || die "libvirt: $out"
+    say "Deleted snapshot $del."
+    return 0
+  fi
+  snap=snap-$(date +%Y%m%d-%H%M%S)
+  [[ $(domstate) == running ]] && info "The VM is running: its memory is saved too, and it pauses for a moment..."
+  out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "${note:-taken with vmclaude snapshot}" 2>&1) ||
+    die "libvirt: $out"
+  say "Snapshot $snap taken. Back to it later: $PROG undo $NAME $snap"
+}
+
+cmd_snapshots() {
+  [[ $# = 1 ]] || usage_error "snapshots: give one NAME"
+  load "$1"
+  need_domain snapshots
+  local rows snap when state desc
+  rows=$(snapshot_rows)
+  if [[ -z $rows ]]; then
+    say "No snapshots of $NAME yet. One is taken each time vmclaude starts the VM; or: $PROG snapshot $NAME"
+    return 0
+  fi
+  while IFS=$'\t' read -r snap when state; do
+    desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n 's:.*<description>\(.*\)</description>.*:\1:p' | head -n 1)
+    [[ $state == shutoff ]] && state="VM off" || state="VM $state"
+    printf '%-24s %s  %-11s %s\n' "$snap" "$when" "$state" "$desc"
+  done <<<"$rows"
+  say ""
+  say "Go back to the newest: $PROG undo $NAME   (or name one: $PROG undo $NAME SNAPSHOT)"
+}
+
+cmd_undo() {
+  local name='' snap='' yes=0 rows row when state a out
+  while (($#)); do
+    case $1 in
+      -y | --yes) yes=1; shift ;;
+      -*) usage_error "undo: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1; elif [[ -z $snap ]]; then snap=$1; else usage_error "undo: too many arguments"; fi
+        shift ;;
+    esac
+  done
+  [[ -n $name ]] || name=$(default_name) || usage_error "undo: missing NAME"
+  load "$name"
+  need_domain undo
+  rows=$(snapshot_rows)
+  [[ -n $rows ]] || die "no snapshots of $NAME yet. One is taken each time vmclaude starts the VM; take one now: $PROG snapshot $NAME"
+  if [[ -n $snap ]]; then
+    row=$(awk -F '\t' -v s="$snap" '$1 == s' <<<"$rows")
+    [[ -n $row ]] || die "no snapshot '$snap' of $NAME (see: $PROG snapshots $NAME)"
+  else
+    row=${rows##*$'\n'}
+  fi
+  IFS=$'\t' read -r snap when state <<<"$row"
+  if ((!yes)); then
+    [[ -t 0 ]] || die "undo: add --yes to confirm without a terminal"
+    say "This puts VM $NAME back to snapshot $snap, taken $when."
+    say "Everything changed in the VM since then is lost (files, installed programs, Claude's work)."
+    read -r -p "Go back? [y/N] " a || a=
+    [[ $a == [yY]* ]] || die "nothing changed"
+  fi
+  if [[ $state == shutoff && $(domstate) != "shut off" ]]; then
+    info "Stopping VM $C_DOMAIN..."
+    out=$(vsh destroy "$C_DOMAIN" 2>&1) || die "libvirt: $out"
+  fi
+  out=$(vsh snapshot-revert "$C_DOMAIN" "$snap" 2>&1) || die "libvirt: $out"
+  say "VM $NAME is back at $snap ($when)."
+  [[ $state == shutoff ]] && say "Open Claude in it again: $PROG $NAME"
+  return 0
+}
+
+cmd_autosnap() {
+  [[ $# = 2 ]] || usage_error "autosnap: give NAME and on, off or a number"
+  local n=$2
+  case $n in on) n=3 ;; off) n=0 ;; esac
+  [[ $n =~ ^[0-9]+$ ]] || usage_error "autosnap: say on, off or how many to keep"
+  load "$1"
+  need_domain autosnap
+  P[AUTOSNAP]=$((10#$n))
+  write_profile "$NAME"
+  if ((P[AUTOSNAP])); then
+    say "Automatic snapshots are on: one each time vmclaude starts the VM, the newest ${P[AUTOSNAP]} are kept."
+  else
+    say "Automatic snapshots are off (existing ones stay; see: $PROG snapshots $NAME)."
+  fi
+}
+
+# ------------------------------------------------------------------ idle shutdown
+
+install_idle() { # MINUTES (0: off)
+  if [[ $C_OS == windows ]]; then
+    win_run "$(win_idle_ps "$1")"
+  else
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$IDLE_INSTALL_SH" "$1" "$IDLE_LOOP_SH")"
+  fi
+}
+
+cmd_idle() {
+  [[ $# = 2 ]] || usage_error "idle: give NAME and minutes or off"
+  local m=$2
+  [[ $m == off ]] && m=0
+  [[ $m =~ ^[0-9]+$ ]] || usage_error "idle: say how many minutes, or off"
+  m=$((10#$m))
+  load "$1"
+  resolve_target
+  build_ssh_opts
+  install_idle "$m" || die "could not set up idle shutdown on the VM"
+  P[IDLE]=$m
+  write_profile "$NAME"
+}
+
+# ------------------------------------------------------------------ notifications
+
+# Shows "Claude needs you" messages from the VM as desktop notifications.
+# Runs in the background while Claude runs on the VM, also after you detach.
+cmd___watch() {
+  load "$1"
+  [[ $C_OS == linux ]] || return 0
+  command -v flock >/dev/null || return 0
+  local lock
+  lock=${XDG_RUNTIME_DIR:-/tmp}/vmclaude-watch-$(id -u)-$NAME.lock
+  exec 9>>"$lock"
+  flock -n 9 || return 0  # one watcher per VM
+  if [[ -n $C_DOMAIN ]]; then
+    [[ $(domstate) == running ]] || return 0
+    if [[ -n $C_HOST ]]; then TARGET=$C_HOST; else find_ip || return 0; TARGET=$FOUND_IP; fi
+  else
+    TARGET=$C_HOST
+  fi
+  build_ssh_opts
+  local last='' fails=0 gone=0 out id dir msg first=1
+  while :; do
+    ((first)) || sleep "${VMCLAUDE_WATCH_INTERVAL:-15}"
+    first=0
+    if [[ -n $C_DOMAIN && $(domstate) != running ]]; then return 0; fi
+    if ! out=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$WATCH_SH" "$last")" </dev/null 2>/dev/null) ||
+      [[ $out != claude=* ]]; then
+      ((++fails < 20)) || return 0
+      continue
+    fi
+    fails=0
+    [[ -n $last ]] || last=$(sed -n 's/^now=//p' <<<"$out")
+    while IFS=$'\t' read -r id dir msg; do
+      [[ $id =~ ^[0-9]+$ ]] || continue
+      last=$id
+      notify-send -a vmclaude "Claude Code ($NAME)" "${dir:+$dir: }$msg" 2>/dev/null || true
+    done <<<"$out"
+    if [[ $out == claude=0* ]]; then ((++gone < 2)) || return 0; else gone=0; fi
+  done
+}
+
+start_watcher() {
+  [[ $C_OS == linux && ${P[NOTIFY]:-on} == on ]] || return 0
+  [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 0
+  command -v notify-send >/dev/null && command -v flock >/dev/null || return 0
+  local self
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  if command -v setsid >/dev/null; then
+    setsid -f "$self" __watch "$NAME" </dev/null >/dev/null 2>&1 || true
+  else
+    nohup "$self" __watch "$NAME" </dev/null >/dev/null 2>&1 &
+  fi
+}
+
+cmd_notify() {
+  [[ $# = 2 ]] || usage_error "notify: give NAME and on|off"
+  local mode=$2
+  [[ $mode == on || $mode == off ]] || usage_error "notify: say on or off"
+  load "$1"
+  P[NOTIFY]=$mode
+  write_profile "$NAME"
+  if [[ $mode == off ]]; then
+    say "Notifications are off."
+    return 0
+  fi
+  say "Notifications are on: when Claude on the VM needs you, a desktop notification appears here."
+  [[ $C_OS == windows ]] && say "(Not yet for Windows VMs.)"
+  command -v notify-send >/dev/null || say "Install notify-send first (Debian/Ubuntu: sudo apt install libnotify-bin)."
+  return 0
+}
+
 # ------------------------------------------------------------------ mount
 
 MOUNT_BASE=${VMCLAUDE_MOUNT_DIR:-$HOME/vm}
@@ -2577,8 +3127,8 @@ main() {
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
-    __mcp-info | __mcp-run | __mcp-get | __mcp-put) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | autostart | doctor | list | default | desktop | edit | forget | rm)
+    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

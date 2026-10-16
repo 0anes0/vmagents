@@ -41,7 +41,13 @@ also an app-menu launcher.
   powers off (autostop), unless something still uses it: Claude left running
   with `Ctrl-b d`, another `vmclaude shell` or `mount`, an SSH login. Then it
   stays on and tells you why. `vmclaude stop NAME` / `start NAME` by hand,
-  `--keep` once, `vmclaude autostop NAME off` for good.
+  `--keep` once, `vmclaude autostop NAME off` for good. A VM nobody uses
+  shuts itself down after 30 minutes (`vmclaude idle`).
+- **Undo:** each start takes a snapshot first, so `vmclaude undo NAME` puts
+  the VM back to how it was before Claude's session. See [Undo](#undo).
+- **Notifications:** when Claude on the VM asks for permission or waits for
+  you, a desktop notification appears on your computer, also after you
+  detached. See [Notifications](#notifications).
 - **One-step setup:** `vmclaude setup NAME` creates an SSH key and installs it
   on the VM (you type the VM password once). It installs tmux with the VM's
   package manager and Claude Code with the official installer.
@@ -158,6 +164,52 @@ always. `vmclaude stop dev` shuts it down by hand (`--force` pulls the plug),
 `vmclaude start dev` boots it ahead of time, and `vmclaude list` shows which
 VMs are running. Machines added with `--host` only are never shut down.
 
+**…and when you forget.** `vmclaude idle dev 30` installs a small service on
+the VM that shuts it down after 30 minutes in which nothing used it
+(`vmclaude create` sets this up by itself). It covers what vmclaude on your
+computer cannot see: Claude left running in tmux that finished long ago, a
+plain `ssh` login that ended, a VM you forgot. Used means an SSH session
+(shell, command or mount), a console login, Claude Code working (from its
+hooks, see below) or a busy CPU on Linux; an SSH connection, someone signed
+in on the screen or Claude running on Windows. Claude waiting for you counts
+as unused: its conversation is saved, and `vmclaude dev --continue` resumes
+it. Linux VMs need systemd and sudo; on Windows a scheduled task runs as
+SYSTEM. `vmclaude idle dev off` removes it.
+
+### Undo
+
+Before vmclaude starts a libvirt VM that is off, it takes a snapshot
+(`auto-DATE-TIME`; instant, since the VM is off). If Claude broke something:
+
+```sh
+vmclaude undo dev            # back to before this session (asks first)
+vmclaude snapshots dev       # all snapshots, oldest first
+vmclaude undo dev auto-20261016-224745
+vmclaude snapshot dev "before the big refactor"   # one of your own, any time
+```
+
+The newest 3 automatic snapshots are kept (`vmclaude autosnap dev 10`, or
+`off`); your own are never deleted automatically (`vmclaude snapshot dev
+--delete NAME`). They are libvirt internal snapshots, stored inside the VM's
+qcow2 disk, and grow with what changes after them. A snapshot of a running
+VM includes its memory and returns to it running.
+
+### Notifications
+
+While Claude runs on a Linux VM, `vmclaude dev` also starts a small
+background process here that asks the VM every 15 seconds whether Claude
+needs you: it asked for a permission, or it finished and waited a minute for
+your answer. Then a desktop notification appears ("Claude Code (dev)").
+It keeps going after you detach with `Ctrl-b d`, and stops when Claude ends
+or the VM shuts down.
+
+On the VM this uses Claude Code hooks, in two files that `vmclaude dev`
+keeps in `~/.config/vmclaude/`: `hook.sh` and `claude-settings.json`, which
+vmclaude passes to Claude with `--settings`. Your own
+`~/.claude/settings.json` is not changed. The same hooks tell the idle
+shutdown whether Claude is working. Needs `notify-send` on your computer;
+`vmclaude notify dev off` turns it off. Not yet for Windows VMs.
+
 Skip autostart for one login with `ssh -o SetEnv=LC_VMCLAUDE=off dev@VM`. This
 works with the default `AcceptEnv LANG LC_*` of Debian and Ubuntu. Turn
 autostart off with `vmclaude autostart dev off`.
@@ -173,7 +225,7 @@ vmclaude                         connect to the default VM (asks to add one if n
 vmclaude NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmclaude dev --continue
 vmclaude create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
-    --user USER  --uri LIBVIRT_URI  --no-setup
+    --user USER  --uri LIBVIRT_URI  --idle MINUTES|off  --no-setup
 vmclaude delete NAME [--yes]     delete a VM made with create, and its disk
 vmclaude images                  which images exist, are downloaded, used, and where
 vmclaude prune                   remove downloaded images no VM uses any more
@@ -187,6 +239,11 @@ vmclaude shell [--keep] NAME [CMD...]   plain shell or command on the VM
 vmclaude start NAME              boot a libvirt VM and wait for SSH
 vmclaude stop NAME [--force]     shut a libvirt VM down
 vmclaude autostop NAME on|off    shut the VM down when you leave Claude (default on)
+vmclaude idle NAME MINUTES|off   the VM shuts itself down when unused (create sets 30)
+vmclaude undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
+vmclaude snapshot NAME [NOTE]    take a snapshot; snapshots NAME lists them
+vmclaude autosnap NAME N|off     automatic snapshots to keep (default 3)
+vmclaude notify NAME on|off      desktop notifications when Claude needs you
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
 vmclaude login NAME [--remove]   log Claude in on the VM with this computer's browser
@@ -217,6 +274,9 @@ DIR=~/work              # where Claude starts on the VM (created if missing)
 SESSION=claude          # tmux session; empty = no tmux
 OS=linux                # or windows; detected from the SSH banner on first use
 AUTOSTOP=on             # off: the VM keeps running after you leave Claude
+AUTOSNAP=3              # automatic snapshots to keep; 0 = none
+IDLE=30                 # what "vmclaude idle" set up on the VM (0 = off)
+NOTIFY=on               # desktop notifications
 ```
 
 Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
@@ -411,6 +471,20 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_stop.py` covers autostop, `start` and `stop`: every reason to
   keep a VM on, with the Linux check really running against fake
   `tmux`/`who`/`pgrep`.
+- `tests/test_snapshots.py` covers automatic snapshots and their pruning,
+  `snapshot`, `snapshots` and `undo` (including its question) against a fake
+  `virsh` that keeps snapshots.
+- `tests/test_idle_notify.py` runs `hook.sh` with Claude's hook input, the
+  watcher against a fake VM (new events become notifications, it stops when
+  Claude is gone, one per VM), and checks the idle installers.
+- By hand, the hooks in real Claude Code 2.1: `UserPromptSubmit`,
+  `PreToolUse`, `PostToolUse` and `Stop` in a `claude -p` run, and the
+  Notification "Claude is waiting for your input" in an interactive one.
+- By hand, on the Arch VM: idle shutdown after 1 minute and none while an
+  SSH session was open (the watcher's polls do not count); a snapshot at each
+  start, `undo` removing a file written after it, a live snapshot and undo to
+  it; a notification from the watcher. On the Windows 10 VM: snapshots, and
+  the idle task shutting it down 2 minutes after the last connection.
 - By hand, autostop on the Arch VM (quit Claude, exit `vmclaude shell`: off;
   `Ctrl-b d`, a second connection, an SSH login: stays on) and on the
   Windows 10 VM (quit Claude: off within seconds).
@@ -444,7 +518,11 @@ python3 -m unittest discover -s tests -t .
 - Tested on Linux hosts. macOS needs bash 4+ (Homebrew) and `timeout`
   (coreutils).
 - Only libvirt VMs are started and shut down automatically. A plain `ssh`
-  login (autostart) never shuts the VM down: vmclaude is not running then.
+  login (autostart) never shuts the VM down: vmclaude is not running then
+  (the idle shutdown does, later).
+- Snapshots need a qcow2 disk and libvirt; notifications are for Linux VMs.
+- The idle shutdown cannot see long jobs outside Claude that use little CPU
+  (a download, a `sleep`); give it more minutes or turn it off for those.
 
 ## License
 
@@ -509,6 +587,22 @@ nedenini söyler: `Ctrl-b d` ile Claude'u arkada bıraktıysan, açık bir
 bırakmak: `vmclaude dev --keep`; hiç kapatmamak: `vmclaude autostop dev off`.
 Elle: `vmclaude stop dev` (`--force` fişi çeker), `vmclaude start dev`.
 `vmclaude list` hangi VM'in açık olduğunu gösterir.
+
+**Unutursan da kapanır:** `vmclaude idle dev 30` VM'e küçük bir servis kurar;
+VM 30 dakika boyunca kullanılmazsa (SSH oturumu yok, Claude çalışmıyor, işlemci
+boşta) kendini kapatır. `vmclaude create` bunu kendisi kurar. Kapatmak için:
+`vmclaude idle dev off`.
+
+**Geri alma:** vmclaude kapalı bir VM'i her açmadan önce anlık görüntüsünü
+alır. Claude bir şeyi bozduysa `vmclaude undo dev` VM'i bu oturumdan önceki
+hâline döndürür (önce sorar). `vmclaude snapshots dev` hepsini listeler,
+`vmclaude snapshot dev "not"` istediğin an bir tane alır. Son 3 otomatik
+görüntü saklanır (`vmclaude autosnap dev 10` ya da `off`).
+
+**Bildirimler:** Claude VM'de senden izin istediğinde ya da işini bitirip
+cevabını beklediğinde bilgisayarında masaüstü bildirimi çıkar; `Ctrl-b d` ile
+ayrıldıktan sonra da. Kapatmak için: `vmclaude notify dev off`. (Şimdilik
+Linux VM'lerde.)
 
 **Bilgisayarındaki Claude Code'dan VM'e müdahale:** `vmclaude mcp arch --add`
 bir kez çalıştırınca, kendi bilgisayarındaki Claude Code'a VM'in içinde komut

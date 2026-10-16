@@ -16,7 +16,7 @@ VMCLAUDE = ROOT / "vmclaude"
 # Tools the remote scripts may use; the fake VM gets only these.
 REMOTE_TOOLS = ["sh", "bash", "cat", "grep", "mkdir", "touch", "tail", "wc", "chmod",
                 "awk", "rm", "basename", "id", "env", "head", "cp", "dirname", "ls",
-                "sed", "tr", "uname", "sleep", "du", "cut"]
+                "sed", "tr", "uname", "sleep", "du", "cut", "date"]
 
 
 def write_exe(path, text):

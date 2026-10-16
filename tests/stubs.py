@@ -79,6 +79,36 @@ if cmd == "domifaddr":
     print(); sys.exit(0)
 if cmd == "list":
     print("testvm"); print(); sys.exit(0)
+# Snapshots, in <state file>.snaps: [[name, time, state, description], ...]
+snaps_path = path + ".snaps"
+snaps = json.load(open(snaps_path)) if os.path.exists(snaps_path) else []
+def save_snaps():
+    json.dump(snaps, open(snaps_path, "w"))
+def find_snap(name):
+    for s in snaps:
+        if s[0] == name:
+            return s
+    print(f"error: Domain snapshot not found: no domain snapshot with matching name '{name}'", file=sys.stderr)
+    sys.exit(1)
+if cmd == "snapshot-create-as":
+    if os.environ.get("STUB_VIRSH_SNAPSHOT_FAILS"):
+        print("error: internal snapshots of a VM with pflash based firmware are not supported", file=sys.stderr)
+        sys.exit(1)
+    desc = args[args.index("--description") + 1] if "--description" in args else ""
+    snaps.append([args[2], "2026-10-16 10:%02d:00 +0300" % len(snaps), state.replace(" ", ""), desc])
+    save_snaps(); print(f"Domain snapshot {args[2]} created"); sys.exit(0)
+if cmd == "snapshot-list":
+    print(" Name   Creation Time   State"); print("-" * 30)
+    for s in snaps:
+        print(f" {s[0]}   {s[1]}   {s[2]}")
+    print(); sys.exit(0)
+if cmd == "snapshot-delete":
+    snaps.remove(find_snap(args[2])); save_snaps(); print(f"Domain snapshot {args[2]} deleted"); sys.exit(0)
+if cmd == "snapshot-dumpxml":
+    print(f"<domainsnapshot>\n  <description>{find_snap(args[2])[3]}</description>\n</domainsnapshot>"); sys.exit(0)
+if cmd == "snapshot-revert":
+    s = find_snap(args[2])
+    open(path, "w").write(f"{'running' if s[2] == 'running' else 'shut off'}|{ip}|{polls}"); sys.exit(0)
 print("unsupported", args, file=sys.stderr); sys.exit(1)
 '''
 
