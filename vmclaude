@@ -3,7 +3,7 @@
 # https://github.com/emincan2000/vmclaude
 set -euo pipefail
 
-VERSION=0.8.0
+VERSION=0.9.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -12,8 +12,9 @@ DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
 STOP_TIMEOUT=${VMCLAUDE_STOP_TIMEOUT:-120}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AUTOSTOP AUTOSNAP IDLE NOTIFY CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD CREATED "
 HOLD=0
+AGENTS="claude codex gemini aider"
 
 say()  { printf '%s\n' "$*"; }
 info() { printf '%s\n' "$*" >&2; }
@@ -41,7 +42,9 @@ in tmux on Linux VMs, so Claude keeps running if the connection drops.
 When you leave Claude, a libvirt VM that nothing else uses shuts down again;
 one left running shuts itself down after 30 idle minutes ("vmclaude idle").
 Each start takes a snapshot first: "vmclaude undo" takes back what Claude did.
-When Claude needs you, a desktop notification appears on this computer.
+When Claude needs you, a desktop notification appears on this computer, and
+what you copy on the VM lands in this computer's clipboard. Codex, Gemini CLI
+and aider work the same way (vmclaude dev --codex).
 
 GET STARTED
   No VM yet? Make one (Linux computer with libvirt):
@@ -59,6 +62,8 @@ GET STARTED
   Every day:
     vmclaude                                 open Claude on the default VM
     vmclaude dev --continue                  arguments after the name go to Claude
+    vmclaude open dev 3000                   a web server on the VM, in your browser here
+    vmclaude dev --codex                     Codex instead of Claude (also --gemini, --aider)
     ssh dev@VM                               any SSH app opens Claude too (after setup)
 
 COMMANDS
@@ -73,15 +78,16 @@ COMMANDS
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     start NAME           start a libvirt VM and wait until SSH answers
     stop NAME            shut a libvirt VM down (--force: pull the plug)
+    open NAME PORT       open the VM's port PORT here (http://localhost:PORT)
+    doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
+    login NAME           log Claude in on the VM, with the browser of THIS computer
+    mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
+    mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
 
   Undo (libvirt):
     undo NAME [SNAPSHOT] put the VM back to how it was before this session
     snapshot NAME [NOTE] take a snapshot now; snapshots NAME lists them
     autosnap NAME N|off  how many automatic snapshots to keep (default: 3)
-    doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
-    login NAME           log Claude in on the VM, with the browser of THIS computer
-    mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
-    mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
 
   Profiles (one per VM, in ${CONF_DIR/#$HOME/\~}/hosts/):
     add NAME             add an existing VM, or change the settings of a profile
@@ -92,6 +98,8 @@ COMMANDS
     autostop NAME on|off    shut the VM down when you leave Claude (default: on)
     idle NAME MINUTES|off   the VM shuts itself down after MINUTES unused (create: 30)
     notify NAME on|off      desktop notifications when Claude needs you (default: on)
+    clipboard NAME on|off   what you copy in tmux on the VM lands here (default: on)
+    agent NAME [AGENT]      what "vmclaude NAME" opens: claude, codex, gemini or aider
     desktop NAME         add "Claude Code (NAME)" to your app menu
     edit NAME            open the profile file in your editor
     forget NAME          forget the VM's SSH host key (after reinstalling the VM)
@@ -196,7 +204,7 @@ Example:
 EOF
       ;;
     connect) cat <<EOF
-vmclaude connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmclaude connect [--keep] [--hold] [--no-tmux] [--codex|--gemini|--aider|--claude] [NAME] [-- ARGS...]
 vmclaude NAME [CLAUDE_ARGS...]
 vmclaude
 
@@ -215,11 +223,16 @@ why. Keep it on every time: "vmclaude autostop NAME off".
 
 Before a libvirt VM is started from "shut off", a snapshot is taken:
 "vmclaude undo NAME" returns to it. While Claude runs (also after Ctrl-b d),
-this computer shows a desktop notification when Claude needs you, on Linux
-VMs (see "vmclaude help notify").
+this computer shows a desktop notification when Claude needs you (see
+"vmclaude help notify"). What you copy in Claude's tmux session lands in
+this computer's clipboard (see "vmclaude help clipboard").
 
 Options:
   --keep        leave the VM running this time
+  --codex, --gemini, --aider
+                open that agent instead of Claude, in its own tmux session; it
+                is installed on the VM the first time (see "vmclaude help agent")
+  --claude      Claude, when "vmclaude agent" chose another one
   --no-tmux     run Claude directly, without tmux
   --hold        keep the terminal open after an error (used by app-menu launchers)
   -- ARGS       everything after -- goes to Claude
@@ -425,21 +438,83 @@ EOF
     notify) cat <<EOF
 vmclaude notify NAME on|off
 
-While Claude runs on a Linux VM, also after you detached with Ctrl-b d,
-this computer shows a desktop notification when Claude needs you: it asks
-for permission, or it finished and waited a minute for your answer.
+While Claude runs on the VM, also after you detached with Ctrl-b d, this
+computer shows a desktop notification when Claude needs you: it asks for
+permission, or it finished and waited a minute for your answer.
 
 How: "vmclaude NAME" keeps two files in ~/.config/vmclaude on the VM:
 hook.sh and claude-settings.json, which vmclaude passes to Claude with
 --settings (your own ~/.claude/settings.json is not changed). Claude's hooks
-note there what Claude does. A small background process here asks the VM
-every 15 seconds and stops when Claude has ended or the VM is off.
+note there what Claude does (on Windows they run with Git Bash, which Claude
+Code needs there anyway). A small background process here asks the VM every
+15 seconds and stops when Claude has ended or the VM is off.
 Needs notify-send here (Debian/Ubuntu: sudo apt install libnotify-bin).
-Not yet for Windows VMs.
 
 Examples:
   vmclaude notify dev off
   vmclaude notify dev on
+EOF
+      ;;
+    open) cat <<EOF
+vmclaude open [NAME] PORT... [--no-browser] [--keep]
+
+Makes port PORT of the VM a port of this computer, over SSH, and opens
+http://localhost:PORT in your browser: for the web server or app Claude
+started on the VM. It also works when that server only listens on the VM's
+localhost, and for VMs elsewhere. When PORT is taken here, the next free one
+is used (it says which). LOCAL:PORT picks the port here yourself.
+
+It runs until Ctrl-C; then the VM shuts down if nothing else uses it, as
+after connect (--keep: leave it on).
+
+Examples:
+  vmclaude open dev 3000
+  vmclaude open dev 5173 8080            two ports
+  vmclaude open dev 9000:3000            the VM's 3000 as localhost:9000
+  vmclaude open 3000 --no-browser        the default VM; only forward
+EOF
+      ;;
+    clipboard) cat <<EOF
+vmclaude clipboard NAME on|off
+
+While you are connected to Claude's tmux session on a Linux VM, what you copy
+there lands in this computer's clipboard: text Claude Code copies (it puts it
+into tmux) and what you copy in tmux itself (Ctrl-b [, select, Enter). A
+second SSH session watches tmux's paste buffers while you are connected.
+
+Needs xclip or xsel (X11), wl-copy (Wayland) or pbcopy (macOS) here, e.g.
+sudo apt install xclip. Terminals that understand OSC 52 (kitty, WezTerm,
+foot, iTerm2, Windows Terminal) get it from tmux as well.
+
+Examples:
+  vmclaude clipboard dev off
+  vmclaude clipboard dev on
+EOF
+      ;;
+    agent) cat <<EOF
+vmclaude agent NAME [claude|codex|gemini|aider]
+
+Chooses what "vmclaude NAME" opens on the VM: Claude Code (the default),
+OpenAI's Codex CLI, Google's Gemini CLI or aider. The agent is installed on
+the VM first if it is missing (for the user, in ~/.local/bin):
+  codex    its own installer (chatgpt.com/codex/install.sh)
+  gemini   npm package @google/gemini-cli; needs Node.js 20 or newer (installed
+           with the package manager when missing)
+  aider    its own installer (aider.chat/install.sh)
+Without an agent it says which one is chosen. For one time only:
+"vmclaude NAME --codex" (also --gemini, --aider, --claude).
+
+Each agent runs in its own tmux session (codex, gemini, aider), so Claude's
+session stays as it is. Log in once inside the agent: Codex's "Sign in with
+ChatGPT" works with the browser here (vmclaude forwards its port 1455).
+API keys can go into ~/.config/vmclaude/AGENT-env on the VM (e.g. gemini-env
+with GEMINI_API_KEY=...); it is read when the agent starts. Notifications and Claude's hooks are for
+Claude only; Linux VMs only.
+
+Examples:
+  vmclaude dev --codex
+  vmclaude agent dev gemini
+  vmclaude agent dev claude
 EOF
       ;;
     autostart) cat <<EOF
@@ -488,8 +563,9 @@ vmclaude edit NAME
 
 Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
 The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
-SESSION OS (see "vmclaude help add" for what they mean), AUTOSTOP=on|off,
-AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle" set up) and NOTIFY=on|off.
+SESSION OS (see "vmclaude help add" for what they mean), AGENT=claude|codex|
+gemini|aider, AUTOSTOP=on|off, AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle"
+set up), NOTIFY=on|off and CLIPBOARD=on|off.
 EOF
       ;;
     forget) cat <<EOF
@@ -582,7 +658,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop autostop undo snapshot snapshots autosnap idle notify doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop open autostop undo snapshot snapshots autosnap idle notify clipboard agent doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -644,20 +720,21 @@ check_value() { # KEY VALUE
     DOMAIN) [[ -n $v && $v != -* ]] || die "invalid libvirt domain: $v" ;;
     SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
     OS) [[ $v == linux || $v == windows ]] || die "invalid OS: $v (linux or windows)" ;;
-    AUTOSTOP | NOTIFY) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
+    AGENT) [[ " $AGENTS " == *" $v "* ]] || die "invalid agent: $v (one of: $AGENTS)" ;;
+    AUTOSTOP | NOTIFY | CLIPBOARD) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
     AUTOSNAP | IDLE) [[ $v =~ ^[0-9]+$ ]] || die "invalid $k: $v (a number)" ;;
   esac
 }
 
 # Load NAME into the effective connection settings (C_*).
-NAME='' C_HOST='' C_USER='' C_PORT='' C_KEY='' C_DOMAIN='' C_URI='' C_DIR='' C_SESSION='' C_OS=''
+NAME='' C_HOST='' C_USER='' C_PORT='' C_KEY='' C_DOMAIN='' C_URI='' C_DIR='' C_SESSION='' C_OS='' C_AGENT=claude
 load() {
   NAME=$1
   valid_name "$NAME" || die "invalid profile name: $NAME"
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS AUTOSTOP AUTOSNAP IDLE NOTIFY; do
+  for k in HOST USER PORT DOMAIN SESSION OS AGENT AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -671,6 +748,7 @@ load() {
   C_DIR=${P[DIR]:-}
   C_SESSION=${P[SESSION]-claude}
   C_OS=${P[OS]:-}
+  C_AGENT=${P[AGENT]:-claude}
   [[ -n $C_HOST || -n $C_DOMAIN ]] || die "profile '$NAME' has neither HOST nor DOMAIN"
 }
 
@@ -893,11 +971,12 @@ cd_dir() {
 }
 '
 
-# Starts "$2 ..." with the token from file $1 ("vmclaude login") in its
-# environment, and vmclaude's hooks (claude-settings.json in the same folder).
-# A wrapper, not tmux -e: the token stays out of command lines.
+# Starts "$2 ..." with the variables from file $1 in its environment (the
+# token from "vmclaude login", other agents' API keys), and for Claude with
+# vmclaude's hooks (claude-settings.json in the same folder). A wrapper, not
+# tmux -e: tokens stay out of command lines.
 # shellcheck disable=SC2016
-CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; [ -r "$s" ] && exec "$c" --settings "$s" "$@"; exec "$c" "$@"'
+CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"'
 
 # ------------------------------------------------------------------ hooks, idle shutdown, notifications
 # Claude Code on the VM runs hook.sh from its hooks (loaded with --settings
@@ -1075,7 +1154,53 @@ f=$HOME/.config/vmclaude/events
 exit 0
 EOS
 
-# $1 dir, $2 tmux session ("" = no tmux), $3 profile name, rest: claude args
+# Runs on the VM while you are connected: prints each new tmux paste buffer
+# (what you copy in tmux, and what Claude Code copies: it uses
+# "tmux load-buffer" inside tmux) in base64, one per line. The empty lines in
+# between notice a closed connection: writing to it ends the script.
+IFS= read -r -d '' CLIP_SH <<'EOS' || true
+command -v tmux >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 || exit 0
+top() { tmux list-buffers -F "#{buffer_name} #{buffer_created} #{buffer_size}" 2>/dev/null | head -n 1; }
+last=$(top)
+while echo; do
+  sleep 0.5 2>/dev/null || sleep 1
+  b=$(top)
+  [ "$b" = "$last" ] && continue
+  last=$b
+  [ -n "$b" ] && tmux show-buffer -b "${b%% *}" 2>/dev/null | base64 | tr -d "\n"
+done
+EOS
+
+# The same for Windows VMs. Claude Code runs hooks with Git Bash there, so
+# hook.sh works as it is.
+win_watch_ps() { # LAST_ID
+  cat <<EOF
+# vmclaude-watch
+"claude=" + @(Get-Process claude -ErrorAction SilentlyContinue).Count
+"now=" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+\$last = $(psq "$1")
+\$f = Join-Path \$env:USERPROFILE ".config\vmclaude\events"
+if (\$last -ne "" -and (Test-Path -LiteralPath \$f)) {
+  foreach (\$l in [IO.File]::ReadAllLines(\$f)) { \$p = \$l -split "\`t", 3; if (\$p.Count -eq 3 -and [long]\$p[0] -gt [long]\$last) { \$l } }
+}
+EOF
+}
+
+# Writes hook.sh and claude-settings.json on a Windows VM. (On Linux VMs the
+# connect script does that; on Windows its command line has no room.)
+win_hooks_ps() {
+  cat <<EOF
+\$d = Join-Path \$env:USERPROFILE ".config\vmclaude"
+New-Item -ItemType Directory -Force -Path \$d | Out-Null
+\$u = New-Object Text.UTF8Encoding \$false
+[IO.File]::WriteAllText((Join-Path \$d "hook.sh"), $(psq "$HOOK_SH"$'\n'), \$u)
+[IO.File]::WriteAllText((Join-Path \$d "claude-settings.json"), $(psq "$CLAUDE_SETTINGS"$'\n'), \$u)
+EOF
+}
+
+# $1 dir, $2 tmux session ("" = no tmux), $3 profile name, $4 agent
+# (claude, codex, ...), rest: its arguments. Exits 120 when another agent
+# than Claude is not installed: vmclaude installs it then.
 # shellcheck disable=SC2016
 CONNECT_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")
 VMCLAUDE_HOOK=$(sq "$HOOK_SH")
@@ -1085,16 +1210,19 @@ if mkdir -p "$h" 2>/dev/null; then
   [ "$(cat "$h/hook.sh" 2>/dev/null)" = "$VMCLAUDE_HOOK" ] || printf "%s\n" "$VMCLAUDE_HOOK" >"$h/hook.sh"
   [ "$(cat "$h/claude-settings.json" 2>/dev/null)" = "$VMCLAUDE_SETTINGS" ] || printf "%s\n" "$VMCLAUDE_SETTINGS" >"$h/claude-settings.json"
 fi
-d=$1; s=$2; n=$3; shift 3
+d=$1; s=$2; n=$3; a=$4; shift 4
 cd_dir "$d" || { echo "vmclaude: cannot use directory $d on the VM" >&2; exit 1; }
-c=$(command -v claude) || { echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127; }
+if ! c=$(command -v "$a"); then
+  [ "$a" = claude ] || exit 120
+  echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127
+fi
 if [ -n "${TERM-}" ] && command -v tput >/dev/null 2>&1 && ! tput -T "$TERM" longname >/dev/null 2>&1; then
   TERM=xterm-256color; export TERM
 fi
 if [ -n "$s" ] && command -v tmux >/dev/null 2>&1; then
-  exec tmux new-session -A -s "$s" -c "$PWD" sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/claude-env" "$c" "$@"
+  exec tmux new-session -A -s "$s" -c "$PWD" sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/$a-env" "$c" "$@"
 fi
-exec sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/claude-env" "$c" "$@"
+exec sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/$a-env" "$c" "$@"
 '
 
 # Reads one public key on stdin and adds it to authorized_keys once.
@@ -1131,7 +1259,8 @@ if [ -n "$need" ]; then
     $su_ apt-get update -qq && $su_ env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Use-Pty=0 $need
   elif command -v dnf >/dev/null 2>&1; then $su_ dnf install -y $need
   elif command -v yum >/dev/null 2>&1; then $su_ yum install -y $need
-  elif command -v pacman >/dev/null 2>&1; then $su_ pacman -S --needed --noconfirm $need
+  elif command -v pacman >/dev/null 2>&1; then
+    $su_ pacman -S --needed --noconfirm $need || $su_ pacman -Syu --needed --noconfirm $need
   elif command -v zypper >/dev/null 2>&1; then $su_ zypper --non-interactive install $need
   elif command -v apk >/dev/null 2>&1; then $su_ apk add $need
   else echo "vmclaude: no known package manager; install$need yourself" >&2
@@ -1156,6 +1285,49 @@ else
 fi
 command -v tmux >/dev/null 2>&1 || echo "vmclaude: tmux is not available; Claude will stop when the connection drops" >&2
 exit 0
+'
+
+# Installs another agent than Claude ($1) for the user, in ~/.local/bin.
+# shellcheck disable=SC2016
+AGENT_INSTALL_SH=$REMOTE_ENV'a=$1
+if command -v "$a" >/dev/null 2>&1; then echo "$a is already installed."; exit 0; fi
+if [ "$(id -u)" = 0 ]; then su_=
+elif command -v sudo >/dev/null 2>&1; then su_=sudo
+else su_=none
+fi
+pkg() {
+  echo "Installing: $*"
+  if [ "$su_" = none ]; then echo "vmclaude: cannot install $* without root or sudo; install it yourself" >&2; return 1
+  elif command -v apt-get >/dev/null 2>&1; then
+    $su_ apt-get update -qq && $su_ env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Use-Pty=0 "$@"
+  elif command -v dnf >/dev/null 2>&1; then $su_ dnf install -y "$@"
+  elif command -v pacman >/dev/null 2>&1; then
+    # A stale package list fails with 404s: then sync and upgrade (Arch has no partial upgrades).
+    $su_ pacman -S --needed --noconfirm "$@" || $su_ pacman -Syu --needed --noconfirm "$@"
+  elif command -v zypper >/dev/null 2>&1; then $su_ zypper --non-interactive install "$@"
+  elif command -v apk >/dev/null 2>&1; then $su_ apk add "$@"
+  else echo "vmclaude: no known package manager; install $* yourself" >&2; return 1
+  fi
+}
+command -v curl >/dev/null 2>&1 || pkg curl || exit 1
+mkdir -p "$HOME/.local/bin" || exit 1
+case $a in
+  codex)
+    echo "Installing Codex (its own installer, from chatgpt.com/codex)..."
+    curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh || { echo "vmclaude: installing Codex failed" >&2; exit 1; } ;;
+  gemini)
+    node_ok() { command -v npm >/dev/null 2>&1 && node -e "process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)" 2>/dev/null; }
+    node_ok || pkg nodejs npm || exit 1
+    node_ok || { echo "vmclaude: Gemini CLI needs Node.js 20 or newer; the VM has $(node --version 2>/dev/null || echo none)" >&2; exit 1; }
+    echo "Installing Gemini CLI..."
+    npm install -g --prefix "$HOME/.local" --no-fund --no-audit --loglevel=error @google/gemini-cli || { echo "vmclaude: installing Gemini CLI failed" >&2; exit 1; } ;;
+  aider)
+    echo "Installing aider..."
+    curl -LsSf https://aider.chat/install.sh | sh || { echo "vmclaude: installing aider failed" >&2; exit 1; } ;;
+  *) echo "vmclaude: unknown agent $a" >&2; exit 1 ;;
+esac
+command -v "$a" >/dev/null 2>&1 || { echo "vmclaude: $a was installed but is not on PATH" >&2; exit 1; }
+echo "Installed $a: $("$a" --version 2>/dev/null | head -n 1)"
 '
 
 # $1 on|off; with "on" the hook body comes on stdin.
@@ -1329,6 +1501,8 @@ if (-not \$c) { Err "Claude Code is not installed on the VM. Run: vmclaude setup
   if (\$a -ne "" -and \$a -notmatch '[\s"]') { \$a }
   else { '"' + [regex]::Replace(\$a, '(\\\\*)("|\$)', { param(\$m) \$m.Groups[1].Value * 2 + \$(if (\$m.Groups[2].Value) { '\\"' } else { "" }) }) + '"' }
 })) -join " "
+\$s = "\$env:USERPROFILE\.config\vmclaude\claude-settings.json"
+if (Test-Path -LiteralPath \$s) { \$line = ('--settings "' + \$s + '" ' + \$line).TrimEnd() }
 exit (Invoke-Claude \$c.Source \$line \$d)
 EOF
 }
@@ -1638,14 +1812,32 @@ cmd_forget() {
   say "Forgot the host key of '$1'; the next connection will accept the new one."
 }
 
+# Windows: (re)writes the hook files when this vmclaude has other ones than
+# the VM got last time.
+hooks_mark() { printf '%s/hooks-%s' "$CACHE_DIR" "$NAME"; }
+win_hooks() {
+  local sum mark
+  sum=$(printf '%s\n%s' "$HOOK_SH" "$CLAUDE_SETTINGS" | cksum)
+  mark=$(hooks_mark)
+  [[ -f $mark && $(<"$mark") == "$sum" ]] && return 0
+  if win_run "$(win_hooks_ps)" >/dev/null 2>&1; then
+    mkdir -p "$CACHE_DIR" && printf '%s\n' "$sum" >"$mark"
+  else
+    warn "could not install Claude's hooks on the VM (no notifications this time)"
+  fi
+  return 0
+}
+
 cmd_connect() {
-  local name='' notmux=0 keep=0
+  local name='' notmux=0 keep=0 agent=''
   local -a cargs=()
   while (($#)); do
     case $1 in
       --hold) HOLD=1; shift ;;
       --no-tmux) notmux=1; shift ;;
       --keep) keep=1; shift ;;
+      # Not --agent: that is Claude's own option.
+      --claude | --codex | --gemini | --aider) agent=${1#--}; shift ;;
       --) shift; cargs+=("$@"); break ;;
       *)
         if [[ -z $name ]] && [[ $1 != -* ]]; then name=$1; shift
@@ -1657,18 +1849,42 @@ cmd_connect() {
     name=$(default_name) || die "several VMs and no default; name one, or: $PROG default NAME"
   fi
   load "$name"
+  [[ -n $agent ]] && C_AGENT=$agent
   ((notmux)) && C_SESSION=
+  # Each agent has its own tmux session; Claude's keeps its name.
+  if [[ $C_AGENT != claude && -n $C_SESSION ]]; then
+    if [[ $C_SESSION == claude ]]; then C_SESSION=$C_AGENT; else C_SESSION=$C_SESSION-$C_AGENT; fi
+  fi
+  local why_not="only Claude Code runs on Windows VMs for now"
+  [[ $C_OS == windows && $C_AGENT != claude ]] && die "$why_not"
   resolve_target
+  [[ $C_OS == windows && $C_AGENT != claude ]] && die "$why_not"  # just detected
   build_ssh_opts
   local rc=0
   local cmd
+  local -a fwd=()
   if [[ $C_OS == windows ]]; then
+    win_hooks
     cmd=$(win_cmd -i "$(win_connect_ps "$C_DIR" "$NAME" "${cargs[@]}")")
   else
-    cmd=$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "${cargs[@]}")
+    cmd=$(remote_cmd "$CONNECT_SH" "$C_DIR" "$C_SESSION" "$NAME" "$C_AGENT" "${cargs[@]}")
   fi
-  start_watcher
-  run_ssh "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
+  # Codex logs in through a page on localhost:1455 that the browser here
+  # opens: forward that port to the VM.
+  [[ $C_AGENT == codex ]] && port_free 1455 && fwd=(-L 127.0.0.1:1455:localhost:1455)
+  [[ $C_AGENT == claude ]] && start_watcher
+  start_clip
+  run_ssh "${fwd[@]}" "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
+  if ((rc == 120)) && [[ $C_AGENT != claude ]]; then
+    info "$C_AGENT is not installed on the VM yet; installing it."
+    if run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$C_AGENT")"; then
+      rc=0
+      run_ssh "${fwd[@]}" "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
+    else
+      rc=1
+    fi
+  fi
+  stop_clip
   if ((rc == 255)); then
     info "$PROG: SSH connection to $C_USER@$TARGET:$C_PORT failed. Try: $PROG doctor $NAME"
   elif ((!keep)); then
@@ -1780,6 +1996,26 @@ cmd_stop() {
   load "$name"
   [[ -n $C_DOMAIN ]] || die "'$NAME' is not a libvirt VM (no --domain); shut it down yourself, e.g.: $PROG shell $NAME 'sudo poweroff'"
   stop_vm "$force"
+}
+
+cmd_agent() {
+  (($# >= 1 && $# <= 2)) || usage_error "agent: give NAME and an agent ($AGENTS)"
+  load "$1"
+  if (($# == 1)); then
+    say "$C_AGENT"
+    return 0
+  fi
+  [[ " $AGENTS " == *" $2 "* ]] || usage_error "unknown agent: $2 (one of: $AGENTS)"
+  [[ $C_OS == windows && $2 != claude ]] && die "only Claude Code runs on Windows VMs for now"
+  if [[ $2 != claude ]]; then
+    resolve_target
+    [[ $C_OS == windows ]] && die "only Claude Code runs on Windows VMs for now"
+    build_ssh_opts
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$2")" || die "installing $2 on the VM failed"
+  fi
+  P[AGENT]=$2
+  write_profile "$NAME"
+  say "\"$PROG $NAME\" opens $2 now. Once with another: $PROG $NAME --claude"
 }
 
 cmd_autostop() {
@@ -2771,6 +3007,7 @@ cmd_undo() {
     out=$(vsh destroy "$C_DOMAIN" 2>&1) || die "libvirt: $out"
   fi
   out=$(vsh snapshot-revert "$C_DOMAIN" "$snap" 2>&1) || die "libvirt: $out"
+  rm -f "$(hooks_mark)"
   say "VM $NAME is back at $snap ($when)."
   [[ $state == shutoff ]] && say "Open Claude in it again: $PROG $NAME"
   return 0
@@ -2822,7 +3059,6 @@ cmd_idle() {
 # Runs in the background while Claude runs on the VM, also after you detach.
 cmd___watch() {
   load "$1"
-  [[ $C_OS == linux ]] || return 0
   command -v flock >/dev/null || return 0
   local lock
   lock=${XDG_RUNTIME_DIR:-/tmp}/vmclaude-watch-$(id -u)-$NAME.lock
@@ -2835,13 +3071,19 @@ cmd___watch() {
     TARGET=$C_HOST
   fi
   build_ssh_opts
-  local last='' fails=0 gone=0 out id dir msg first=1
+  local last='' fails=0 gone=0 out id dir msg first=1 cmd
   while :; do
     ((first)) || sleep "${VMCLAUDE_WATCH_INTERVAL:-15}"
     first=0
     if [[ -n $C_DOMAIN && $(domstate) != running ]]; then return 0; fi
-    if ! out=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$WATCH_SH" "$last")" </dev/null 2>/dev/null) ||
-      [[ $out != claude=* ]]; then
+    if [[ $C_OS == windows ]]; then
+      cmd=$(win_cmd "$(win_watch_ps "$last")")
+    else
+      cmd=$(remote_cmd "$WATCH_SH" "$last")
+    fi
+    out=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "$cmd" </dev/null 2>/dev/null) || out=''
+    out=${out//$'\r'/}
+    if [[ $out != claude=* ]]; then
       ((++fails < 20)) || return 0
       continue
     fi
@@ -2857,7 +3099,7 @@ cmd___watch() {
 }
 
 start_watcher() {
-  [[ $C_OS == linux && ${P[NOTIFY]:-on} == on ]] || return 0
+  [[ ${P[NOTIFY]:-on} == on ]] || return 0
   [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 0
   command -v notify-send >/dev/null && command -v flock >/dev/null || return 0
   local self
@@ -2867,6 +3109,67 @@ start_watcher() {
   else
     nohup "$self" __watch "$NAME" </dev/null >/dev/null 2>&1 &
   fi
+}
+
+# ------------------------------------------------------------------ clipboard
+# What you copy in Claude's tmux session on a Linux VM lands in this
+# computer's clipboard: a second SSH session runs CLIP_SH while connect runs.
+
+clip_put() { # stdin -> this computer's clipboard
+  if [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wl-copy >/dev/null; then wl-copy
+  elif [[ -n ${DISPLAY:-} ]] && command -v xclip >/dev/null; then xclip -selection clipboard -in
+  elif [[ -n ${DISPLAY:-} ]] && command -v xsel >/dev/null; then xsel --clipboard --input
+  elif [[ $(uname -s) == Darwin ]] && command -v pbcopy >/dev/null; then pbcopy
+  else return 1
+  fi >/dev/null 2>&1
+}
+
+clip_ok() {
+  [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wl-copy >/dev/null && return 0
+  [[ -n ${DISPLAY:-} ]] && { command -v xclip >/dev/null || command -v xsel >/dev/null; } && return 0
+  [[ $(uname -s) == Darwin ]] && command -v pbcopy >/dev/null
+}
+
+clip_copy() { # reads CLIP_SH's lines
+  local line
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    [[ -n $line && $line =~ ^[A-Za-z0-9+/]+=*$ ]] || continue
+    base64 -d <<<"$line" 2>/dev/null | clip_put || true
+  done
+}
+
+CLIP_PID=
+start_clip() {
+  CLIP_PID=
+  [[ $C_OS == linux && -n $C_SESSION && ${P[CLIPBOARD]:-on} == on ]] || return 0
+  clip_ok || return 0
+  ssh "${SSH_OPTS[@]}" -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$CLIP_SH")" </dev/null 2>/dev/null > >(clip_copy) &
+  CLIP_PID=$!
+}
+
+stop_clip() {
+  [[ -n $CLIP_PID ]] || return 0
+  kill "$CLIP_PID" 2>/dev/null || true
+  wait "$CLIP_PID" 2>/dev/null || true
+  CLIP_PID=
+}
+
+cmd_clipboard() {
+  [[ $# = 2 ]] || usage_error "clipboard: give NAME and on|off"
+  local mode=$2
+  [[ $mode == on || $mode == off ]] || usage_error "clipboard: say on or off"
+  load "$1"
+  P[CLIPBOARD]=$mode
+  write_profile "$NAME"
+  if [[ $mode == off ]]; then
+    say "Clipboard sharing is off."
+    return 0
+  fi
+  say "Clipboard sharing is on: what you copy in Claude's tmux session lands in this computer's clipboard."
+  [[ $C_OS == windows ]] && say "(Not for Windows VMs: they have no tmux.)"
+  clip_ok || say "Needs xclip or xsel (X11) or wl-copy (Wayland) here, e.g.: sudo apt install xclip"
+  return 0
 }
 
 cmd_notify() {
@@ -2881,8 +3184,92 @@ cmd_notify() {
     return 0
   fi
   say "Notifications are on: when Claude on the VM needs you, a desktop notification appears here."
-  [[ $C_OS == windows ]] && say "(Not yet for Windows VMs.)"
   command -v notify-send >/dev/null || say "Install notify-send first (Debian/Ubuntu: sudo apt install libnotify-bin)."
+  return 0
+}
+
+# ------------------------------------------------------------------ open (port forwarding)
+
+# True when nothing listens on 127.0.0.1:PORT here.
+port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+open_url() { # URL
+  local o
+  for o in xdg-open open; do
+    if command -v "$o" >/dev/null; then
+      "$o" "$1" </dev/null >/dev/null 2>&1 &
+      return 0
+    fi
+  done
+  return 1
+}
+
+cmd_open() {
+  local name='' browser=1 keep=0 a l r i pid rc=0
+  local -a specs=() locals=() fwd=()
+  while (($#)); do
+    a=$1; shift
+    case $a in
+      --no-browser) browser=0 ;;
+      --keep) keep=1 ;;
+      -*) usage_error "open: unknown option $a" ;;
+      *)
+        if [[ -z $name ]] && profile_exists "$a"; then name=$a
+        elif [[ $a =~ ^([0-9]+:)?[0-9]+$ ]]; then specs+=("$a")
+        elif [[ -z $name ]]; then die "no VM profile named '$a' (see: $PROG list)"
+        else usage_error "open: not a port: $a"
+        fi ;;
+    esac
+  done
+  ((${#specs[@]})) || usage_error "open: give the VM's port, e.g. $PROG open NAME 3000"
+  [[ -n $name ]] || name=$(default_name) || usage_error "open: several VMs and no default; name one"
+  for a in "${specs[@]}"; do
+    r=$((10#${a##*:})) l=''
+    [[ $a == *:* ]] && l=$((10#${a%%:*}))
+    ((r >= 1 && r <= 65535 && ${l:-1} >= 1 && ${l:-1} <= 65535)) || die "invalid port: $a"
+    if [[ -n $l ]]; then
+      port_free "$l" || die "port $l is already in use on this computer; pick another: $PROG open $name OTHER:$r"
+    else
+      # The same port here when it is free, else the next free one.
+      for ((i = r; i < r + 100 && i <= 65535; i++)); do
+        [[ " ${locals[*]} " == *" $i "* ]] && continue
+        port_free "$i" && { l=$i; break; }
+      done
+      [[ -n $l ]] || die "no free port near $r on this computer"
+    fi
+    locals+=("$l")
+    fwd+=(-L "127.0.0.1:$l:localhost:$r")
+  done
+  load "$name"
+  resolve_target
+  build_ssh_opts
+  # LogLevel=ERROR: no "open failed" line each time the VM's port is closed.
+  ssh "${SSH_OPTS[@]}" -N -o ExitOnForwardFailure=yes -o LogLevel=ERROR "${fwd[@]}" -- "$TARGET" </dev/null &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null' INT TERM HUP
+  for ((i = 0; i < 300; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    port_free "${locals[-1]}" || break
+    sleep 0.1
+  done
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid" || rc=$?
+    trap - INT TERM HUP
+    die "could not forward the port (SSH exit code $rc). Try: $PROG doctor $NAME"
+  fi
+  for i in "${!specs[@]}"; do
+    l=${locals[i]} r=${specs[i]##*:}
+    if [[ $l == "$r" ]]; then say "Port $r of $NAME: http://localhost:$l"
+    else say "Port $r of $NAME: http://localhost:$l (port $r is taken here)"
+    fi
+    ((browser)) && { open_url "http://localhost:$l" || ((i)) || info "No browser opener (xdg-open) found; open the address yourself."; }
+  done
+  say "Stop with Ctrl-C."
+  wait "$pid" || rc=$?
+  wait "$pid" 2>/dev/null || true  # once more after Ctrl-C
+  trap - INT TERM HUP
+  ((rc == 0 || rc >= 128)) || info "$PROG: the connection to $NAME ended (SSH exit code $rc)."
+  ((keep)) || autostop
   return 0
 }
 
@@ -3128,13 +3515,13 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | agent | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
-    --hold | --no-tmux | --keep) cmd_connect "$@" ;;
+    --hold | --no-tmux | --keep | --claude | --codex | --gemini | --aider) cmd_connect "$@" ;;
     -*) usage_error "unknown option $cmd" ;;
     *)
       profile_exists "$cmd" || usage_error "unknown command or VM: $cmd"

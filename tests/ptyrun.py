@@ -7,7 +7,8 @@ import time
 
 def run_in_pty(argv, env, cwd, send=None, answers=(), timeout=20):
     """Run argv on a pseudo-terminal. Answers prompts in order: each
-    (text, reply) is sent once `text` shows up. Returns all output."""
+    (text, reply) is sent once `text` shows up (reply: a string, or a
+    function that returns one). Returns all output."""
     master, slave = pty.openpty()
     p = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=cwd,
                          start_new_session=True)
@@ -31,7 +32,7 @@ def run_in_pty(argv, env, cwd, send=None, answers=(), timeout=20):
             if answers and answers[0][0] in out[pos:]:
                 prompt, reply = answers.pop(0)
                 pos = out.index(prompt, pos) + len(prompt)
-                os.write(master, reply.encode())
+                os.write(master, (reply() if callable(reply) else reply).encode())
             if p.poll() is not None and not ready:
                 break
         else:

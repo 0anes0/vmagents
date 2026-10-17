@@ -13,7 +13,7 @@ from tests.ptyrun import run_in_pty
 
 # How vmclaude starts claude: through a wrapper that adds the "vmclaude login" token.
 WRAP = ('[sh] [-c] [[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; '
-        '[ -r "$s" ] && exec "$c" --settings "$s" "$@"; exec "$c" "$@"] [vmclaude] ')
+        'case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"] [vmclaude] ')
 
 
 def settings(home):
@@ -109,7 +109,7 @@ class ProfileTests(SandboxTest):
         self.assertRegex(self.sb.run("list", check=0).stdout, r"\* a\s")
 
     def test_help_for_every_command(self):
-        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "undo", "snapshot", "snapshots", "autosnap", "idle", "notify", "doctor", "mcp", "add", "setup",
+        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "undo", "snapshot", "snapshots", "autosnap", "idle", "notify", "open", "clipboard", "agent", "doctor", "mcp", "add", "setup",
                     "autostart", "list", "default", "desktop", "edit", "forget", "rm"):
             with self.subTest(cmd=cmd):
                 r = self.sb.run("help", cmd, check=0)

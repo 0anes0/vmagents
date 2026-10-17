@@ -48,6 +48,12 @@ also an app-menu launcher.
 - **Notifications:** when Claude on the VM asks for permission or waits for
   you, a desktop notification appears on your computer, also after you
   detached. See [Notifications](#notifications).
+- **Your browser, the VM's server:** `vmclaude open NAME 3000` makes a port
+  of the VM a port here and opens it. See [Open a port](#open-a-port).
+- **Copy on the VM, paste here:** what Claude copies, or what you copy in
+  tmux, lands in your computer's clipboard. See [Clipboard](#clipboard).
+- **Codex, Gemini CLI, aider:** `vmclaude NAME --codex` opens another agent
+  the same way, installed on first use. See [Other agents](#other-agents).
 - **One-step setup:** `vmclaude setup NAME` creates an SSH key and installs it
   on the VM (you type the VM password once). It installs tmux with the VM's
   package manager and Claude Code with the official installer.
@@ -196,7 +202,7 @@ VM includes its memory and returns to it running.
 
 ### Notifications
 
-While Claude runs on a Linux VM, `vmclaude dev` also starts a small
+While Claude runs on the VM, `vmclaude dev` also starts a small
 background process here that asks the VM every 15 seconds whether Claude
 needs you: it asked for a permission, or it finished and waited a minute for
 your answer. Then a desktop notification appears ("Claude Code (dev)").
@@ -207,8 +213,56 @@ On the VM this uses Claude Code hooks, in two files that `vmclaude dev`
 keeps in `~/.config/vmclaude/`: `hook.sh` and `claude-settings.json`, which
 vmclaude passes to Claude with `--settings`. Your own
 `~/.claude/settings.json` is not changed. The same hooks tell the idle
-shutdown whether Claude is working. Needs `notify-send` on your computer;
-`vmclaude notify dev off` turns it off. Not yet for Windows VMs.
+shutdown whether Claude is working. On Windows VMs Claude Code runs hooks
+with Git Bash, so the same `hook.sh` works there. Needs `notify-send` on your
+computer; `vmclaude notify dev off` turns it off.
+
+### Open a port
+
+Claude started a web server on the VM, say on port 3000:
+
+```sh
+vmclaude open dev 3000        # http://localhost:3000 here, opens in your browser
+vmclaude open dev 5173 8080   # several
+vmclaude open dev 9000:3000   # the VM's 3000 as localhost:9000
+```
+
+It is an SSH port forward, so it also works when the server listens only on
+the VM's `localhost`, and for VMs elsewhere. A port taken here moves to the
+next free one (it says which). `Ctrl-C` ends it; then the VM shuts down if
+nothing else uses it (`--keep`: leave it on).
+
+### Clipboard
+
+While you are connected to Claude's tmux session on a Linux VM, what lands
+in a tmux paste buffer lands in your computer's clipboard too: text Claude
+Code copies (inside tmux it uses `tmux load-buffer`) and what you copy in
+tmux copy mode. A second SSH session watches the buffers while you are
+connected. Needs `xclip` or `xsel` (X11), `wl-copy` (Wayland) or `pbcopy`
+here; `vmclaude clipboard dev off` turns it off. Terminals that understand
+OSC 52 (kitty, WezTerm, foot, iTerm2, Windows Terminal) also get it from
+tmux directly; VTE terminals (GNOME Terminal, Xfce Terminal) do not, which
+is why vmclaude does it this way.
+
+### Other agents
+
+```sh
+vmclaude dev --codex          # OpenAI Codex CLI
+vmclaude dev --gemini         # Google Gemini CLI
+vmclaude dev --aider          # aider
+vmclaude agent dev codex      # make it the default for "vmclaude dev"
+```
+
+The agent is installed on the VM the first time, for the user in
+`~/.local/bin`: Codex and aider with their own installers, Gemini CLI with
+npm (Node.js 20+ comes from the package manager when missing). Each runs in
+its own tmux session, so Claude's stays as it is, and gets the same
+autostop, idle shutdown, snapshots and clipboard. Log in inside the agent
+once: Codex's "Sign in with ChatGPT" completes in the browser here (vmclaude
+forwards its port 1455). API keys can go into
+`~/.config/vmclaude/codex-env` (or `gemini-env`, `aider-env`) on the VM as
+lines like `OPENAI_API_KEY=...` or `GEMINI_API_KEY=...`. Notifications are for
+Claude only, and other agents for Linux VMs only.
 
 Skip autostart for one login with `ssh -o SetEnv=LC_VMCLAUDE=off dev@VM`. This
 works with the default `AcceptEnv LANG LC_*` of Debian and Ubuntu. Turn
@@ -235,6 +289,8 @@ vmclaude add NAME [options]      add an existing VM, or change fields of a profi
     --session TMUX_SESSION  --no-tmux
 vmclaude setup NAME [--no-install] [--no-autostart]
 vmclaude connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmclaude NAME --codex|--gemini|--aider|--claude [ARGS...]   another agent this time
+vmclaude open [NAME] PORT...     the VM's port here, in your browser ([LOCAL:]PORT)
 vmclaude shell [--keep] NAME [CMD...]   plain shell or command on the VM
 vmclaude start NAME              boot a libvirt VM and wait for SSH
 vmclaude stop NAME [--force]     shut a libvirt VM down
@@ -244,6 +300,8 @@ vmclaude undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
 vmclaude snapshot NAME [NOTE]    take a snapshot; snapshots NAME lists them
 vmclaude autosnap NAME N|off     automatic snapshots to keep (default 3)
 vmclaude notify NAME on|off      desktop notifications when Claude needs you
+vmclaude clipboard NAME on|off   copies in tmux on the VM land in this clipboard
+vmclaude agent NAME [AGENT]      claude, codex, gemini or aider for "vmclaude NAME"
 vmclaude autostart NAME on|off
 vmclaude doctor NAME
 vmclaude login NAME [--remove]   log Claude in on the VM with this computer's browser
@@ -273,10 +331,12 @@ LIBVIRT_URI=qemu:///system
 DIR=~/work              # where Claude starts on the VM (created if missing)
 SESSION=claude          # tmux session; empty = no tmux
 OS=linux                # or windows; detected from the SSH banner on first use
+AGENT=claude            # or codex, gemini, aider
 AUTOSTOP=on             # off: the VM keeps running after you leave Claude
 AUTOSNAP=3              # automatic snapshots to keep; 0 = none
 IDLE=30                 # what "vmclaude idle" set up on the VM (0 = off)
 NOTIFY=on               # desktop notifications
+CLIPBOARD=on            # copies on the VM land in this computer's clipboard
 ```
 
 Environment: `VMCLAUDE_CONFIG_DIR` (another config folder),
@@ -477,6 +537,19 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_idle_notify.py` runs `hook.sh` with Claude's hook input, the
   watcher against a fake VM (new events become notifications, it stops when
   Claude is gone, one per VM), and checks the idle installers.
+- `tests/test_extras.py` covers `open` (a fake ssh that really listens on
+  the forwarded port; Ctrl-C on a pseudo-terminal), the clipboard script
+  against a fake tmux and its way into a fake `xclip`, the agents (sessions,
+  installing a missing one, Claude's settings for Claude only) and the
+  Windows hooks and watcher.
+- By hand, on the Arch VM: `vmclaude open` with a Python web server on the
+  VM (fetched here, Ctrl-C, VM off); the clipboard with real tmux (a
+  `tmux load-buffer -w`, as Claude Code does it, with Turkish letters, and a
+  copy-mode buffer, both arrived here; nothing left running after detaching);
+  `--codex`, `--gemini` and `--aider` installing and starting each agent, and
+  Codex's login page reachable through the forwarded port 1455. On the
+  Windows 10 VM: a real Claude session whose hooks ran under Git Bash, and
+  the notification "work: Claude is waiting for your input" here.
 - By hand, the hooks in real Claude Code 2.1: `UserPromptSubmit`,
   `PreToolUse`, `PostToolUse` and `Stop` in a `claude -p` run, and the
   Notification "Claude is waiting for your input" in an interactive one.
@@ -520,7 +593,11 @@ python3 -m unittest discover -s tests -t .
 - Only libvirt VMs are started and shut down automatically. A plain `ssh`
   login (autostart) never shuts the VM down: vmclaude is not running then
   (the idle shutdown does, later).
-- Snapshots need a qcow2 disk and libvirt; notifications are for Linux VMs.
+- Snapshots need a qcow2 disk and libvirt. The clipboard and other agents
+  need a Linux VM (tmux).
+- Only libvirt starts, stops and snapshots VMs. Other hypervisors (VirtualBox,
+  VMware, Hyper-V, a cloud VM) work through `--host`: connect, open, clipboard,
+  notifications, idle shutdown; start them yourself.
 - The idle shutdown cannot see long jobs outside Claude that use little CPU
   (a download, a `sleep`); give it more minutes or turn it off for those.
 
@@ -601,8 +678,21 @@ görüntü saklanır (`vmclaude autosnap dev 10` ya da `off`).
 
 **Bildirimler:** Claude VM'de senden izin istediğinde ya da işini bitirip
 cevabını beklediğinde bilgisayarında masaüstü bildirimi çıkar; `Ctrl-b d` ile
-ayrıldıktan sonra da. Kapatmak için: `vmclaude notify dev off`. (Şimdilik
-Linux VM'lerde.)
+ayrıldıktan sonra da; Windows VM'lerinde de. Kapatmak için:
+`vmclaude notify dev off`.
+
+**VM'deki sunucu tarayıcında:** Claude VM'de bir web sunucusu açtıysa
+`vmclaude open dev 3000` onu bilgisayarında `http://localhost:3000` olarak
+açar. Port doluysa bir sonrakini kullanır. `Ctrl-C` ile biter.
+
+**Pano:** Claude'un VM'de kopyaladığı ya da tmux'ta kopyaladığın metin
+bilgisayarının panosuna gelir (bilgisayarında `xclip` gerekir). Kapatmak için:
+`vmclaude clipboard dev off`.
+
+**Diğer araçlar:** `vmclaude dev --codex`, `--gemini` ya da `--aider` Claude
+yerine o aracı açar; ilk seferde VM'e kendisi kurar. Kalıcı yapmak için:
+`vmclaude agent dev codex`. Codex'in "Sign in with ChatGPT" girişi
+bilgisayarındaki tarayıcıda tamamlanır.
 
 **Bilgisayarındaki Claude Code'dan VM'e müdahale:** `vmclaude mcp arch --add`
 bir kez çalıştırınca, kendi bilgisayarındaki Claude Code'a VM'in içinde komut
@@ -624,8 +714,10 @@ PowerShell çalıştırma ilkesini `RemoteSigned` yapar. Windows'ta tmux olmadı
 için bağlantı kapanınca Claude oturumu da kapanır (`claude --continue` ile
 konuşmaya devam edebilirsin).
 
-**Notlar:** Otomatik başlatma yalnızca libvirt VM'lerinde çalışır. VirtualBox gibi diğer VM'leri kendin
-başlatıp `--host`/`--port` ver. Telefondan erişmek için VM'in ağdan
+**Notlar:** Otomatik başlatma, kapatma ve geri alma yalnızca libvirt
+VM'lerinde çalışır. VirtualBox, VMware ya da Hyper-V gibi diğer VM'leri kendin
+başlatıp `--host`/`--port` ver; bağlantı, port açma, pano ve bildirimler
+onlarda da çalışır. Telefondan erişmek için VM'in ağdan
 erişilebilir olması gerekir (köprü ağ, port yönlendirme ya da Tailscale).
 
 ---

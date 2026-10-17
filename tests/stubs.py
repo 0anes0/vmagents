@@ -8,12 +8,30 @@ args = sys.argv[1:]
 stdin = b"" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read()
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps({"prog": "ssh", "argv": args, "stdin": stdin.decode(errors="replace")}) + "\n")
+if os.environ.get("STUB_SSH_SLEEP"):
+    import time; time.sleep(float(os.environ["STUB_SSH_SLEEP"]))
 # Key-login probes (`ssh ... "exit 0"`) pop their exit code from a list.
 if args[-1] == "exit 0" and os.environ.get("STUB_SSH_BATCH_RC"):
     rc_file = os.environ["STUB_SSH_BATCH_RC"]
     codes = open(rc_file).read().split()
     open(rc_file, "w").write(" ".join(codes[1:] or codes))
     sys.exit(int(codes[0]))
+# Port forwarding (ssh -N -L 127.0.0.1:L:host:R): listens on L until killed.
+if "-N" in args:
+    if os.environ.get("STUB_SSH_FORWARD_RC"):
+        print("bind: Address already in use", file=sys.stderr)
+        sys.exit(int(os.environ["STUB_SSH_FORWARD_RC"]))
+    import signal, socket
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    socks = []
+    for i, a in enumerate(args):
+        if a == "-L":
+            s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", int(args[i + 1].split(":")[1]))); s.listen(8); socks.append(s)
+    import select
+    while True:
+        for s in select.select(socks, [], [])[0]:
+            c, _ = s.accept(); c.sendall(b"hello from the VM\n"); c.close()
 if os.environ.get("STUB_SSH_OUTPUT") is not None:
     sys.stdout.write(os.environ["STUB_SSH_OUTPUT"])
     sys.exit(0)

@@ -40,7 +40,7 @@ class DetectTests(SandboxTest):
         self.sb.run("add", "vm", "--host", "127.0.0.1", "--port", str(port), check=0)
         r = self.sb.run("vm", check=0)
         conf = (self.sb.conf / "hosts" / "vm.conf").read_text()
-        return r, conf, self.sb.calls("ssh")[0]["argv"][-1]
+        return r, conf, self.sb.calls("ssh")[-1]["argv"][-1]  # after the hooks on Windows
 
     def test_windows_banner(self):
         r, conf, cmd = self.detect(WIN_BANNER)

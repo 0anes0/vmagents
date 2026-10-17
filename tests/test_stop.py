@@ -140,7 +140,10 @@ class AutostopTests(Base):
     def test_windows_check(self):
         self.sb.run("add", "vm", "--os", "windows", check=0)
         self.sb.run("vm", check=0)
-        _, script = decode(self.sb.calls("ssh")[1]["argv"][-1])
+        scripts = [decode(c["argv"][-1])[1] for c in self.sb.calls("ssh")]
+        self.assertIn("hook.sh", scripts[0])  # Claude's hooks, the first time
+        self.assertIn("Invoke-Claude", scripts[1])
+        script = scripts[2]
         self.assertIn("Win32_ComputerSystem", script)
         self.assertIn("Get-Process claude", script)
         self.assertIn("shutdown", self.virsh_cmds())
