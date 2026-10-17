@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # vmclaude — open Claude Code inside a virtual machine over SSH, in one step.
 # https://github.com/emincan2000/vmclaude
-# shellcheck disable=SC2329 # commands are called by name ("cmd_$cmd" in main)
+# shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
 VERSION=0.10.0
