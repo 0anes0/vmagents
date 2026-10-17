@@ -295,31 +295,50 @@ vmagents ui
 ```
 
 The list shows your VMs with state, RAM, CPUs, AI assistants and ports; the
-right side, the details of the selected one. `n` opens the form for a new VM:
+right side, the details of the selected one. Everything works from the
+keyboard, with Vim keys too (`j`/`k` to move, `l` or Enter to open, `h` or Esc
+to go back). `n` opens the form for a new VM:
 
 ![New VM](docs/ui-new.png)
 
 It shows the `vmagents create` command line it is going to run, then the
 output while the VM is made (download, cloud-init, tmux, the assistants), and
-offers to open it or to log Claude in.
+offers to open it.
 
-| Key | |
+**Opening a VM** (Enter) asks how: a shell, Claude Code, Codex, Gemini CLI,
+OpenCode or aider. It opens **inside the UI**, in a terminal tab; F1 to F6
+open the others next to it, and `Ctrl+]` goes back to the list while they
+keep running (Enter on that VM returns to them). A tab closes when what runs
+in it ends.
+
+![A shell and Claude Code in tabs](docs/ui-session.png)
+
+| Key (list) | |
 |---|---|
-| `Enter` | open the VM's AI assistant (the UI steps aside until you quit it) |
-| `a` | open another one: Claude Code, Codex, Gemini CLI, OpenCode, aider |
+| `j` / `k` | down / up |
+| `Enter`, `l` | open: shell or AI assistant, in a terminal tab |
+| `s` | a shell on the VM, straight away |
 | `n` | new VM |
+| `u` | snapshots: pick one and go back to it, take one with a name and a label, change a label, delete |
 | `o` | ports: forward them now (`o` again stops), every time you connect, or to your LAN too |
-| `t` / `s` / `l` | start or stop / shell / log Claude in |
-| `p` / `u` | snapshot / undo (pick the snapshot) |
-| `r` | RAM and CPUs (shuts the VM down first) |
+| `t` / `r` | start or stop / RAM and CPUs (shuts the VM down first) |
 | `d` | delete (type the name to confirm; profiles of VMs not made by vmagents are only removed) |
-| `q` | quit (stops the port forwards the UI started) |
+| `L` | language: English, Türkçe (remembered) |
+| `q` | quit (asks first when terminals are open) |
+
+| Key (terminal tab) | |
+|---|---|
+| `F1` | shell |
+| `F2` … `F6` | Claude Code, Codex, Gemini CLI, OpenCode, aider |
+| `Ctrl+]` | back to the list |
+| everything else | goes to the VM; the mouse wheel scrolls back |
 
 The UI only runs this `vmagents` and reads its `--json` output, so everything
 it does works from the command line too. It is a [Textual](https://textual.textualize.io/)
-app inside the same script: it needs Python 3 with Textual 8, which
-`vmagents ui` fetches by itself when [uv](https://docs.astral.sh/uv/) is
-installed (or `pip install --user 'textual>=8'`).
+app inside the same script, with [pyte](https://github.com/selectel/pyte) as
+its terminal: it needs Python 3 with both, which `vmagents ui` fetches by
+itself when [uv](https://docs.astral.sh/uv/) is installed (or
+`pip install --user 'textual>=8' pyte`).
 
 ## Commands
 
@@ -350,7 +369,8 @@ vmagents stop NAME [--force]     shut a libvirt VM down
 vmagents autostop NAME on|off    shut the VM down when you leave Claude (default on)
 vmagents idle NAME MINUTES|off   the VM shuts itself down when unused (create sets 30)
 vmagents undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
-vmagents snapshot NAME [NOTE]    take a snapshot; snapshots NAME lists them
+vmagents snapshot NAME [--name SNAP] [LABEL]   take a snapshot; snapshots NAME lists them
+vmagents snapshot NAME --label SNAP LABEL      change a snapshot's label
 vmagents autosnap NAME N|off     automatic snapshots to keep (default 3)
 vmagents notify NAME on|off      desktop notifications when Claude needs you
 vmagents clipboard NAME on|off   copies in tmux on the VM land in this clipboard
@@ -593,11 +613,19 @@ python3 -m unittest discover -s tests -t .
   watcher against a fake VM (new events become notifications, it stops when
   Claude is gone, one per VM), and checks the idle installers.
 - `tests/test_ui.py` drives the terminal UI with Textual's test pilot
-  against a fake `vmagents`: the list, the new-VM form and its checks, every
-  key. It needs Textual (`uv run --with 'textual>=8,<9' python -m unittest
-  tests.test_ui`), else it is skipped. `tests/test_ui_backend.py` covers what
+  against a fake `vmagents`: the list and its Vim keys, the language switch,
+  the new-VM form and its checks, the snapshot screen, and terminal tabs with
+  a real pseudo-terminal (typing into them, F-keys, Ctrl+], tabs closing). It
+  needs Textual and pyte (`uv run --with 'textual>=8,<9' --with pyte python -m
+  unittest tests.test_ui`), else it is skipped. `tests/test_ui_backend.py` covers what
   it builds on: `list`/`images`/`snapshots --json`, `ports`, `create`/`setup
   --agents`, `resize` and `open --lan`.
+- By hand, the UI in a real terminal (read back through a second terminal
+  emulator): a shell tab on a Debian VM running commands, Claude Code in tmux
+  on the Arch VM inside a tab (with tmux's line drawing), back to the list and
+  into the tabs again, the switch to Turkish; snapshot names and labels
+  (including `&`, `<`, Turkish letters) and undo to a relabeled snapshot on
+  real libvirt.
 - By hand, the UI on this computer's libvirt: a new Arch VM with Claude Code,
   Codex and port 8000 made from the form (the port reached here while
   connected, gone after detaching), then RAM and CPUs changed, and the VM
@@ -758,13 +786,19 @@ açar. Port doluysa bir sonrakini kullanır. `Ctrl-C` ile biter.
 bilgisayarının panosuna gelir (bilgisayarında `xclip` gerekir). Kapatmak için:
 `vmagents clipboard dev off`.
 
-**Terminal arayüzü:** `vmagents ui` her şeyi tek ekranda toplar. `n` ile yeni
-VM: sistem, RAM, işlemci, disk, kurulacak yapay zekâ yardımcıları (Claude
-Code, Codex, Gemini CLI, OpenCode, aider) ve açılacak portlar seçilir; arayüz aynı işi
-yapan `vmagents create` komutunu da gösterir. Listede `Enter` seçili VM'de
-yardımcıyı açar; `o` portlar, `t` başlat/durdur, `p` anlık görüntü, `u` geri
-alma, `r` RAM/işlemci, `d` silme (adını yazarak onaylanır). Python ve Textual
-gerekir; `uv` kuruluysa vmagents Textual'ı kendisi getirir.
+**Terminal arayüzü:** `vmagents ui` her şeyi tek ekranda toplar ve tamamen
+klavyeyle kullanılır (`j`/`k` gezinme, `l` ya da Enter açma, `h` ya da Esc
+geri). `L` arayüzün dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
+`n` ile yeni VM: sistem, RAM, işlemci, disk, kurulacak yapay zekâ yardımcıları
+(Claude Code, Codex, Gemini CLI, OpenCode, aider) ve açılacak portlar seçilir;
+arayüz aynı işi yapan `vmagents create` komutunu da gösterir. Bir VM'de Enter
+nasıl açmak istediğini sorar (kabuk ya da bir yardımcı) ve onu **arayüzün
+içinde**, bir terminal sekmesinde açar; F1–F6 diğerlerini yan sekmelerde açar,
+`Ctrl+]` listeye döner (sekmeler çalışmaya devam eder). `u` anlık görüntü
+ekranını açar: istediğini seçip ona dönersin, ad ve etiketle yenisini alırsın,
+etiketini değiştirir ya da silersin. `o` portlar, `t` başlat/durdur, `r`
+RAM/işlemci, `d` silme (adını yazarak onaylanır). Python, Textual ve pyte
+gerekir; `uv` kuruluysa vmagents bunları kendisi getirir.
 
 **Diğer araçlar:** `vmagents dev --codex`, `--gemini`, `--opencode` ya da `--aider` Claude
 yerine o aracı açar; ilk seferde VM'e kendisi kurar. Kalıcı yapmak için:

@@ -141,10 +141,21 @@ if cmd == "snapshot-list":
     for s in snaps:
         print(f" {s[0]}   {s[1]}   {s[2]}")
     print(); sys.exit(0)
+if cmd == "snapshot-create" and "--redefine" in args:
+    import re
+    xml = open(args[2]).read()
+    name = re.search(r"<name>(.*?)</name>", xml).group(1)
+    d = re.search(r"^  <description>(.*?)</description>", xml, re.M)
+    find_snap(name)[3] = d.group(1).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&") if d else ""
+    save_snaps(); print(f"Domain snapshot {name} defined"); sys.exit(0)
 if cmd == "snapshot-delete":
     snaps.remove(find_snap(args[2])); save_snaps(); print(f"Domain snapshot {args[2]} deleted"); sys.exit(0)
 if cmd == "snapshot-dumpxml":
-    print(f"<domainsnapshot>\n  <description>{find_snap(args[2])[3]}</description>\n</domainsnapshot>"); sys.exit(0)
+    s = find_snap(args[2])
+    d = s[3].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    print(f"<domainsnapshot>\n  <name>{s[0]}</name>\n" + (f"  <description>{d}</description>\n" if d else "")
+          + "  <state>shutoff</state>\n  <domain type='kvm'>\n    <name>testvm</name>\n"
+          "    <description>created by vmagents</description>\n  </domain>\n</domainsnapshot>"); sys.exit(0)
 if cmd == "snapshot-revert":
     s = find_snap(args[2])
     open(path, "w").write(f"{'running' if s[2] == 'running' else 'shut off'}|{ip}|{polls}"); sys.exit(0)

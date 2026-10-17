@@ -120,3 +120,21 @@ class SnapshotTests(Base):
         self.assertIn("info  snapshots: 1, newest auto-1", r.stdout)
         self.assertIn("ok    idle shutdown: after 30 minutes without use", r.stdout)
         self.assertIn("ok    Claude hooks (idle state, notifications): installed", r.stdout)
+
+    def test_names_and_labels(self):
+        r = self.sb.run("snapshot", "vm", "--name", "clean-install", "fresh & <new>", check=0)
+        self.assertIn("Snapshot clean-install taken.", r.stdout)
+        self.assertEqual(self.snaps()[0][0], "clean-install")
+        self.assertIn("already has a snapshot named clean-install",
+                      self.sb.run("snapshot", "vm", "--name", "clean-install").stderr)
+        self.assertIn("names starting with auto- are for automatic snapshots",
+                      self.sb.run("snapshot", "vm", "--name", "auto-1").stderr)
+        self.assertIn("letters, digits", self.sb.run("snapshot", "vm", "--name", "a b").stderr)
+        snaps = json.loads(self.sb.run("snapshots", "vm", "--json", check=0).stdout)
+        self.assertEqual(snaps[0]["description"], "fresh & <new>")
+        self.sb.run("snapshot", "vm", "--label", "clean-install", "worked: ü & <ok>", check=0)
+        self.assertEqual(self.snaps()[0][3], "worked: ü & <ok>")
+        self.sb.run("snapshot", "vm", "--label", "clean-install", "", check=0)
+        snaps = json.loads(self.sb.run("snapshots", "vm", "--json", check=0).stdout)
+        self.assertEqual(snaps[0]["description"], "")  # not the VM's own description
+        self.assertEqual(self.sb.run("snapshot", "vm", "--label", "nope", "x").returncode, 1)

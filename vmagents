@@ -6,7 +6,7 @@
 # shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.11.0
+VERSION=0.12.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -382,21 +382,25 @@ Examples:
 EOF
       ;;
     snapshot | snapshots) cat <<EOF
-vmagents snapshots NAME
-vmagents snapshot NAME [NOTE]
+vmagents snapshots NAME [--json]
+vmagents snapshot NAME [--name SNAPSHOT] [LABEL]
+vmagents snapshot NAME --label SNAPSHOT LABEL
 vmagents snapshot NAME --delete SNAPSHOT
 
 A snapshot saves the whole VM (its disk; for a running VM its memory too),
 so "vmagents undo" can return to it. vmagents takes one by itself each time
 it starts the VM ("auto-..."; see "vmagents help autosnap"). snapshot takes
-one now ("snap-..."), with an optional note; these are never deleted
-automatically. snapshots lists them all, oldest first.
+one now, named "snap-DATE-TIME" or what you give with --name, with an
+optional label; these are never deleted automatically. --label changes the
+label of any snapshot. snapshots lists them all, oldest first.
 
 They live inside the VM's disk file (libvirt internal snapshots) and need
 a qcow2 disk. They take space as the VM changes after them.
 
 Examples:
   vmagents snapshot dev "before the big refactor"
+  vmagents snapshot dev --name clean-install "fresh, with Node"
+  vmagents snapshot dev --label auto-20261016-224745 "worked fine here"
   vmagents snapshots dev
   vmagents snapshot dev --delete snap-20261016-224927
 EOF
@@ -525,21 +529,30 @@ EOF
     ui) cat <<EOF
 vmagents ui
 
-A terminal UI for everything vmagents does. The list shows your VMs with
-their state, RAM, CPUs, AI assistants and ports; on the right the details of
-the selected one. Keys:
-  Enter  open the VM's AI assistant (the UI steps aside until you quit it)
-  a      open another one: Claude Code, Codex, Gemini CLI, OpenCode, aider
-  n      new VM: name, system, RAM, CPUs, disk, AI assistants, ports, idle
-         shutdown; it shows the same "vmagents create" command line
-  o      ports: forward them now (and stop again), every time, or to your LAN
-  t      start or stop      s  shell       l  log Claude in
-  p      snapshot           u  undo (back to a snapshot)
-  r      RAM and CPUs       d  delete (asks you to type the name)
-  q      quit (stops port forwards the UI started)
+A terminal UI for everything vmagents does, usable without a mouse. The list
+shows your VMs with their state, RAM, CPUs, AI assistants and ports; on the
+right the details of the selected one. Keys on the list:
+  j / k    down / up (or the arrow keys)
+  Enter, l open the VM: it asks how (a shell, Claude Code, Codex, Gemini CLI,
+           OpenCode, aider, or logging Claude in) and opens it inside the UI,
+           in a terminal tab; Enter on a VM with open tabs goes back to them
+  s        a shell on the VM, straight away
+  n        new VM: name, system, RAM, CPUs, disk, AI assistants, ports, idle
+           shutdown; it shows the same "vmagents create" command line
+  u        snapshots: pick one with j/k and go back to it (Enter), take one
+           with a name and a label (n), change a label (e), delete one (d)
+  o        ports: forward them now (and stop again), every time, or to your LAN
+  t        start or stop          r  RAM and CPUs
+  d        delete (asks you to type the name)
+  L        language: English, Türkçe (remembered)
+  q        quit (asks first when terminals are open)
+In the terminal tabs every key goes to the VM, except:
+  F1       a shell               F2 to F6  Claude Code, Codex, Gemini CLI, OpenCode, aider
+  Ctrl+]   back to the list (the tabs keep running)
+A tab closes when what runs in it ends. The mouse wheel scrolls back.
 
 It runs this vmagents, so all it does works from the command line too. Needs
-Python with Textual 8; with uv installed vmagents fetches it by itself.
+Python with Textual 8 and pyte; with uv installed vmagents fetches them itself.
 EOF
       ;;
     clipboard) cat <<EOF
@@ -3236,13 +3249,21 @@ auto_snapshot() {
   done < <(snapshot_rows | awk -F '\t' -v keep="$keep" '$1 ~ /^auto-/ { s[n++] = $1 } END { for (i = 0; i < n - keep; i++) print s[i] }')
 }
 
+xml_escape() { local v=$1; v=${v//&/"&amp;"} v=${v//</"&lt;"} v=${v//>/"&gt;"}; printf '%s' "$v"; }
+
 cmd_snapshot() {
-  local name='' note='' del='' snap out
+  local name='' note='' del='' snap='' label='' relabel=0 out xml tmp
   while (($#)); do
     case $1 in
       --delete)
         (($# >= 2)) || usage_error "snapshot: --delete needs a snapshot name"
         del=$2; shift 2 ;;
+      --name)
+        (($# >= 2)) || usage_error "snapshot: --name needs a name"
+        snap=$2; shift 2 ;;
+      --label)
+        (($# >= 3)) || usage_error "snapshot: --label needs a snapshot name and the label"
+        snap=$2 label=$3 relabel=1; shift 3 ;;
       -*) usage_error "snapshot: unknown option $1" ;;
       *)
         if [[ -z $name ]]; then name=$1; elif [[ -z $note ]]; then note=$1; else usage_error "snapshot: too many arguments"; fi
@@ -3257,7 +3278,29 @@ cmd_snapshot() {
     say "Deleted snapshot $del."
     return 0
   fi
-  snap=snap-$(date +%Y%m%d-%H%M%S)
+  [[ $label != *$'\n'* && $note != *$'\n'* ]] || die "a label is one line"
+  if ((relabel)); then
+    # The label is the snapshot's description: change it in its metadata.
+    xml=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>&1) || die "libvirt: $xml"
+    tmp=$(mktemp)
+    D=$(xml_escape "$label") awk '
+      /<domain[ >]/ { indomain = 1 }
+      !indomain && /^ *<description>.*<\/description> *$/ { next }
+      { print }
+      !indomain && !added && /<\/name>/ { if (ENVIRON["D"] != "") print "  <description>" ENVIRON["D"] "</description>"; added = 1 }
+    ' <<<"$xml" >"$tmp"
+    out=$(vsh snapshot-create "$C_DOMAIN" "$tmp" --redefine 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
+    rm -f "$tmp"
+    say "Snapshot $snap: ${label:-(no label)}"
+    return 0
+  fi
+  if [[ -n $snap ]]; then
+    [[ $snap =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "a snapshot name may have letters, digits, . _ and - only"
+    [[ $snap != auto-* ]] || die "names starting with auto- are for automatic snapshots (they get deleted)"
+    snapshot_rows | cut -f1 | grep -qxF -- "$snap" && die "$NAME already has a snapshot named $snap"
+  else
+    snap=snap-$(date +%Y%m%d-%H%M%S)
+  fi
   [[ $(domstate) == running ]] && info "The VM is running: its memory is saved too, and it pauses for a moment..."
   out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "${note:-taken with vmagents snapshot}" 2>&1) ||
     die "libvirt: $out"
@@ -3276,7 +3319,7 @@ cmd_snapshots() {
     printf '['
     while IFS=$'\t' read -r snap when state; do
       [[ -n $snap ]] || continue
-      desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n 's:.*<description>\(.*\)</description>.*:\1:p' | head -n 1)
+      desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n '/<domain[ >]/q; s:.*<description>\(.*\)</description>.*:\1:p' | head -n 1 | sed 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g')
       printf '%s\n {"name": %s, "time": %s, "state": %s, "description": %s}' "$sep" "$(json_str "$snap")" \
         "$(json_str "$when")" "$(json_str "$state")" "$(json_str "$desc")"
       sep=,
@@ -3289,7 +3332,7 @@ cmd_snapshots() {
     return 0
   fi
   while IFS=$'\t' read -r snap when state; do
-    desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n 's:.*<description>\(.*\)</description>.*:\1:p' | head -n 1)
+    desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n '/<domain[ >]/q; s:.*<description>\(.*\)</description>.*:\1:p' | head -n 1 | sed 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g')
     [[ $state == shutoff ]] && state="VM off" || state="VM $state"
     printf '%-24s %s  %-11s %s\n' "$snap" "$when" "$state" "$desc"
   done <<<"$rows"
@@ -3638,34 +3681,47 @@ cmd_ui() {
   mkdir -p "$CACHE_DIR" || die "cannot create $CACHE_DIR"
   f=$CACHE_DIR/ui-$VERSION.py
   [[ -f $f && $(<"$f") == "$UI_PY" ]] || printf '%s\n' "$UI_PY" >"$f" || die "cannot write $f"
-  export VMAGENTS_BIN=$self
-  if python3 -c 'from textual.app import App; App.suspend; import textual.widgets' 2>/dev/null; then
+  export VMAGENTS_BIN=$self VMAGENTS_CONF_DIR=$CONF_DIR
+  if python3 -c 'import textual.widgets, pyte; from textual.binding import BindingsMap' 2>/dev/null; then
     exec python3 "$f"
   elif command -v uv >/dev/null; then
-    exec uv run --quiet --no-project --with 'textual>=8,<9' python "$f"
+    exec uv run --quiet --no-project --with 'textual>=8,<9' --with 'pyte>=0.8.2' python "$f"
   fi
-  die "the UI needs Python with Textual: install uv (https://docs.astral.sh/uv/getting-started/installation/), or: pip install --user 'textual>=8'"
+  die "the UI needs Python with Textual and pyte: install uv (https://docs.astral.sh/uv/getting-started/installation/), or: pip install --user 'textual>=8' pyte"
 }
 
 UI_PY=$(cat <<'UI_END'
-"""vmagents ui: a terminal UI for vmagents. It only runs the vmagents command
+"""vmagents ui: a terminal UI for vmagents. It runs the vmagents command
 (VMAGENTS_BIN) and reads its JSON (list --json, images --json, snapshots
---json), so everything it does can also be done by hand."""
+--json), so everything it does can also be done by hand. Shells and AI
+assistants open inside it, as tabs of a built-in terminal (pyte)."""
+import asyncio
+import fcntl
+import functools
 import json
 import os
+import pty
 import re
 import shlex
 import signal
+import struct
 import subprocess
+import termios
 import threading
 
+import pyte
+from rich.segment import Segment
+from rich.style import Style
 from textual import on, work
-from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.app import App
+from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Input, Label, OptionList,
-                             RichLog, Select, Static)
+from textual.strip import Strip
+from textual.widget import Widget
+from textual.widgets import (Button, Checkbox, ContentSwitcher, DataTable, Footer, Header, Input, Label,
+                             OptionList, RichLog, Select, Static, Tab, Tabs)
 from textual.widgets.option_list import Option
 
 VMAGENTS = os.environ.get("VMAGENTS_BIN", "vmagents")
@@ -3673,10 +3729,165 @@ AGENTS = [("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"
           ("aider", "aider")]
 AGENT_NAMES = dict(AGENTS)
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SNAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PORTS_RE = re.compile(r"^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$")
 MEMORY_MB = [1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536]
-IDLE = [("off", 0), ("15 minutes", 15), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120), ("4 hours", 240)]
+IDLE_MINUTES = [0, 15, 30, 60, 120, 240]
 
+# ------------------------------------------------------------------ languages
+# English is the key; other languages map it. Add one: a dict below and an
+# entry in LANGUAGES.
+
+LANGUAGES = [("en", "English"), ("tr", "Türkçe")]
+TEXTS = {"tr": {
+    # list
+    "Open": "Aç", "New VM": "Yeni VM", "Shell": "Kabuk", "Ports": "Portlar", "Start/stop": "Başlat/durdur",
+    "Snapshots": "Anlık görüntüler", "Resources": "Kaynaklar", "Delete": "Sil", "Quit": "Çık",
+    "Name": "Ad", "State": "Durum", "RAM": "RAM", "CPUs": "CPU", "AI": "YZ", "Down": "Aşağı", "Up": "Yukarı",
+    "running": "açık", "off": "kapalı", "paused": "duraklatıldı", "missing": "yok", "not libvirt": "libvirt değil",
+    "working": "işlem sürüyor",
+    "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
+    "[dim]Enter or l: open · j/k: move · n: new VM · o: ports · t: start/stop · u: snapshots · L: language · "
+    "q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · o: portlar · t: başlat/durdur · "
+    "u: anlık görüntüler · L: dil · q: çık[/]",
+    "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
+    "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
+        "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zekâ "
+        "yardımcılarını ve portları seç.\n\nYa da var olan birini ekle: vmagents add AD --host IP",
+    "libvirt VM {d}": "libvirt VM'i {d}", "{ram} RAM · {cpus} CPUs · {snaps} snapshots":
+        "{ram} RAM · {cpus} CPU · {snaps} anlık görüntü",
+    "Opens: [b]{agent}[/b]": "Açılan: [b]{agent}[/b]", "   installed: {list}": "   kurulu: {list}",
+    "Ports: {list} (while connected)": "Portlar: {list} (bağlıyken)", "Ports: none": "Portlar: yok",
+    "idle shutdown {m} min": "boşta {m} dk sonra kapanır", "no idle shutdown": "boşta kapanma yok",
+    "autostop on": "çıkınca kapanır", "autostop off": "çıkınca açık kalır",
+    "notifications on": "bildirimler açık", "notifications off": "bildirimler kapalı",
+    "clipboard on": "pano açık", "clipboard off": "pano kapalı",
+    "Open here: {list}  [dim](Enter to go back)[/]": "Burada açık: {list}  [dim](dönmek için Enter)[/]",
+    "[dim]From a terminal: vmagents {n}{more}[/]": "[dim]Terminalden: vmagents {n}{more}[/]",
+    "No VM selected. Press n to make one.": "Seçili VM yok. Oluşturmak için n'ye bas.",
+    "{n} is busy; wait a moment.": "{n} şu an meşgul; biraz bekle.",
+    "{n} is not a libvirt VM: vmagents cannot start, stop or snapshot it.":
+        "{n} bir libvirt VM'i değil: vmagents onu başlatamaz, durduramaz, anlık görüntüsünü alamaz.",
+    "vmagents {cmd} failed (exit code {rc})": "vmagents {cmd} başarısız oldu (çıkış kodu {rc})",
+    "Language: English": "Dil: Türkçe",
+    # open
+    "[b]Open {n}[/b] as:": "[b]{n}[/b] nasıl açılsın?", "Shell   [dim]a terminal on the VM[/]":
+        "Kabuk   [dim]VM'de bir terminal[/]", "default": "varsayılan", "installs it first": "önce kurulur",
+    "Log Claude in": "Claude'a giriş yap",
+    "[dim]Inside: F1 to F6 open the others as tabs, Ctrl+] goes back to the list.[/]":
+        "[dim]İçeride: F1–F6 diğerlerini sekme olarak açar, Ctrl+] listeye döner.[/]",
+    "VM list": "VM listesi", "Log in": "Giriş",
+    "Only Claude Code runs on Windows VMs.": "Windows VM'lerinde yalnızca Claude Code çalışır.",
+    "{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the VM).":
+        "{count} terminal açık. Çıkınca kapanırlar (tmux içindeki yardımcılar VM'de çalışmaya devam eder).",
+    # dialogs
+    "Yes": "Evet", "Cancel": "Vazgeç", "OK": "Tamam", "Apply": "Uygula", "Remove": "Kaldır", "Stop": "Durdur",
+    "Back": "Geri", "Restore": "Geri dön",
+    # snapshots
+    "Snapshots of {n}": "{n} anlık görüntüleri", "Time": "Zaman", "Label": "Etiket", "VM off": "VM kapalı",
+    "VM on": "VM açık", "Go back to it": "Ona dön", "Take one": "Yeni al", "Edit label": "Etiketi değiştir",
+    "Back to the list": "Listeye dön",
+    "[dim]j/k: move · Enter or l: go back to it · n: take one · e: label · d: delete · h or Esc: back[/]":
+        "[dim]j/k: gezin · Enter ya da l: ona dön · n: yeni al · e: etiket · d: sil · h ya da Esc: geri[/]",
+    "No snapshots yet. One is taken each time vmagents starts the VM; n takes one now.":
+        "Henüz anlık görüntü yok. vmagents VM'i her başlattığında bir tane alınır; n ile şimdi alabilirsin.",
+    "Put {n} back to [b]{snap}[/b]?\nEverything changed in the VM since then is lost.":
+        "{n}, [b]{snap}[/b] anına geri dönsün mü?\nO zamandan beri VM'de değişen her şey kaybolur.",
+    "Delete the snapshot [b]{snap}[/b] of {n}?": "{n} için [b]{snap}[/b] anlık görüntüsü silinsin mi?",
+    "New snapshot of {n}": "{n} için yeni anlık görüntü",
+    "Name [dim](letters, digits, . _ -; empty: automatic)[/]":
+        "Ad [dim](harf, rakam, . _ -; boş: otomatik)[/]",
+    "Label [dim](optional, e.g. before the big refactor)[/]":
+        "Etiket [dim](isteğe bağlı, ör. büyük değişiklikten önce)[/]",
+    "A name may have letters, digits, . _ and - only.": "Ad yalnızca harf, rakam, . _ ve - içerebilir.",
+    "There is a snapshot named {s} already.": "{s} adlı bir anlık görüntü zaten var.",
+    "Label of {snap}:": "{snap} etiketi:",
+    # resources
+    "[b]Resources of {n}[/b]\nThis computer: {ram} RAM, {cpus} CPUs. The VM has to be off; it is shut down first.":
+        "[b]{n} kaynakları[/b]\nBu bilgisayar: {ram} RAM, {cpus} CPU. VM'in kapalı olması gerekir; önce kapatılır.",
+    # ports
+    "Ports of {n} to reach from this computer (a web server the agent started, for example):":
+        "{n} için bu bilgisayardan erişilecek portlar (örneğin yardımcının başlattığı bir web sunucusu):",
+    "Ports like 3000,5173 (or HERE:VM, e.g. 9000:3000).": "3000,5173 gibi portlar (ya da BURADA:VM, ör. 9000:3000).",
+    "Forward them now": "Şimdi yönlendir", "Open them in the browser": "Tarayıcıda aç",
+    "Also reachable from other devices on my network": "Ağımdaki diğer cihazlardan da erişilsin",
+    "Forward them every time I connect": "Her bağlandığımda yönlendir",
+    "Forwarding now:\n{list}\n\nStop it?": "Şu an yönlendiriliyor:\n{list}\n\nDurdurulsun mu?",
+    "Forwarding ports of {n} failed; see the log.": "{n} portları yönlendirilemedi; kayda bak.",
+    "port {p} at {url}": "port {p}: {url}",
+    # delete
+    "{n} was not made by vmagents, so only its profile can be removed (the VM stays as it is). Remove the profile?":
+        "{n} vmagents ile oluşturulmadı; yalnızca profili kaldırılabilir (VM olduğu gibi kalır). Profil kaldırılsın mı?",
+    "[b]Delete {n}[/b] with its disk and snapshots? This cannot be undone.\nType its name to confirm:":
+        "[b]{n}[/b] diski ve anlık görüntüleriyle silinsin mi? Bu geri alınamaz.\nOnaylamak için adını yaz:",
+    # new VM
+    "Create": "Oluştur", "Create  (Ctrl-S)": "Oluştur  (Ctrl-S)",
+    "[b]New VM[/b]  A Linux VM from an official cloud image, with the AI assistants you choose, ready to use.":
+        "[b]Yeni VM[/b]  Resmî bir bulut imajından, seçtiğin yapay zekâ yardımcılarıyla kullanıma hazır bir Linux VM.",
+    "[red]Cannot create VMs here yet: missing {need}.[/]\nDebian/Ubuntu: sudo apt install libvirt-daemon-system "
+    "virtinst xorriso curl": "[red]Burada henüz VM oluşturulamıyor: {need} eksik.[/]\nDebian/Ubuntu: sudo apt "
+    "install libvirt-daemon-system virtinst xorriso curl",
+    "System": "Sistem", "  (downloaded)": "  (indirildi)", "RAM [dim](here: {total}, free {free})[/]":
+        "RAM [dim](burada: {total}, boş {free})[/]", "CPUs [dim](here: {n})[/]": "CPU [dim](burada: {n})[/]",
+    "Disk GB": "Disk GB", " [dim]({n} free)[/]": " [dim]({n} boş)[/]",
+    "AI assistants [dim](the first one checked opens with \"vmagents NAME\")[/]":
+        "Yapay zekâ yardımcıları [dim](işaretli ilki \"vmagents AD\" ile açılır)[/]",
+    "Ports [dim](reach them here while connected)[/]": "Portlar [dim](bağlıyken buradan erişilir)[/]",
+    "e.g. 3000,5173": "ör. 3000,5173", "Shut down when unused for": "Kullanılmazsa kapanma süresi",
+    "15 minutes": "15 dakika", "30 minutes": "30 dakika", "1 hour": "1 saat", "2 hours": "2 saat",
+    "4 hours": "4 saat",
+    "Give the VM a name.": "VM'e bir ad ver.",
+    "The name may have letters, digits, . _ and - only.": "Ad yalnızca harf, rakam, . _ ve - içerebilir.",
+    "There is a VM named {n} already.": "{n} adlı bir VM zaten var.",
+    "Disk: a size in GB, at least 5.": "Disk: GB cinsinden, en az 5.",
+    "Disk: the libvirt pool has {n} GB free (the disk grows as it fills, but not beyond that).":
+        "Disk: libvirt havuzunda {n} GB boş yer var (disk doldukça büyür ama bundan öteye geçemez).",
+    "Choose at least one AI assistant.": "En az bir yapay zekâ yardımcısı seç.",
+    "Ports: numbers separated by commas, e.g. 3000,5173.": "Portlar: virgülle ayrılmış sayılar, ör. 3000,5173.",
+    "Ports go from 1 to 65535.": "Portlar 1 ile 65535 arasında olur.",
+    "[dim]The same from a terminal: vmagents {cmd}[/]": "[dim]Terminalden aynısı: vmagents {cmd}[/]",
+    "[b]Creating {n}[/b]: downloading the image (once), making the VM, then installing tmux and the AI "
+    "assistants. This takes a few minutes.": "[b]{n} oluşturuluyor[/b]: imaj indiriliyor (bir kez), VM "
+    "oluşturuluyor, sonra tmux ve yapay zekâ yardımcıları kuruluyor. Birkaç dakika sürer.",
+    "Open {agent}": "{agent} aç", "[green]Done.[/] {n} is ready.": "[green]Tamam.[/] {n} hazır.",
+    "[red]Creating {n} failed[/] (exit code {rc}); see above. If a half-made VM is left, delete it in the list (d).":
+        "[red]{n} oluşturulamadı[/] (çıkış kodu {rc}); yukarıya bak. Yarım kalmış bir VM varsa listeden sil (d).",
+}}
+LANG = "en"
+
+
+def T(text, **kw):
+    s = TEXTS.get(LANG, {}).get(text, text)
+    return s.format(**kw) if kw else s
+
+
+def conf_dir():
+    return os.environ.get("VMAGENTS_CONF_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "vmagents")
+
+
+def load_lang():
+    try:
+        with open(os.path.join(conf_dir(), "ui.json")) as f:
+            lang = json.load(f).get("lang")
+        if lang in dict(LANGUAGES):
+            return lang
+    except (OSError, ValueError, AttributeError):
+        pass
+    env = os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or ""
+    return "tr" if env.lower().startswith("tr") else "en"
+
+
+def save_lang(lang):
+    try:
+        os.makedirs(conf_dir(), exist_ok=True)
+        with open(os.path.join(conf_dir(), "ui.json"), "w") as f:
+            json.dump({"lang": lang}, f)
+    except OSError:
+        pass
+
+
+# ------------------------------------------------------------------ helpers
 
 def cli(*args, timeout=120):
     """Runs vmagents; returns (exit code, stdout, stderr)."""
@@ -3707,9 +3918,15 @@ def gb(mb):
 def state_mark(vm):
     s = vm.get("state")
     if s is None:
-        return "[dim]-[/] not libvirt"
-    return {"running": "[green]●[/] running", "shut off": "[dim]○[/] off", "paused": "[yellow]●[/] paused",
-            "missing": "[red]![/] missing"}.get(s, f"[yellow]●[/] {s}")
+        return "[dim]-[/] " + T("not libvirt")
+    marks = {"running": "[green]●[/] ", "shut off": "[dim]○[/] ", "paused": "[yellow]●[/] ", "missing": "[red]![/] "}
+    words = {"running": "running", "shut off": "off", "paused": "paused", "missing": "missing"}
+    return marks.get(s, "[yellow]●[/] ") + T(words.get(s, s))
+
+
+def idle_label(m):
+    return {0: T("off"), 15: T("15 minutes"), 30: T("30 minutes"), 60: T("1 hour"), 120: T("2 hours"),
+            240: T("4 hours")}[m]
 
 
 def create_args(v):
@@ -3721,21 +3938,37 @@ def create_args(v):
     return a
 
 
+class VimOptions(OptionList):
+    BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
+                Binding("l", "select", show=False)]
+
+
+class VimTable(DataTable):
+    BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
+                Binding("l", "select_cursor", show=False)]
+
+
 # ------------------------------------------------------------------ dialogs
 
 class Confirm(ModalScreen[bool]):
-    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+    """y / Enter on the first button: yes. n, h, Esc: no."""
+    BINDINGS = [Binding("escape", "dismiss(False)", show=False), Binding("n", "dismiss(False)", show=False),
+                Binding("h", "dismiss(False)", show=False), Binding("y", "dismiss(True)", show=False)]
 
-    def __init__(self, text, yes="Yes", danger=False):
+    def __init__(self, text, yes=None, danger=False):
         super().__init__()
-        self.text, self.yes, self.danger = text, yes, danger
+        self.text, self.yes, self.danger = text, yes or T("Yes"), danger
 
     def compose(self):
         with Vertical(classes="dialog"):
             yield Static(self.text)
             with Horizontal(classes="buttons"):
-                yield Button(self.yes, id="yes", variant="error" if self.danger else "primary")
-                yield Button("Cancel", id="no")
+                yield Button(f"{self.yes} (y)", id="yes", variant="error" if self.danger else "primary")
+                yield Button(f"{T('Cancel')} (n)", id="no")
+
+    def on_mount(self):
+        # Something that cannot be undone: Enter alone does not do it.
+        self.query_one("#no" if self.danger else "#yes", Button).focus()
 
     @on(Button.Pressed)
     def pressed(self, e):
@@ -3744,7 +3977,7 @@ class Confirm(ModalScreen[bool]):
 
 class TypeName(ModalScreen[bool]):
     """Asks to type the VM's name before something that cannot be undone."""
-    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+    BINDINGS = [Binding("escape", "dismiss(False)", show=False)]
 
     def __init__(self, text, name):
         super().__init__()
@@ -3755,8 +3988,8 @@ class TypeName(ModalScreen[bool]):
             yield Static(self.text)
             yield Input(placeholder=self.vm, id="typed")
             with Horizontal(classes="buttons"):
-                yield Button("Delete", id="yes", variant="error", disabled=True)
-                yield Button("Cancel", id="no")
+                yield Button(T("Delete"), id="yes", variant="error", disabled=True)
+                yield Button(T("Cancel"), id="no")
 
     @on(Input.Changed)
     def changed(self, e):
@@ -3773,48 +4006,54 @@ class TypeName(ModalScreen[bool]):
 
 
 class Pick(ModalScreen):
-    """Choose one of several options; returns its id or None."""
-    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+    """Choose one of several options (j/k, Enter or l); returns its id or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", show=False), Binding("h", "dismiss(None)", show=False)]
 
-    def __init__(self, title, options):
+    def __init__(self, title, options, note=""):
         super().__init__()
-        self.title_text, self.options = title, options
+        self.title_text, self.options, self.note = title, options, note
 
     def compose(self):
         with Vertical(classes="dialog"):
             yield Static(self.title_text)
-            yield OptionList(*[Option(label, id=key) for key, label in self.options], id="pick")
+            yield VimOptions(*[Option(label, id=key) for key, label in self.options], id="pick")
+            if self.note:
+                yield Static(self.note)
 
     @on(OptionList.OptionSelected)
     def selected(self, e):
         self.dismiss(e.option.id)
 
 
-class AskText(ModalScreen):
-    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+class Ask(ModalScreen):
+    """A few text fields (and checkboxes); returns their values or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
-    def __init__(self, text, value="", placeholder="", check=None, extra=None):
+    def __init__(self, title, fields, check=None, extra=None):
         super().__init__()
-        self.text, self.value, self.placeholder, self.check, self.extra = text, value, placeholder, check, extra
+        self.title_text, self.fields, self.check, self.extra = title, fields, check, extra or []
 
     def compose(self):
         with Vertical(classes="dialog"):
-            yield Static(self.text)
-            yield Input(self.value, placeholder=self.placeholder, id="text")
+            yield Static(self.title_text)
+            for key, label, value, placeholder in self.fields:
+                if label:
+                    yield Label(label)
+                yield Input(value, placeholder=placeholder, id=f"f-{key}")
             yield Static("", id="error", classes="error")
-            for key, label, value in self.extra or []:
+            for key, label, value in self.extra:
                 yield Checkbox(label, value, id=key)
             with Horizontal(classes="buttons"):
-                yield Button("OK", id="ok", variant="primary")
-                yield Button("Cancel", id="no")
+                yield Button(T("OK"), id="ok", variant="primary")
+                yield Button(T("Cancel"), id="no")
 
     def result(self):
-        v = self.query_one("#text", Input).value.strip()
-        if self.check and (err := self.check(v)):
+        values = {key: self.query_one(f"#f-{key}", Input).value.strip() for key, _, _, _ in self.fields}
+        if self.check and (err := self.check(values)):
             self.query_one("#error", Static).update(err)
             return
-        extras = {key: self.query_one(f"#{key}", Checkbox).value for key, _, _ in self.extra or []}
-        self.dismiss((v, extras) if self.extra else v)
+        values.update({key: self.query_one(f"#{key}", Checkbox).value for key, _, _ in self.extra})
+        self.dismiss(values)
 
     @on(Input.Submitted)
     def submitted(self):
@@ -3829,7 +4068,7 @@ class AskText(ModalScreen):
 
 
 class Resize(ModalScreen):
-    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+    BINDINGS = [Binding("escape", "dismiss(None)", show=False)]
 
     def __init__(self, vm, host):
         super().__init__()
@@ -3840,17 +4079,17 @@ class Resize(ModalScreen):
         mem = self.vm.get("memory_mb") or 4096
         sizes = sorted({m for m in MEMORY_MB if m <= total} | {mem})
         with Vertical(classes="dialog"):
-            yield Static(f"[b]Resources of {self.vm['name']}[/b]\nThis computer: {gb(total)} RAM, "
-                         f"{self.host.get('cpus', '?')} CPUs. The VM has to be off; it is shut down first.")
-            yield Label("RAM")
+            yield Static(T("[b]Resources of {n}[/b]\nThis computer: {ram} RAM, {cpus} CPUs. The VM has to be off; "
+                           "it is shut down first.", n=self.vm["name"], ram=gb(total), cpus=self.host.get("cpus", "?")))
+            yield Label(T("RAM"))
             yield Select([(gb(m), m) for m in sizes], value=mem, allow_blank=False, id="memory")
-            yield Label("CPUs")
+            yield Label(T("CPUs"))
             n = self.host.get("cpus") or 8
             yield Select([(str(c), c) for c in range(1, n + 1)], value=min(self.vm.get("cpus") or 2, n),
                          allow_blank=False, id="cpus")
             with Horizontal(classes="buttons"):
-                yield Button("Apply", id="ok", variant="primary")
-                yield Button("Cancel", id="no")
+                yield Button(T("Apply"), id="ok", variant="primary")
+                yield Button(T("Cancel"), id="no")
 
     @on(Button.Pressed)
     def pressed(self, e):
@@ -3863,11 +4102,15 @@ class Resize(ModalScreen):
 # ------------------------------------------------------------------ new VM
 
 class NewVM(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("ctrl+s", "create", "Create")]
-
     def __init__(self, info, names):
         super().__init__()
         self.info, self.names = info or {}, names
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        return [Binding("escape", "app.pop_screen", T("Back")), Binding("ctrl+s", "create", T("Create")),
+                Binding("tab", "app.focus_next", show=False), Binding("shift+tab", "app.focus_previous", show=False)]
 
     def compose(self):
         host = self.info.get("host", {})
@@ -3877,50 +4120,50 @@ class NewVM(Screen):
         cpus = host.get("cpus") or 2
         yield Header()
         with VerticalScroll(id="form"):
-            yield Static("[b]New VM[/b]  A Linux VM from an official cloud image, with the AI assistants you "
-                         "choose, ready to use.", classes="intro")
+            yield Static(T("[b]New VM[/b]  A Linux VM from an official cloud image, with the AI assistants you "
+                           "choose, ready to use."), classes="intro")
             if not host.get("libvirt", False) or host.get("missing"):
                 need = ", ".join(host.get("missing") or []) or "libvirt"
-                yield Static(f"[red]Cannot create VMs here yet: missing {need}.[/]\n"
-                             "Debian/Ubuntu: sudo apt install libvirt-daemon-system virtinst xorriso curl",
-                             classes="error")
-            yield Label("Name")
+                yield Static(T("[red]Cannot create VMs here yet: missing {need}.[/]\nDebian/Ubuntu: sudo apt "
+                               "install libvirt-daemon-system virtinst xorriso curl", need=need), classes="error")
+            yield Label(T("Name"))
             yield Input(placeholder="dev", id="name", compact=True)
-            yield Label("System")
-            yield Select([(f"{i['description']}{'  (downloaded)' if i['downloaded'] else ''}", i["name"])
+            yield Label(T("System"))
+            yield Select([(f"{i['description']}{T('  (downloaded)') if i['downloaded'] else ''}", i["name"])
                           for i in images] or [("Debian 13", "debian13")],
                          value=images[0]["name"] if images else "debian13", allow_blank=False, id="image",
                          compact=True)
             avail = host.get("pool_available_gb")
             with Horizontal(classes="row"):
                 with Vertical():
-                    yield Label(f"RAM [dim](here: {gb(total)}, free {gb(free)})[/]")
+                    yield Label(T("RAM [dim](here: {total}, free {free})[/]", total=gb(total), free=gb(free)))
                     yield Select([(gb(m), m) for m in MEMORY_MB if m <= max(total - 1024, 1024)],
                                  value=4096 if total >= 6144 else 2048, allow_blank=False, id="memory", compact=True)
                 with Vertical():
-                    yield Label(f"CPUs [dim](here: {cpus})[/]")
+                    yield Label(T("CPUs [dim](here: {n})[/]", n=cpus))
                     yield Select([(str(c), c) for c in range(1, cpus + 1)], value=min(2, cpus), allow_blank=False,
                                  id="cpus", compact=True)
                 with Vertical():
-                    yield Label("Disk GB" + (f" [dim]({avail} free)[/]" if avail is not None else ""))
+                    yield Label(T("Disk GB") + (T(" [dim]({n} free)[/]", n=avail) if avail is not None else ""))
                     yield Input("20", type="integer", id="disk", compact=True)
-            yield Label("AI assistants [dim](the first one checked opens with \"vmagents NAME\")[/]")
+            yield Label(T("AI assistants [dim](the first one checked opens with \"vmagents NAME\")[/]"))
             with Horizontal(id="agents"):
                 for key, label in AGENTS:
                     yield Checkbox(label, key == "claude", id=f"agent-{key}", compact=True)
             with Horizontal(classes="row"):
                 with Vertical():
-                    yield Label("Ports [dim](reach them here while connected)[/]")
-                    yield Input(placeholder="e.g. 3000,5173", id="ports", compact=True)
+                    yield Label(T("Ports [dim](reach them here while connected)[/]"))
+                    yield Input(placeholder=T("e.g. 3000,5173"), id="ports", compact=True)
                 with Vertical():
-                    yield Label("Shut down when unused for")
-                    yield Select(IDLE, value=30, allow_blank=False, id="idle", compact=True)
+                    yield Label(T("Shut down when unused for"))
+                    yield Select([(idle_label(m), m) for m in IDLE_MINUTES], value=30, allow_blank=False, id="idle",
+                                 compact=True)
             yield Static("", id="error", classes="error")
             yield Static("", id="command", classes="command")
             with Horizontal(classes="buttons"):
-                yield Button("Create  (Ctrl-S)", id="create", variant="primary",
+                yield Button(T("Create  (Ctrl-S)"), id="create", variant="primary",
                              disabled=not host.get("libvirt", False) or bool(host.get("missing")))
-                yield Button("Back", id="back")
+                yield Button(T("Back"), id="back")
         yield Footer()
 
     def on_mount(self):
@@ -3943,29 +4186,30 @@ class NewVM(Screen):
 
     def problem(self, v):
         if not v["name"]:
-            return "Give the VM a name."
+            return T("Give the VM a name.")
         if not NAME_RE.match(v["name"]):
-            return "The name may have letters, digits, . _ and - only."
+            return T("The name may have letters, digits, . _ and - only.")
         if v["name"] in self.names:
-            return f"There is a VM named {v['name']} already."
+            return T("There is a VM named {n} already.", n=v["name"])
         if not v["disk"].isdigit() or not 5 <= int(v["disk"]) <= 4096:
-            return "Disk: a size in GB, at least 5."
+            return T("Disk: a size in GB, at least 5.")
         avail = self.info.get("host", {}).get("pool_available_gb")
         if avail is not None and int(v["disk"]) > avail:
-            return f"Disk: the libvirt pool has {avail} GB free (the disk grows as it fills, but not beyond that)."
+            return T("Disk: the libvirt pool has {n} GB free (the disk grows as it fills, but not beyond that).",
+                     n=avail)
         if not v["agents"]:
-            return "Choose at least one AI assistant."
+            return T("Choose at least one AI assistant.")
         if v["ports"] and not re.match(r"^[0-9]+(,[0-9]+)*$", v["ports"]):
-            return "Ports: numbers separated by commas, e.g. 3000,5173."
+            return T("Ports: numbers separated by commas, e.g. 3000,5173.")
         if v["ports"] and any(not 1 <= int(p) <= 65535 for p in v["ports"].split(",")):
-            return "Ports go from 1 to 65535."
+            return T("Ports go from 1 to 65535.")
         return ""
 
     def refresh_command(self):
         v = self.values()
         v2 = dict(v, name=v["name"] or "NAME", agents=v["agents"] or ["claude"], disk=v["disk"] or "20")
-        self.query_one("#command", Static).update("[dim]The same from a terminal: vmagents "
-                                                  + shlex.join(create_args(v2)) + "[/]")
+        self.query_one("#command", Static).update(T("[dim]The same from a terminal: vmagents {cmd}[/]",
+                                                    cmd=shlex.join(create_args(v2))))
 
     @on(Input.Changed)
     @on(Select.Changed)
@@ -3991,7 +4235,7 @@ class NewVM(Screen):
 
 class Creating(Screen):
     """Runs "vmagents create" and shows what it prints."""
-    BINDINGS = [Binding("escape", "back", "Back")]
+    BINDINGS = [Binding("escape", "back", show=False)]
 
     def __init__(self, v):
         super().__init__()
@@ -3999,16 +4243,17 @@ class Creating(Screen):
 
     def compose(self):
         yield Header()
-        yield Static(f"[b]Creating {self.v['name']}[/b]: downloading the image (once), making the VM, then "
-                     "installing tmux and the AI assistants. This takes a few minutes.", id="status")
+        yield Static(T("[b]Creating {n}[/b]: downloading the image (once), making the VM, then installing tmux and "
+                       "the AI assistants. This takes a few minutes.", n=self.v["name"]), id="status")
         yield RichLog(id="output", wrap=True, markup=False)
         with Horizontal(classes="buttons"):
             agent = self.v["agents"][0]
-            yield Button(f"Open {AGENT_NAMES[agent]}", id="open", variant="success", disabled=True)
+            yield Button(T("Open {agent}", agent=AGENT_NAMES[agent]), id="open", variant="success", disabled=True)
+            yield Button(T("Shell"), id="shell", disabled=True)
             if "claude" in self.v["agents"]:
-                yield Button("Log Claude in", id="login", disabled=True)
-            yield Button("Cancel", id="cancel", variant="error")
-            yield Button("Back", id="back", disabled=True)
+                yield Button(T("Log Claude in"), id="login", disabled=True)
+            yield Button(T("Cancel"), id="cancel", variant="error")
+            yield Button(T("Back"), id="back", disabled=True)
         yield Footer()
 
     def on_mount(self):
@@ -4034,15 +4279,15 @@ class Creating(Screen):
         self.rc = rc
         status = self.query_one("#status", Static)
         if rc == 0:
-            status.update(f"[green]Done.[/] {self.v['name']} is ready.")
-            self.query_one("#open", Button).disabled = False
-            if "claude" in self.v["agents"]:
-                self.query_one("#login", Button).disabled = False
+            status.update(T("[green]Done.[/] {n} is ready.", n=self.v["name"]))
+            for b in self.query(Button):
+                b.disabled = b.id == "cancel"
+            self.query_one("#open", Button).focus()
         else:
-            status.update(f"[red]Creating {self.v['name']} failed[/] (exit code {rc}); see above. If a half-made "
-                          f"VM is left, delete it in the list (d).")
-        self.query_one("#cancel", Button).disabled = True
-        self.query_one("#back", Button).disabled = False
+            status.update(T("[red]Creating {n} failed[/] (exit code {rc}); see above. If a half-made VM is left, "
+                            "delete it in the list (d).", n=self.v["name"], rc=rc))
+            self.query_one("#cancel", Button).disabled = True
+            self.query_one("#back", Button).disabled = False
         self.app.refresh_vms()
 
     @on(Button.Pressed, "#cancel")
@@ -4053,11 +4298,17 @@ class Creating(Screen):
     @on(Button.Pressed, "#open")
     def open_vm(self):
         self.app.pop_screen()
-        self.app.connect(self.v["name"])
+        self.app.open_session(self.v["name"], self.v["agents"][0])
+
+    @on(Button.Pressed, "#shell")
+    def open_shell(self):
+        self.app.pop_screen()
+        self.app.open_session(self.v["name"], "shell")
 
     @on(Button.Pressed, "#login")
     def login(self):
-        self.app.interactive(["login", self.v["name"]])
+        self.app.pop_screen()
+        self.app.open_session(self.v["name"], "login")
 
     @on(Button.Pressed, "#back")
     def action_back(self):
@@ -4065,20 +4316,473 @@ class Creating(Screen):
             self.app.pop_screen()
 
 
-# ------------------------------------------------------------------ the main screen
+# ------------------------------------------------------------------ snapshots
 
-class VMTable(DataTable):
-    BINDINGS = [Binding("enter", "select_cursor", "Open", show=True)]
+class Snapshots(Screen):
+    """All snapshots of a VM: go back to one, take one, label one, delete one."""
+
+    def __init__(self, vm):
+        super().__init__()
+        self.vm, self.snaps = vm, []
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        return [Binding("enter", "restore", T("Go back to it")), Binding("n", "take", T("Take one")),
+                Binding("e", "label", T("Edit label")), Binding("d", "delete", T("Delete")),
+                Binding("escape", "app.pop_screen", T("Back to the list")),
+                Binding("h", "app.pop_screen", T("Back"), show=False)]
+
+    def compose(self):
+        yield Header()
+        yield Static(f"[b]{T('Snapshots of {n}', n=self.vm['name'])}[/b]", id="snaptitle")
+        yield VimTable(id="snaps", cursor_type="row", zebra_stripes=True)
+        yield Static(T("[dim]j/k: move · Enter or l: go back to it · n: take one · e: label · d: delete · h or Esc: "
+                       "back[/]"), id="snaphelp")
+        yield Footer()
+
+    def on_mount(self):
+        t = self.query_one(DataTable)
+        t.add_columns(T("Name"), T("Time"), T("State"), T("Label"))
+        t.focus()
+        self.load()
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        snaps = cli_json("snapshots", self.vm["name"], "--json", default=[]) or []
+        self.app.call_from_thread(self.show, snaps)
+
+    def show(self, snaps):
+        self.snaps = list(reversed(snaps))  # newest first
+        t = self.query_one(DataTable)
+        t.clear()
+        for s in self.snaps:
+            t.add_row(s["name"], s["time"], T("VM on") if s["state"] == "running" else T("VM off"),
+                      s.get("description") or "", key=s["name"])
+        if not self.snaps:
+            self.query_one("#snaphelp", Static).update(T("No snapshots yet. One is taken each time vmagents starts "
+                                                         "the VM; n takes one now."))
+
+    def selected(self):
+        t = self.query_one(DataTable)
+        if not self.snaps or t.cursor_row is None or t.cursor_row >= len(self.snaps):
+            return None
+        return self.snaps[t.cursor_row]
+
+    def run(self, args):
+        self.app.background(args, done=lambda rc: self.load(), name=self.vm["name"])
+
+    @on(DataTable.RowSelected)
+    def action_restore(self):
+        if not (s := self.selected()):
+            return
+        n = self.vm["name"]
+
+        def sure(yes):
+            if yes:
+                self.run(["undo", n, s["name"], "--yes"])
+        self.app.push_screen(Confirm(T("Put {n} back to [b]{snap}[/b]?\nEverything changed in the VM since then is "
+                                       "lost.", n=n, snap=s["name"]), yes=T("Restore"), danger=True), sure)
+
+    def action_take(self):
+        names = {s["name"] for s in self.snaps}
+
+        def check(v):
+            if v["name"] and not SNAP_RE.match(v["name"]):
+                return T("A name may have letters, digits, . _ and - only.")
+            if v["name"] in names:
+                return T("There is a snapshot named {s} already.", s=v["name"])
+            return ""
+
+        def done(v):
+            if v is not None:
+                self.run(["snapshot", self.vm["name"]] + (["--name", v["name"]] if v["name"] else [])
+                         + ([v["label"]] if v["label"] else []))
+        self.app.push_screen(Ask(T("New snapshot of {n}", n=self.vm["name"]), [
+            ("name", T("Name [dim](letters, digits, . _ -; empty: automatic)[/]"), "", "before-refactor"),
+            ("label", T("Label [dim](optional, e.g. before the big refactor)[/]"), "", "")], check), done)
+
+    def action_label(self):
+        if not (s := self.selected()):
+            return
+
+        def done(v):
+            if v is not None:
+                self.run(["snapshot", self.vm["name"], "--label", s["name"], v["label"]])
+        self.app.push_screen(Ask(T("Label of {snap}:", snap=s["name"]),
+                                 [("label", "", s.get("description") or "", "")]), done)
+
+    def action_delete(self):
+        if not (s := self.selected()):
+            return
+
+        def sure(yes):
+            if yes:
+                self.run(["snapshot", self.vm["name"], "--delete", s["name"]])
+        self.app.push_screen(Confirm(T("Delete the snapshot [b]{snap}[/b] of {n}?", snap=s["name"], n=self.vm["name"]),
+                                     yes=T("Delete"), danger=True), sure)
+
+
+# ------------------------------------------------------------------ a terminal inside the UI
+
+SPECIAL_KEYS = {
+    "enter": b"\r", "tab": b"\t", "shift+tab": b"\x1b[Z", "backspace": b"\x7f", "ctrl+h": b"\x7f",
+    "escape": b"\x1b", "delete": b"\x1b[3~", "insert": b"\x1b[2~", "pageup": b"\x1b[5~", "pagedown": b"\x1b[6~",
+    "space": b" ", "ctrl+space": b"\x00", "ctrl+at": b"\x00", "ctrl+backslash": b"\x1c",
+    "ctrl+right_square_bracket": b"\x1d", "ctrl+circumflex_accent": b"\x1e", "ctrl+underscore": b"\x1f",
+    "f1": b"\x1bOP", "f2": b"\x1bOQ", "f3": b"\x1bOR", "f4": b"\x1bOS", "f5": b"\x1b[15~", "f6": b"\x1b[17~",
+    "f7": b"\x1b[18~", "f8": b"\x1b[19~", "f9": b"\x1b[20~", "f10": b"\x1b[21~", "f11": b"\x1b[23~",
+    "f12": b"\x1b[24~",
+}
+CURSOR_KEYS = {"up": b"A", "down": b"B", "right": b"C", "left": b"D", "home": b"H", "end": b"F"}
+MODIFIERS = {"shift": 2, "alt": 3, "shift+alt": 4, "ctrl": 5, "shift+ctrl": 6, "ctrl+shift": 6, "alt+ctrl": 7,
+             "ctrl+alt": 7}
+MODE_CURSOR_KEYS, MODE_PASTE = 1 << 5, 2004 << 5          # pyte keeps private modes shifted by 5
+MODES_MOUSE = {1000 << 5, 1002 << 5, 1003 << 5}
+MODE_SGR_MOUSE = 1006 << 5
+PYTE_COLORS = {"brown": "yellow", "brightbrown": "bright_yellow"}
+# pyte ignores "ESC ( 0" (line drawing, as tmux draws its borders) in UTF-8
+# mode; the terminal passes these on itself.
+CHARSET_RE = re.compile(rb"\x1b([()])([0B])")
+CUT_RE = re.compile(rb"\x1b[()]?$")
+
+
+def key_bytes(key, character, cursor_keys=False):
+    """What a terminal sends for a Textual key, or None."""
+    if key in SPECIAL_KEYS:
+        return SPECIAL_KEYS[key]
+    mods, _, base = key.rpartition("+")
+    if base in CURSOR_KEYS:
+        if mods:
+            return b"\x1b[1;%d%s" % (MODIFIERS.get(mods, 5), CURSOR_KEYS[base])
+        return (b"\x1bO" if cursor_keys else b"\x1b[") + CURSOR_KEYS[base]
+    if mods == "ctrl" and len(base) == 1 and base.isalpha():
+        return bytes([ord(base.lower()) & 0x1F])
+    if mods == "alt" and len(base) == 1:
+        return b"\x1b" + base.encode()
+    if character and (character.isprintable() or character in "\t\r"):
+        return character.encode()
+    if character and len(character) == 1 and ord(character) < 32:
+        return character.encode()
+    return None
+
+
+@functools.lru_cache(maxsize=4096)
+def cell_style(fg, bg, bold, italics, underscore, strikethrough, reverse):
+    def color(c):
+        if c == "default":
+            return None
+        if len(c) == 6 and all(ch in "0123456789abcdefABCDEF" for ch in c):
+            return "#" + c
+        c = PYTE_COLORS.get(c, c)
+        return "bright_" + c[6:] if c.startswith("bright") and not c.startswith("bright_") else c
+    return Style(color=color(fg), bgcolor=color(bg), bold=bold, italic=italics, underline=underscore,
+                 strike=strikethrough, reverse=reverse)
+
+
+class Terminal(Widget, can_focus=True):
+    """A program on a pseudo-terminal, shown with pyte (a VT100/xterm emulator)."""
+    DEFAULT_CSS = "Terminal { height: 1fr; width: 1fr; }"
+
+    class Exited(Message):
+        def __init__(self, terminal, rc):
+            super().__init__()
+            self.terminal, self.rc = terminal, rc
+
+    def __init__(self, argv, label, **kw):
+        super().__init__(**kw)
+        self.argv, self.label = argv, label
+        self.vt = self.stream = self.proc = None
+        self.fd = None
+        self.rc = None
+        self.pending = b""
+
+    def on_mount(self):
+        self.call_after_refresh(self.start)
+
+    def start(self):
+        cols, rows = max(self.size.width, 20), max(self.size.height, 5)
+        self.vt = pyte.HistoryScreen(cols, rows, history=5000)
+        self.vt.write_process_input = self.write  # answers to "where is the cursor?" and the like
+        self.stream = pyte.ByteStream(self.vt)
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
+        try:
+            self.proc = subprocess.Popen(self.argv, stdin=slave, stdout=slave, stderr=slave, env=env,
+                                         start_new_session=True, close_fds=True)
+        except OSError as e:
+            os.close(master)
+            os.close(slave)
+            self.stream.feed(f"cannot start {self.argv[0]}: {e}\r\n".encode())
+            self.post_message(self.Exited(self, 127))
+            return
+        os.close(slave)
+        self.fd = master
+        asyncio.get_running_loop().add_reader(master, self.readable)
+
+    def readable(self):
+        try:
+            data = os.read(self.fd, 65536)
+        except OSError:
+            data = b""
+        if data:
+            if self.vt.history.position < self.vt.history.size:
+                self.vt.next_page()  # new output: back to the bottom
+            self.feed(data)
+            self.refresh()
+            return
+        asyncio.get_running_loop().remove_reader(self.fd)
+        os.close(self.fd)
+        self.fd = None
+        self.rc = self.proc.wait()
+        self.post_message(self.Exited(self, self.rc))
+
+    def feed(self, data):
+        data, self.pending = self.pending + data, b""
+        if cut := CUT_RE.search(data):  # a sequence cut in two: the rest comes with the next read
+            data, self.pending = data[:cut.start()], data[cut.start():]
+        pos = 0
+        for m in CHARSET_RE.finditer(data):
+            self.stream.feed(data[pos:m.start()])
+            self.vt.define_charset(m.group(2).decode(), m.group(1).decode())
+            pos = m.end()
+        self.stream.feed(data[pos:])
+
+    def write(self, data):
+        if self.fd is None:
+            return
+        if isinstance(data, str):
+            data = data.encode()
+        try:
+            os.write(self.fd, data)
+        except OSError:
+            pass
+
+    def close(self):
+        """Hang up, as closing a terminal window does."""
+        if self.proc and self.proc.poll() is None:
+            try:
+                os.killpg(self.proc.pid, signal.SIGHUP)
+            except OSError:
+                pass
+
+    def on_resize(self, event):
+        if self.vt is None or event.size.width < 2 or event.size.height < 2:
+            return
+        cols, rows = event.size.width, event.size.height
+        if (cols, rows) != (self.vt.columns, self.vt.lines):
+            self.vt.resize(rows, cols)
+            if self.fd is not None:
+                fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            self.refresh()
+
+    def on_key(self, event):
+        event.stop()
+        event.prevent_default()
+        data = key_bytes(event.key, event.character, self.vt is not None and MODE_CURSOR_KEYS in self.vt.mode)
+        if data:
+            self.write(data)
+
+    def on_paste(self, event):
+        event.stop()
+        text = event.text.replace("\r\n", "\r").replace("\n", "\r").encode()
+        if self.vt is not None and MODE_PASTE in self.vt.mode:
+            text = b"\x1b[200~" + text + b"\x1b[201~"
+        self.write(text)
+
+    def scroll(self, up, event):
+        event.stop()
+        if self.vt is None:
+            return
+        if self.vt.mode & MODES_MOUSE:
+            if MODE_SGR_MOUSE in self.vt.mode:
+                self.write(b"\x1b[<%d;%d;%dM" % (64 if up else 65, event.x + 1, event.y + 1))
+            return
+        if up:
+            self.vt.prev_page()
+        else:
+            self.vt.next_page()
+        self.refresh()
+
+    def on_mouse_scroll_up(self, event):
+        self.scroll(True, event)
+
+    def on_mouse_scroll_down(self, event):
+        self.scroll(False, event)
+
+    def on_focus(self):
+        self.refresh()
+
+    def on_blur(self):
+        self.refresh()
+
+    def render_line(self, y):
+        width = self.size.width
+        vt = self.vt
+        if vt is None or y >= vt.lines:
+            return Strip.blank(width)
+        row = vt.buffer[y]
+        cur = vt.cursor
+        show_cursor = self.has_focus and not cur.hidden and cur.y == y and self.rc is None
+        segments, text, style_key = [], [], None
+        for x in range(vt.columns):
+            ch = row[x]
+            if ch.data == "":  # the right half of a wide character
+                continue
+            key = (ch.fg, ch.bg, ch.bold, ch.italics, ch.underscore, ch.strikethrough,
+                   ch.reverse != (show_cursor and x == cur.x))
+            if key != style_key and text:
+                segments.append(Segment("".join(text), cell_style(*style_key)))
+                text = []
+            style_key = key
+            text.append(ch.data)
+        if text:
+            segments.append(Segment("".join(text), cell_style(*style_key)))
+        return Strip(segments).adjust_cell_length(width)
+
+
+class Session(Screen):
+    """The VM's terminals: a shell and AI assistants, one tab each. All keys
+    go to the terminal, except Ctrl+] (back to the list) and F1 to F6."""
+
+    def __init__(self, vm, first=None):
+        super().__init__()
+        self.vm, self.first = vm, first
+        self.count = 0
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        return [Binding("ctrl+right_square_bracket", "leave", T("VM list"), priority=True, key_display="^]"),
+                Binding("f1", "open('shell')", T("Shell"), priority=True)] + [
+            Binding(f"f{i}", f"open('{k}')", label, priority=True) for i, (k, label) in enumerate(AGENTS, start=2)]
+
+    def compose(self):
+        with Horizontal(id="sessionbar"):
+            yield Static(f"[b]{self.vm['name']}[/b]", id="vmname")
+            yield Tabs(id="tabs")
+        yield ContentSwitcher(id="terms")
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one(Tabs).can_focus = False
+        if self.first:
+            self.action_open(self.first)
+
+    def command(self, kind):
+        n = self.vm["name"]
+        if kind == "shell":
+            return [VMAGENTS, "shell", n], T("Shell")
+        if kind == "login":
+            return [VMAGENTS, "login", n], T("Log in")
+        return [VMAGENTS, n, "--hold", f"--{kind}"], AGENT_NAMES[kind]
+
+    def terminals(self):
+        return list(self.query(Terminal))
+
+    def action_open(self, kind):
+        """Shows the tab of KIND, opening it first if needed."""
+        if kind not in ("shell", "login") and self.vm.get("os") == "windows" and kind != "claude":
+            self.notify(T("Only Claude Code runs on Windows VMs."))
+            return
+        for t in self.terminals():
+            if t.kind == kind and t.rc is None:
+                self.show(t.id)
+                return
+        argv, label = self.command(kind)
+        self.count += 1
+        t = Terminal(argv, label, id=f"term-{self.count}")
+        t.kind = kind
+        self.query_one(ContentSwitcher).mount(t)
+        self.query_one(Tabs).add_tab(Tab(label, id=f"tab-{self.count}"))
+        self.show(t.id)
+
+    def show(self, term_id):
+        self.query_one(ContentSwitcher).current = term_id
+        tabs = self.query_one(Tabs)
+        tab_id = "tab-" + term_id.split("-", 1)[1]
+        if tabs.active != tab_id:
+            tabs.active = tab_id
+        self.query_one(f"#{term_id}", Terminal).focus()
+
+    @on(Tabs.TabActivated)
+    def tab_activated(self, event):
+        if event.tab is not None:
+            term_id = "term-" + event.tab.id.split("-", 1)[1]
+            if self.query_one(ContentSwitcher).current != term_id:
+                self.show(term_id)
+
+    @on(Terminal.Exited)
+    def exited(self, event):
+        t = event.terminal
+        self.query_one(Tabs).remove_tab("tab-" + t.id.split("-", 1)[1])
+        t.remove()
+        left = [x for x in self.terminals() if x is not t]
+        if left:
+            self.show(left[-1].id)
+        else:
+            self.app.session_closed(self.vm["name"])
+
+    def action_leave(self):
+        self.app.pop_screen()
+        self.app.back_to_list()
+
+    def close_all(self):
+        for t in self.terminals():
+            t.close()
+
+
+class OpenAs(ModalScreen):
+    """How to open a VM: a shell or an AI assistant (j/k, Enter or l; h or Esc: back)."""
+    BINDINGS = [Binding("escape", "dismiss(None)", show=False), Binding("h", "dismiss(None)", show=False)]
+
+    def __init__(self, vm):
+        super().__init__()
+        self.vm = vm
+
+    def compose(self):
+        vm = self.vm
+        installed = vm.get("agents") or []
+        options = [Option(T("Shell   [dim]a terminal on the VM[/]"), id="shell")]
+        for key, label in AGENTS:
+            if vm.get("os") == "windows" and key != "claude":
+                continue
+            notes = []
+            if key == vm.get("agent", "claude"):
+                notes.append(T("default"))
+            if installed and key not in installed:
+                notes.append(T("installs it first"))
+            options.append(Option(label + (f"   [dim]({', '.join(notes)})[/]" if notes else ""), id=key))
+        options.append(Option(T("Log Claude in"), id="login"))
+        with Vertical(classes="dialog"):
+            yield Static(T("[b]Open {n}[/b] as:", n=vm["name"]))
+            yield VimOptions(*options, id="pick")
+            yield Static(T("[dim]Inside: F1 to F6 open the others as tabs, Ctrl+] goes back to the list.[/]"))
+
+    @on(OptionList.OptionSelected)
+    def selected(self, e):
+        self.dismiss(e.option.id)
+
+# ------------------------------------------------------------------ the app: the VM list
+
+class VMTable(VimTable):
+    pass
+
+
+LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
+                "refresh"}
 
 
 class VmAgentsUI(App):
     TITLE = "vmagents"
+    ENABLE_COMMAND_PALETTE = False
     CSS = """
     #vms { width: 3fr; }
     #side { width: 2fr; border-left: solid $primary; padding: 0 1; }
     #log { height: 8; border-top: solid $primary; }
-    .dialog { width: 72; height: auto; max-height: 90%; border: thick $primary; background: $surface; padding: 1 2; }
-    Confirm, TypeName, Pick, AskText, Resize { align: center middle; }
+    .dialog { width: 76; height: auto; max-height: 90%; border: thick $primary; background: $surface; padding: 1 2; }
+    Confirm, TypeName, Pick, Ask, Resize, OpenAs { align: center middle; }
     .buttons { height: auto; margin-top: 1; }
     .buttons Button { margin-right: 2; }
     .error { color: $error; height: auto; }
@@ -4092,29 +4796,39 @@ class VmAgentsUI(App):
     .row > Vertical { height: auto; margin-right: 2; }
     #output { height: 1fr; border: solid $primary; }
     #status { padding: 1 2; height: auto; }
+    #snaptitle, #snaphelp { padding: 0 1; height: auto; }
+    #snaps { height: 1fr; }
+    #sessionbar { height: 2; }
+    #vmname { width: auto; padding: 0 2 0 1; content-align: left middle; height: 2; }
+    #tabs { width: 1fr; }
+    #terms { height: 1fr; }
     """
-    BINDINGS = [
-        Binding("enter", "open", "Open", show=False),
-        Binding("n", "new", "New VM"),
-        Binding("a", "agent", "Open with…"),
-        Binding("s", "shell", "Shell"),
-        Binding("o", "ports", "Ports"),
-        Binding("t", "toggle", "Start/stop"),
-        Binding("p", "snapshot", "Snapshot"),
-        Binding("u", "undo", "Undo"),
-        Binding("r", "resize", "Resources"),
-        Binding("l", "login", "Log in", show=False),
-        Binding("d", "delete", "Delete", show=False),
-        Binding("g", "refresh", "Refresh", show=False),
-        Binding("q", "quit", "Quit"),
-    ]
 
     def __init__(self):
+        global LANG
         super().__init__()
+        LANG = load_lang()
         self.vms, self.info = [], {}
         self.forwards = {}  # name -> list of (Popen, description)
         self.busy = set()
-        self.away = False  # running vmagents in the terminal
+        self.sessions = {}  # name -> Session screen
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        other = dict(LANGUAGES)[LANGUAGES[(list(dict(LANGUAGES)).index(LANG) + 1) % len(LANGUAGES)][0]]
+        return [Binding("enter", "open", T("Open"), show=False),
+                Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell")), Binding("o", "ports", T("Ports")),
+                Binding("t", "toggle", T("Start/stop")), Binding("u", "snapshots", T("Snapshots")),
+                Binding("r", "resize", T("Resources")), Binding("d", "delete", T("Delete")),
+                Binding("L", "language", other), Binding("q", "quit", T("Quit")),
+                Binding("g", "refresh", show=False)]
+
+    def check_action(self, action, parameters):
+        # The list's keys work on the list only, not in forms, terminals or dialogs.
+        if action in LIST_ACTIONS and len(self.screen_stack) > 1:
+            return False
+        return True
 
     def compose(self):
         yield Header()
@@ -4123,19 +4837,39 @@ class VmAgentsUI(App):
             with VerticalScroll(id="side", can_focus=False):
                 yield Static("", id="details")
         log = RichLog(id="log", wrap=True, markup=True)
-        log.can_focus = False  # the arrow keys are for the list
+        log.can_focus = False  # the keys are for the list
         yield log
         yield Footer()
 
     def on_mount(self):
-        t = self.query_one("#vms", DataTable)
-        t.add_columns("Name", "State", "RAM", "CPUs", "AI", "Ports")
-        t.focus()
-        self.log_line("[dim]Enter: open the VM's AI assistant · n: new VM · o: ports · t: start/stop · "
-                      "u: undo · d: delete · q: quit[/]")
+        self.setup_list()
         self.load_info()
         self.refresh_vms()
         self.set_interval(5, self.refresh_vms)
+
+    def setup_list(self):
+        t = self.query_one("#vms", DataTable)
+        t.clear(columns=True)
+        t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
+        t.focus()
+        self._seen = None
+        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · o: ports · t: start/stop · u: snapshots · "
+                        "L: language · q: quit[/]"))
+
+    # --- language
+    def action_language(self):
+        global LANG
+        codes = [c for c, _ in LANGUAGES]
+        LANG = codes[(codes.index(LANG) + 1) % len(codes)]
+        save_lang(LANG)
+        self._bindings = BindingsMap(self.make_bindings())
+        for s in self.sessions.values():
+            s._bindings = BindingsMap(s.make_bindings())
+        self.refresh_bindings()
+        self.setup_list()
+        if self.vms:
+            self.show_vms(self.vms)
+        self.notify(T("Language: English"))
 
     # --- data
     @work(thread=True, exclusive=True, group="info")
@@ -4145,8 +4879,6 @@ class VmAgentsUI(App):
 
     @work(thread=True, exclusive=True, group="list")
     def refresh_vms(self):
-        if self.away:
-            return
         vms = cli_json("list", "--json")
         if vms is not None:
             self.call_from_thread(self.show_vms, vms)
@@ -4154,12 +4886,12 @@ class VmAgentsUI(App):
     def action_refresh(self):
         self.refresh_vms()
 
-    @on(DataTable.RowSelected)
+    @on(DataTable.RowSelected, "#vms")
     def row_selected(self):
         self.action_open()
 
     def show_vms(self, vms):
-        seen = (vms, sorted(self.busy))
+        seen = (vms, sorted(self.busy), sorted(self.sessions))
         if seen == getattr(self, "_seen", None):
             return
         self._seen = seen
@@ -4169,14 +4901,15 @@ class VmAgentsUI(App):
         t.clear()
         for vm in vms:
             agents = vm.get("agents") or [vm.get("agent", "claude")]
-            name = ("* " if vm.get("default") else "  ") + vm["name"]
-            state = "[cyan]◆[/] working" if vm["name"] in self.busy else state_mark(vm)
+            name = ("* " if vm.get("default") else "  ") + vm["name"] + (" ▸" if vm["name"] in self.sessions else "")
+            state = "[cyan]◆[/] " + T("working") if vm["name"] in self.busy else state_mark(vm)
             t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"), ", ".join(agents),
                       ",".join(map(str, vm.get("ports") or [])) or "-", key=vm["name"])
         if current and current in [v["name"] for v in vms]:
             t.move_cursor(row=[v["name"] for v in vms].index(current))
         self.show_details()
-        self.sub_title = f"{len(vms)} VM{'s' * (len(vms) != 1)}" if vms else "no VMs yet: press n"
+        n = len(vms)
+        self.sub_title = (T("{n} VM", n=n) if n == 1 else T("{n} VMs", n=n)) if vms else T("no VMs yet: press n")
 
     def selected(self):
         t = self.query_one("#vms", DataTable)
@@ -4188,58 +4921,80 @@ class VmAgentsUI(App):
         vm = self.selected()
         return vm["name"] if vm else None
 
-    @on(DataTable.RowHighlighted)
+    @on(DataTable.RowHighlighted, "#vms")
     def show_details(self):
         d = self.query_one("#details", Static)
         vm = self.selected()
         if not vm:
-            d.update("[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, "
-                     "the AI assistants and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP")
+            d.update(T("[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI "
+                       "assistants and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP"))
             return
         n = vm["name"]
-        lines = [f"[b]{n}[/b]  {state_mark(vm)}" + ("  [dim](default)[/]" if vm.get("default") else "")]
+        lines = [f"[b]{n}[/b]  {state_mark(vm)}" + ("  [dim](" + T("default") + ")[/]" if vm.get("default") else "")]
         if vm.get("domain"):
-            lines.append(f"libvirt VM {vm['domain']}" + ("" if vm.get("uri") == "qemu:///system" else f" ({vm['uri']})"))
+            lines.append(T("libvirt VM {d}", d=vm["domain"])
+                         + ("" if vm.get("uri") == "qemu:///system" else f" ({vm['uri']})"))
         else:
             lines.append(f"{vm['user']}@{vm['host']}" + (f":{vm['port']}" if vm["port"] != 22 else ""))
         if vm.get("os") == "windows":
             lines.append("Windows")
         if vm.get("memory_mb"):
-            lines.append(f"{gb(vm['memory_mb'])} RAM · {vm['cpus']} CPUs · {vm.get('snapshots', 0)} snapshots")
+            lines.append(T("{ram} RAM · {cpus} CPUs · {snaps} snapshots", ram=gb(vm["memory_mb"]), cpus=vm["cpus"],
+                           snaps=vm.get("snapshots", 0)))
         agents = vm.get("agents") or []
         lines.append("")
-        lines.append(f"Opens: [b]{AGENT_NAMES.get(vm['agent'], vm['agent'])}[/b]"
-                     + (f"   installed: {', '.join(agents)}" if agents else ""))
+        lines.append(T("Opens: [b]{agent}[/b]", agent=AGENT_NAMES.get(vm["agent"], vm["agent"]))
+                     + (T("   installed: {list}", list=", ".join(agents)) if agents else ""))
         ports = vm.get("ports") or []
-        lines.append("Ports: " + (", ".join(map(str, ports)) + " (while connected)" if ports else "none"))
+        lines.append(T("Ports: {list} (while connected)", list=", ".join(map(str, ports))) if ports
+                     else T("Ports: none"))
         for _, desc in self.forwards.get(n, []):
             lines.append(f"  [green]→[/] {desc}")
+        if n in self.sessions:
+            lines.append("")
+            lines.append(T("Open here: {list}  [dim](Enter to go back)[/]",
+                           list=", ".join(t.label for t in self.sessions[n].terminals())))
         lines.append("")
         lines.append(" · ".join([
-            f"idle shutdown {vm['idle']} min" if vm.get("idle") else "no idle shutdown",
-            "autostop " + ("on" if vm.get("autostop") else "off"),
-            "notifications " + ("on" if vm.get("notify") else "off"),
-            "clipboard " + ("on" if vm.get("clipboard") else "off")]))
+            T("idle shutdown {m} min", m=vm["idle"]) if vm.get("idle") else T("no idle shutdown"),
+            T("autostop on") if vm.get("autostop") else T("autostop off"),
+            T("notifications on") if vm.get("notify") else T("notifications off"),
+            T("clipboard on") if vm.get("clipboard") else T("clipboard off")]))
         lines.append("")
-        lines.append(f"[dim]From a terminal: vmagents {n}" + (f" · vmagents open {n}" if ports else "") + "[/]")
+        lines.append(T("[dim]From a terminal: vmagents {n}{more}[/]", n=n, more=f" · vmagents open {n}" if ports else ""))
         d.update("\n".join(lines))
 
     def log_line(self, text):
         self.query_one("#log", RichLog).write(text)
 
-    # --- running vmagents
-    def interactive(self, args):
-        """Runs vmagents in this terminal (the UI steps aside until it ends)."""
-        self.away = True
-        try:
-            with self.suspend():
-                subprocess.run([VMAGENTS, *args])
-        finally:
-            self.away = False
-        self.refresh_vms()
+    # --- sessions: terminals inside the UI
+    def open_session(self, name, kind):
+        vm = next((v for v in self.vms if v["name"] == name), {"name": name, "agent": "claude"})
+        s = self.sessions.get(name)
+        if s is None:
+            s = self.sessions[name] = Session(vm, first=kind)
+            self.install_screen(s, name=f"session:{name}")
+            self.push_screen(f"session:{name}")
+        else:
+            if self.screen is not s:
+                self.push_screen(f"session:{name}")
+            if kind:
+                s.action_open(kind)
+        self._seen = None
 
-    def connect(self, name, agent=None):
-        self.interactive([name, "--hold"] + ([f"--{agent}"] if agent else []))
+    def back_to_list(self):
+        self._seen = None
+        if self.vms:
+            self.show_vms(self.vms)
+
+    def session_closed(self, name):
+        s = self.sessions.pop(name, None)
+        if s is None:
+            return
+        if self.screen is s:
+            self.pop_screen()
+        self.call_after_refresh(self.uninstall_screen, f"session:{name}")
+        self.back_to_list()
 
     @work(thread=True)
     def background(self, args, done=None, name=None):
@@ -4253,52 +5008,43 @@ class VmAgentsUI(App):
             if line.strip():
                 self.call_from_thread(self.log_line, line)
         if rc != 0:
-            self.call_from_thread(self.notify, f"vmagents {args[0]} failed (exit code {rc})", severity="error")
+            self.call_from_thread(self.notify, T("vmagents {cmd} failed (exit code {rc})", cmd=args[0], rc=rc),
+                                  severity="error")
         if name:
             self.busy.discard(name)
         if done:
             self.call_from_thread(done, rc)
         self.call_from_thread(self.refresh_vms)
 
-    def need_vm(self, libvirt=False):
+    def need_vm(self, libvirt=False, busy_ok=False):
         vm = self.selected()
         if not vm:
-            self.notify("No VM selected. Press n to make one.")
+            self.notify(T("No VM selected. Press n to make one."))
             return None
-        if vm["name"] in self.busy:
-            self.notify(f"{vm['name']} is busy; wait a moment.")
+        if vm["name"] in self.busy and not busy_ok:
+            self.notify(T("{n} is busy; wait a moment.", n=vm["name"]))
             return None
         if libvirt and not vm.get("domain"):
-            self.notify(f"{vm['name']} is not a libvirt VM: vmagents cannot start, stop or snapshot it.")
+            self.notify(T("{n} is not a libvirt VM: vmagents cannot start, stop or snapshot it.", n=vm["name"]))
             return None
         return vm
 
     # --- actions
     def action_open(self):
-        if vm := self.need_vm():
-            self.connect(vm["name"])
-
-    def action_agent(self):
-        if not (vm := self.need_vm()):
+        if not (vm := self.need_vm(busy_ok=True)):
             return
-        if vm.get("os") == "windows":
-            self.notify("Only Claude Code runs on Windows VMs.")
+        if vm["name"] in self.sessions:  # back to what is open there
+            self.open_session(vm["name"], None)
             return
-        installed = vm.get("agents") or []
-        opts = [(k, label + ("" if k in installed or not installed else "   (installs it first)")) for k, label in AGENTS]
 
-        def chosen(agent):
-            if agent:
-                self.connect(vm["name"], agent)
-        self.push_screen(Pick(f"Open which AI assistant on {vm['name']}?", opts), chosen)
+        def chosen(kind):
+            if kind:
+                self.open_session(vm["name"], kind)
+        self.push_screen(OpenAs(vm), chosen)
 
     def action_shell(self):
-        if vm := self.need_vm():
-            self.interactive(["shell", vm["name"]])
-
-    def action_login(self):
-        if vm := self.need_vm():
-            self.interactive(["login", vm["name"]])
+        if vm := self.need_vm(busy_ok=True):
+            self.open_session(vm["name"], "shell")
 
     def action_new(self):
         self.push_screen(NewVM(self.info, [v["name"] for v in self.vms]))
@@ -4311,37 +5057,9 @@ class VmAgentsUI(App):
         else:
             self.background(["start", vm["name"]], name=vm["name"])
 
-    def action_snapshot(self):
-        if not (vm := self.need_vm(libvirt=True)):
-            return
-
-        def note(text):
-            if text is not None:
-                self.background(["snapshot", vm["name"]] + ([text] if text else []), name=vm["name"])
-        self.push_screen(AskText(f"Take a snapshot of {vm['name']} now. A note (optional):",
-                                 placeholder="before the big refactor"), note)
-
-    def action_undo(self):
-        if not (vm := self.need_vm(libvirt=True)):
-            return
-        snaps = cli_json("snapshots", vm["name"], "--json", default=[]) or []
-        if not snaps:
-            self.notify(f"No snapshots of {vm['name']} yet. One is taken each time the VM starts.")
-            return
-        opts = [(s["name"], f"{s['time']}  {s['name']}  {'(VM on)' if s['state'] == 'running' else ''}"
-                 f"{('  ' + s['description']) if s['description'] and not s['name'].startswith('auto-') else ''}")
-                for s in reversed(snaps)]
-
-        def chosen(snap):
-            if not snap:
-                return
-
-            def sure(yes):
-                if yes:
-                    self.background(["undo", vm["name"], snap, "--yes"], name=vm["name"])
-            self.push_screen(Confirm(f"Put {vm['name']} back to [b]{snap}[/b]?\nEverything changed in the VM since "
-                                     "then is lost.", yes="Undo", danger=True), sure)
-        self.push_screen(Pick(f"Back to which snapshot of {vm['name']}? (newest first)", opts), chosen)
+    def action_snapshots(self):
+        if vm := self.need_vm(libvirt=True):
+            self.push_screen(Snapshots(vm))
 
     def action_resize(self):
         if not (vm := self.need_vm(libvirt=True)):
@@ -4367,30 +5085,29 @@ class VmAgentsUI(App):
                 if yes:
                     self.stop_forwards(n)
             descs = "\n".join(d for _, d in self.forwards[n])
-            self.push_screen(Confirm(f"Forwarding now:\n{descs}\n\nStop it?", yes="Stop"), stop)
+            self.push_screen(Confirm(T("Forwarding now:\n{list}\n\nStop it?", list=descs), yes=T("Stop")), stop)
             return
         current = ",".join(map(str, vm.get("ports") or []))
 
         def check(v):
-            if v and not PORTS_RE.match(v.replace(" ", "")):
-                return "Ports like 3000,5173 (or HERE:VM, e.g. 9000:3000)."
+            if v["ports"] and not PORTS_RE.match(v["ports"].replace(" ", "")):
+                return T("Ports like 3000,5173 (or HERE:VM, e.g. 9000:3000).")
             return ""
 
         def chosen(r):
             if not r:
                 return
-            v, extra = r
-            v = v.replace(" ", "")
-            if extra.get("save") and ":" not in v:
+            v = r["ports"].replace(" ", "")
+            if r.get("save") and ":" not in v:
                 self.background(["ports", n, v or "off"])
-            if v and extra.get("now"):
-                self.start_forward(n, v.split(","), extra.get("lan"), extra.get("browser"))
-        self.push_screen(AskText(
-            f"Ports of {n} to reach from this computer (a web server the agent started, for example):",
-            current, "3000,5173", check,
-            extra=[("now", "Forward them now", True), ("browser", "Open them in the browser", True),
-                   ("lan", "Also reachable from other devices on my network", False),
-                   ("save", "Forward them every time I connect", bool(current))]), chosen)
+            if v and r.get("now"):
+                self.start_forward(n, v.split(","), r.get("lan"), r.get("browser"))
+        self.push_screen(Ask(
+            T("Ports of {n} to reach from this computer (a web server the agent started, for example):", n=n),
+            [("ports", "", current, "3000,5173")], check,
+            extra=[("now", T("Forward them now"), True), ("browser", T("Open them in the browser"), True),
+                   ("lan", T("Also reachable from other devices on my network"), False),
+                   ("save", T("Forward them every time I connect"), bool(current))]), chosen)
 
     def start_forward(self, name, ports, lan, browser):
         args = ["open", name, *ports, "--keep"] + ([] if browser else ["--no-browser"]) + (["--lan"] if lan else [])
@@ -4411,7 +5128,8 @@ class VmAgentsUI(App):
                 self.call_from_thread(self.log_line, line)
                 m = re.match(r"Port (\d+) of \S+: (http://\S+)", line)
                 if m:
-                    self.call_from_thread(self.add_forward, name, p, f"port {m.group(1)} at {m.group(2)}")
+                    self.call_from_thread(self.add_forward, name, p, T("port {p} at {url}", p=m.group(1),
+                                                                       url=m.group(2)))
             rc = p.wait()
             self.call_from_thread(self.forward_ended, name, p, rc)
         threading.Thread(target=read, daemon=True).start()
@@ -4424,13 +5142,13 @@ class VmAgentsUI(App):
         had = [f for f in self.forwards.get(name, []) if f[0] is p]
         self.forwards[name] = [f for f in self.forwards.get(name, []) if f[0] is not p]
         if not had and rc not in (0, 130, -2):
-            self.notify(f"Forwarding ports of {name} failed; see the log.", severity="error")
+            self.notify(T("Forwarding ports of {n} failed; see the log.", n=name), severity="error")
         self.show_details()
 
     def stop_forwards(self, name=None):
         for n in [name] if name else list(self.forwards):
             for p in {id(p): p for p, _ in self.forwards.get(n, [])}.values():
-                if p.poll() is None:
+                if p is not None and p.poll() is None:
                     p.send_signal(signal.SIGINT)
             self.forwards[n] = []
         self.show_details()
@@ -4443,20 +5161,32 @@ class VmAgentsUI(App):
             def rm(yes):
                 if yes:
                     self.background(["rm", n])
-            self.push_screen(Confirm(f"{n} was not made by vmagents, so only its profile can be removed "
-                                     "(the VM stays as it is). Remove the profile?", yes="Remove"), rm)
+            self.push_screen(Confirm(T("{n} was not made by vmagents, so only its profile can be removed (the VM "
+                                       "stays as it is). Remove the profile?", n=n), yes=T("Remove")), rm)
             return
 
         def sure(yes):
             if yes:
                 self.stop_forwards(n)
                 self.background(["delete", n, "--yes"], name=n)
-        self.push_screen(TypeName(f"[b]Delete {n}[/b] with its disk and snapshots? This cannot be undone.\n"
-                                  f"Type its name to confirm:", n), sure)
+        self.push_screen(TypeName(T("[b]Delete {n}[/b] with its disk and snapshots? This cannot be undone.\nType its "
+                                    "name to confirm:", n=n), n), sure)
 
     def action_quit(self):
-        self.stop_forwards()
-        self.exit()
+        count = sum(len(s.terminals()) for s in self.sessions.values())
+        if not count:
+            self.stop_forwards()
+            self.exit()
+            return
+
+        def sure(yes):
+            if yes:
+                for s in self.sessions.values():
+                    s.close_all()
+                self.stop_forwards()
+                self.exit()
+        self.push_screen(Confirm(T("{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the "
+                                   "VM).", count=count), yes=T("Quit")), sure)
 
 
 def main():

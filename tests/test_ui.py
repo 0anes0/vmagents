@@ -1,7 +1,8 @@
 """The terminal UI (vmagents ui), driven with Textual's test pilot against a
-fake vmagents that answers --json and records what the UI runs. Needs
-Textual (skipped otherwise): uv run --with 'textual>=8,<9' python -m unittest
-tests.test_ui"""
+fake vmagents that answers --json, records what the UI runs, and in the
+UI's terminal tabs behaves like a small interactive program. Needs Textual
+and pyte (skipped otherwise): uv run --with 'textual>=8,<9' --with pyte
+python -m unittest tests.test_ui"""
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ from tests.helpers import write_exe
 from tests.test_idle_notify import var
 
 try:
+    import pyte  # noqa: F401
     import textual  # noqa: F401
     HAVE_TEXTUAL = True
 except ImportError:
@@ -40,6 +42,14 @@ elif a[:1] == ["open"]:
         print(f"Port {p} of {a[1]}: http://localhost:{p}", flush=True)
     print("Stop with Ctrl-C.", flush=True)
     time.sleep(30)
+elif a[:1] in (["shell"], ["login"]) or "--hold" in a:
+    # In a terminal tab: says what it is, then echoes lines until "exit".
+    print("\x1b[32msession:\x1b[0m " + " ".join(a), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if line == "exit":
+            break
+        print("you typed: " + line, flush=True)
 else:
     print("ok")
 '''
@@ -51,12 +61,13 @@ VM = {"name": "dev", "default": True, "host": "", "user": "me", "port": 22, "dom
 IMAGES = {"images": [{"name": "debian13", "description": "Debian 13", "downloaded": True},
                      {"name": "arch", "description": "Arch Linux", "downloaded": False}],
           "host": {"memory_mb": 16384, "memory_available_mb": 9000, "cpus": 8, "libvirt": True, "pool": "default",
-                   "pool_available_gb": 100, "missing": [], "agents": ["claude", "codex", "gemini", "opencode", "aider"]}}
+                   "pool_available_gb": 100, "missing": [],
+                   "agents": ["claude", "codex", "gemini", "opencode", "aider"]}}
 SNAPS = [{"name": "auto-1", "time": "2026-10-16 09:00:00", "state": "shutoff", "description": ""},
          {"name": "snap-2", "time": "2026-10-16 10:00:00", "state": "running", "description": "before refactor"}]
 
 
-@unittest.skipUnless(HAVE_TEXTUAL, "needs Textual")
+@unittest.skipUnless(HAVE_TEXTUAL, "needs Textual and pyte")
 class UITests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="vmagents-ui-"))
@@ -65,16 +76,24 @@ class UITests(unittest.IsolatedAsyncioTestCase):
                                   memory_mb=None, cpus=None, created=False, ports=[])])
         self.write(images=IMAGES, snaps=SNAPS)
         fake = write_exe(self.d / "vmagents", FAKE)
-        os.environ["FAKE_UI_DIR"] = str(self.d)
-        os.environ["VMAGENTS_BIN"] = str(fake)
+        self.env = {"FAKE_UI_DIR": str(self.d), "VMAGENTS_BIN": str(fake), "VMAGENTS_CONF_DIR": str(self.d / "conf"),
+                    "LANG": "C.UTF-8"}
+        self.saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        self.addCleanup(self.restore_env)
         src = self.d / "ui.py"
         src.write_text(var("UI_PY"))
         spec = importlib.util.spec_from_file_location("vmagents_ui", src)
         self.ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.ui)
         self.app = self.ui.VmAgentsUI()
-        self.ran = []
-        self.app.interactive = lambda args: self.ran.append(args)  # no terminal to hand over in tests
+
+    def restore_env(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     def write(self, **files):
         for name, data in files.items():
@@ -98,31 +117,123 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     async def ready(self, pilot):
         await self.wait_for(pilot, lambda: self.app.vms and self.app.info)
 
-    async def test_list_and_details(self):
+    def text(self, widget_id):
+        return str(self.app.screen.query_one(widget_id).render())
+
+    def screen_text(self, term):
+        return "\n".join(term.vt.display) if term.vt else ""
+
+    # --- the list
+    async def test_list_and_vim_keys(self):
         async with self.start() as pilot:
             await self.ready(pilot)
-            table = self.app.query_one("#vms")
-            self.assertEqual(table.row_count, 2)
-            details = str(self.app.query_one("#details").render())
-            self.assertIn("dev", details)
+            self.assertEqual(self.app.query_one("#vms").row_count, 2)
+            details = self.text("#details")
             self.assertIn("4 GB RAM · 2 CPUs · 2 snapshots", details)
             self.assertIn("Ports: 3000 (while connected)", details)
-            await pilot.press("down")
+            await pilot.press("j")
             await pilot.pause(0.2)
-            self.assertIn("me@192.0.2.5", str(self.app.query_one("#details").render()))
+            self.assertIn("me@192.0.2.5", self.text("#details"))
+            await pilot.press("k")
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.selected_name(), "dev")
 
-    async def test_open_and_agents(self):
+    async def test_language(self):
         async with self.start() as pilot:
             await self.ready(pilot)
-            await pilot.press("enter")
-            await pilot.pause(0.2)
-            self.assertEqual(self.ran, [["dev", "--hold"]])
-            await pilot.press("a")
-            await pilot.pause(0.2)
-            await pilot.press("down", "enter")  # Codex
-            await pilot.pause(0.2)
-            self.assertEqual(self.ran[-1], ["dev", "--hold", "--codex"])
+            await pilot.press("L")
+            await pilot.pause(0.3)
+            self.assertIn("Açılan: [b]Claude Code[/b]".replace("[b]", "").replace("[/b]", ""), self.text("#details"))
+            self.assertIn("Yeni VM", self.app.export_screenshot().replace("&#160;", " "))
+            self.assertEqual(json.loads((self.d / "conf" / "ui.json").read_text()), {"lang": "tr"})
+            await pilot.press("n")  # forms follow
+            await pilot.pause(0.3)
+            self.assertIn("Oluştur", self.app.export_screenshot().replace("&#160;", " "))
+            await pilot.press("escape")
+            await pilot.press("L")
+            await pilot.pause(0.3)
+            self.assertIn("Opens: Claude Code", self.text("#details"))
+        # the next start remembers it
+        (self.d / "conf" / "ui.json").write_text(json.dumps({"lang": "tr"}))
+        app = self.ui.VmAgentsUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.wait_for(pilot, lambda: app.vms)
+            self.assertEqual(self.ui.LANG, "tr")
 
+    # --- terminals inside the UI
+    async def test_open_shell_and_agents_as_tabs(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("enter")  # how to open it?
+            await pilot.pause(0.3)
+            self.assertIsInstance(self.app.screen, self.ui.OpenAs)
+            await pilot.press("enter")  # the first: Shell
+            session = self.app.screen
+            self.assertIsInstance(session, self.ui.Session)
+            term = session.query_one(self.ui.Terminal)
+            await self.wait_for(pilot, lambda: "session: shell dev" in self.screen_text(term))
+            await pilot.press(*"hello", "enter")
+            await self.wait_for(pilot, lambda: "you typed: hello" in self.screen_text(term))
+            self.assertIn("you typed: hello", self.screen_text(term))
+            # q, n, d... are for the terminal here, not the list
+            await pilot.press("q", "enter")
+            await self.wait_for(pilot, lambda: "you typed: q" in self.screen_text(term))
+            self.assertTrue(self.app.is_running)
+            await pilot.press("f3")  # Codex, as a second tab
+            await pilot.pause(0.3)
+            terms = session.query(self.ui.Terminal)
+            self.assertEqual([t.label for t in terms], ["Shell", "Codex"])
+            await self.wait_for(pilot, lambda: "session: dev --hold --codex" in self.screen_text(terms[1]))
+            await pilot.press("ctrl+right_square_bracket")  # back to the list; both keep running
+            await pilot.pause(0.3)
+            self.assertNotIsInstance(self.app.screen, self.ui.Session)
+            self.assertIn("Open here: Shell, Codex", self.text("#details"))
+            await pilot.press("enter")  # straight back, no question
+            await pilot.pause(0.3)
+            self.assertIs(self.app.screen, session)
+            await pilot.press(*"exit", "enter")  # Codex ends: its tab closes
+            await self.wait_for(pilot, lambda: len(session.query(self.ui.Terminal)) == 1)
+            await pilot.press(*"exit", "enter")  # the last one: back to the list
+            await self.wait_for(pilot, lambda: not self.app.sessions)
+            self.assertNotIsInstance(self.app.screen, self.ui.Session)
+
+    async def test_open_as_with_keys(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("l")  # l opens, like Enter
+            await pilot.pause(0.3)
+            await pilot.press("j", "l")  # Claude Code
+            await pilot.pause(0.5)
+            term = self.app.screen.query_one(self.ui.Terminal)
+            await self.wait_for(pilot, lambda: "session: dev --hold --claude" in self.screen_text(term))
+            await pilot.press("ctrl+right_square_bracket")
+            await pilot.pause(0.2)
+            await pilot.press("j", "s")  # s: a shell on srv, directly
+            await pilot.pause(0.5)
+            term = self.app.screen.query_one(self.ui.Terminal)
+            await self.wait_for(pilot, lambda: "session: shell srv" in self.screen_text(term))
+            await pilot.press("ctrl+right_square_bracket")
+            await pilot.pause(0.2)
+            await pilot.press("h")  # nothing on the list
+            await pilot.press("q")  # quit asks: terminals are open
+            await pilot.pause(0.2)
+            self.assertIsInstance(self.app.screen, self.ui.Confirm)
+            await pilot.press("y")
+            await pilot.pause(0.5)
+            self.assertFalse(self.app.is_running)
+
+    async def test_terminal_keys(self):
+        k = self.ui.key_bytes
+        self.assertEqual(k("ctrl+c", None), b"\x03")
+        self.assertEqual(k("up", None), b"\x1b[A")
+        self.assertEqual(k("up", None, cursor_keys=True), b"\x1bOA")
+        self.assertEqual(k("ctrl+left", None), b"\x1b[1;5D")
+        self.assertEqual(k("enter", "\r"), b"\r")
+        self.assertEqual(k("ü", "ü"), "ü".encode())
+        self.assertEqual(k("alt+b", None), b"\x1bb")
+        self.assertEqual(k("f5", None), b"\x1b[15~")
+
+    # --- new VM
     async def test_new_vm(self):
         async with self.start() as pilot:
             await self.ready(pilot)
@@ -131,33 +242,38 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             form = self.app.screen
             await pilot.press("ctrl+s")
             await pilot.pause(0.2)
-            self.assertIn("Give the VM a name", str(form.query_one("#error").render()))
+            self.assertIn("Give the VM a name", self.text("#error"))
             for name, err in (("dev", "There is a VM named dev"), ("a b", "letters, digits")):
                 form.query_one("#name").value = name
                 await pilot.press("ctrl+s")
                 await pilot.pause(0.2)
-                self.assertIn(err, str(form.query_one("#error").render()))
+                self.assertIn(err, self.text("#error"))
+            await pilot.press("d")  # a list key: types into the name, deletes nothing
+            await pilot.pause(0.1)
+            self.assertEqual(self.calls("delete"), [])
             form.query_one("#name").value = "web"
             form.query_one("#image").value = "arch"
             form.query_one("#memory").value = 8192
             form.query_one("#cpus").value = 4
             form.query_one("#disk").value = "40"
-            form.query_one("#agent-codex").value = True
+            form.query_one("#agent-opencode").value = True
             form.query_one("#ports").value = "3000,5173"
             form.query_one("#idle").value = 0
             await pilot.pause(0.2)
-            self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,codex "
-                          "--idle off --ports 3000,5173", str(form.query_one("#command").render()))
+            self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,opencode "
+                          "--idle off --ports 3000,5173", self.text("#command"))
             await pilot.press("ctrl+s")
             await self.wait_for(pilot, lambda: getattr(self.app.screen, "rc", None) is not None)
             screen = self.app.screen
             self.assertEqual(screen.rc, 0)
             self.assertEqual(self.calls("create")[-1], ["create", "web", "--image", "arch", "--memory", "8192",
-                                                        "--cpus", "4", "--disk", "40", "--agents", "claude,codex",
+                                                        "--cpus", "4", "--disk", "40", "--agents", "claude,opencode",
                                                         "--idle", "off", "--ports", "3000,5173"])
             self.assertFalse(screen.query_one("#open").disabled)
-            await pilot.click("#login")
-            self.assertEqual(self.ran[-1], ["login", "web"])
+            await pilot.click("#login")  # logging in runs in a terminal tab too
+            await pilot.pause(0.5)
+            term = self.app.screen.query_one(self.ui.Terminal)
+            await self.wait_for(pilot, lambda: "session: login web" in self.screen_text(term))
 
     async def test_new_vm_checks(self):
         async with self.start() as pilot:
@@ -176,7 +292,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
                 form.query_one(field).value = value
                 await pilot.press("ctrl+s")
                 await pilot.pause(0.2)
-                self.assertIn(err, str(form.query_one("#error").render()))
+                self.assertIn(err, self.text("#error"))
             self.assertEqual(self.calls("create"), [])
 
     async def test_failed_create(self):
@@ -189,27 +305,65 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.app.screen.query_one("#name").value = "web"
             await pilot.press("ctrl+s")
             await self.wait_for(pilot, lambda: getattr(self.app.screen, "rc", None) is not None)
-            self.assertIn("failed", str(self.app.screen.query_one("#status").render()))
+            self.assertIn("failed", self.text("#status"))
             self.assertTrue(self.app.screen.query_one("#open").disabled)
 
-    async def test_start_stop_snapshot_undo_resize(self):
+    # --- snapshots
+    async def test_snapshots(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("u")
+            await pilot.pause(0.5)
+            screen = self.app.screen
+            self.assertIsInstance(screen, self.ui.Snapshots)
+            table = screen.query_one("#snaps")
+            await self.wait_for(pilot, lambda: table.row_count == 2)
+            self.assertEqual(screen.selected()["name"], "snap-2")  # newest first
+            await pilot.press("j", "enter")  # auto-1
+            await pilot.pause(0.2)
+            await pilot.press("enter")  # Cancel has the focus: nothing happens
+            await pilot.pause(0.2)
+            self.assertEqual(self.calls("undo"), [])
+            await pilot.press("l")
+            await pilot.pause(0.2)
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: self.calls("undo"))
+            self.assertEqual(self.calls("undo"), [["undo", "dev", "auto-1", "--yes"]])
+            await pilot.press("n")  # take one, with a name and a label
+            await pilot.pause(0.2)
+            dialog = self.app.screen
+            dialog.query_one("#f-name").value = "auto-x y"
+            await pilot.click("#ok")
+            await pilot.pause(0.1)
+            self.assertIn("letters, digits", str(dialog.query_one("#error").render()))
+            dialog.query_one("#f-name").value = "clean-install"
+            dialog.query_one("#f-label").value = "fresh, with Node"
+            await pilot.click("#ok")
+            await self.wait_for(pilot, lambda: self.calls("snapshot"))
+            self.assertEqual(self.calls("snapshot")[-1], ["snapshot", "dev", "--name", "clean-install",
+                                                          "fresh, with Node"])
+            await pilot.press("e")  # label of the selected one
+            await pilot.pause(0.2)
+            self.app.screen.query_one("#f-label").value = "worked here"
+            await pilot.press("enter")
+            await self.wait_for(pilot, lambda: len(self.calls("snapshot")) == 2)
+            self.assertEqual(self.calls("snapshot")[-1][:3], ["snapshot", "dev", "--label"])
+            self.assertEqual(self.calls("snapshot")[-1][4], "worked here")
+            await pilot.press("d")
+            await pilot.pause(0.2)
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: len(self.calls("snapshot")) == 3)
+            self.assertEqual(self.calls("snapshot")[-1][2], "--delete")
+            await pilot.press("h")
+            await pilot.pause(0.2)
+            self.assertNotIsInstance(self.app.screen, self.ui.Snapshots)
+
+    async def test_start_stop_and_resize(self):
         async with self.start() as pilot:
             await self.ready(pilot)
             await pilot.press("t")
             await self.wait_for(pilot, lambda: self.calls("stop"))
             self.assertEqual(self.calls("stop"), [["stop", "dev"]])
-            await pilot.press("p")
-            await pilot.pause(0.2)
-            await pilot.press(*"before x", "enter")
-            await self.wait_for(pilot, lambda: self.calls("snapshot"))
-            self.assertEqual(self.calls("snapshot"), [["snapshot", "dev", "before x"]])
-            await pilot.press("u")
-            await pilot.pause(0.3)
-            await pilot.press("down", "enter")  # newest first: snap-2, then auto-1
-            await pilot.pause(0.2)
-            await pilot.click("#yes")
-            await self.wait_for(pilot, lambda: self.calls("undo"))
-            self.assertEqual(self.calls("undo"), [["undo", "dev", "auto-1", "--yes"]])
             await pilot.press("r")
             await pilot.pause(0.2)
             self.app.screen.query_one("#memory").value = 8192
@@ -220,9 +374,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     async def test_not_libvirt(self):
         async with self.start() as pilot:
             await self.ready(pilot)
-            await pilot.press("down", "t", "u", "r")
+            await pilot.press("j", "t", "u", "r")
             await pilot.pause(0.3)
-            self.assertEqual(self.calls("start") + self.calls("stop") + self.calls("resize"), [])
+            self.assertEqual(self.calls("start") + self.calls("stop") + self.calls("resize") + self.calls("snapshots"), [])
 
     async def test_ports(self):
         async with self.start() as pilot:
@@ -230,18 +384,18 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("o")
             await pilot.pause(0.2)
             dialog = self.app.screen
-            self.assertEqual(dialog.query_one("#text").value, "3000")
-            dialog.query_one("#text").value = "3000,8080"
+            self.assertEqual(dialog.query_one("#f-ports").value, "3000")
+            dialog.query_one("#f-ports").value = "3000,8080"
             dialog.query_one("#browser").value = False
             await pilot.click("#ok")
             await self.wait_for(pilot, lambda: len(self.app.forwards.get("dev", [])) == 2)
             self.assertIn(["open", "dev", "3000", "8080", "--keep", "--no-browser"], self.calls("open"))
             self.assertIn(["ports", "dev", "3000,8080"], self.calls("ports"))  # "every time" was on
-            self.assertIn("port 8080 at http://localhost:8080", str(self.app.query_one("#details").render()))
+            self.assertIn("port 8080 at http://localhost:8080", self.text("#details"))
             proc = self.app.forwards["dev"][0][0]
             await pilot.press("o")
             await pilot.pause(0.2)
-            await pilot.click("#yes")  # stop
+            await pilot.press("y")  # stop
             await self.wait_for(pilot, lambda: proc.poll() is not None)
             self.assertEqual(proc.poll(), 0)
             self.assertEqual(self.app.forwards["dev"], [])
@@ -257,9 +411,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             await self.wait_for(pilot, lambda: self.calls("delete"))
             self.assertEqual(self.calls("delete"), [["delete", "dev", "--yes"]])
-            await pilot.press("down", "d")  # not made by vmagents: only the profile
+            await pilot.press("j", "d")  # not made by vmagents: only the profile
             await pilot.pause(0.2)
-            await pilot.click("#yes")
+            await pilot.press("y")
             await self.wait_for(pilot, lambda: self.calls("rm"))
             self.assertEqual(self.calls("rm"), [["rm", "srv"]])
 
@@ -268,7 +422,15 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         async with self.start() as pilot:
             await self.wait_for(pilot, lambda: self.app.info)
             await pilot.pause(0.5)
-            self.assertIn("No VMs yet", str(self.app.query_one("#details").render()))
+            self.assertIn("No VMs yet", self.text("#details"))
             await pilot.press("enter", "t")
             await pilot.pause(0.2)
-            self.assertEqual(self.ran, [])
+            self.assertNotIsInstance(self.app.screen, self.ui.OpenAs)
+
+    async def test_line_drawing(self):
+        t = self.ui.Terminal(["true"], "x")
+        t.vt = self.ui.pyte.HistoryScreen(20, 3, history=10)
+        t.stream = self.ui.pyte.ByteStream(t.vt)
+        t.feed(b"a\x1b(0qqx\x1b")  # tmux's borders, the last sequence cut in two
+        t.feed(b"(Bq \xe2\x94\x80")
+        self.assertEqual(t.vt.display[0].rstrip(), "a──│q ─")
