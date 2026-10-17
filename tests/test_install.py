@@ -15,8 +15,8 @@ class InstallTests(SandboxTest):
         prefix = self.sb.tmp / "prefix"
         r = self.install("--prefix", str(prefix))
         self.assertEqual(r.returncode, 0, r.stderr)
-        binary = prefix / "bin" / "vmclaude"
-        self.assertEqual(binary.read_bytes(), (ROOT / "vmclaude").read_bytes())
+        binary = prefix / "bin" / "vmagents"
+        self.assertEqual(binary.read_bytes(), (ROOT / "vmagents").read_bytes())
         self.assertTrue(binary.stat().st_mode & 0o111)
         self.assertIn("is not on your PATH", r.stdout)
         r = self.install("--prefix", str(prefix), "--uninstall")

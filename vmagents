@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# vmclaude — open Claude Code inside a virtual machine over SSH, in one step.
-# https://github.com/emincan2000/vmclaude
+# vmagents — run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode,
+# aider) inside a virtual machine over SSH, in one step. (Called vmclaude
+# before 0.11; the old name, its settings and its VMs keep working.)
+# https://github.com/emincan2000/vmagents
 # shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.10.0
+VERSION=0.11.0
 PROG=${0##*/}
-CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
+CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
 KNOWN_HOSTS=$CONF_DIR/known_hosts
-DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
-BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
-STOP_TIMEOUT=${VMCLAUDE_STOP_TIMEOUT:-120}
+DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
+# The key made under the old name stays in use.
+[[ ! -e $DEFAULT_KEY && -e $HOME/.ssh/vmclaude_ed25519 ]] && DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
+BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
+STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
 PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD CREATED "
 HOLD=0
-AGENTS="claude codex gemini aider"
+AGENTS="claude codex gemini opencode aider"
 
 say()  { printf '%s\n' "$*"; }
 info() { printf '%s\n' "$*" >&2; }
@@ -35,40 +39,41 @@ hold_prompt() {
 
 usage() {
   cat <<EOF
-vmclaude $VERSION — run Claude Code inside a virtual machine, over SSH.
+vmagents $VERSION — run AI coding agents inside a virtual machine, over SSH.
 
-Claude Code then works on the VM's files and programs, not on your computer's.
-vmclaude starts the VM, logs in with its own SSH key and opens Claude there:
-in tmux on Linux VMs, so Claude keeps running if the connection drops.
+Claude Code, Codex, Gemini CLI, OpenCode or aider then work on the VM's files
+and programs, not on your computer's. vmagents starts the VM, logs in with its
+own SSH key and opens the agent there (Claude Code unless you choose another):
+in tmux on Linux VMs, so it keeps running if the connection drops.
 When you leave Claude, a libvirt VM that nothing else uses shuts down again;
-one left running shuts itself down after 30 idle minutes ("vmclaude idle").
-Each start takes a snapshot first: "vmclaude undo" takes back what Claude did.
+one left running shuts itself down after 30 idle minutes ("vmagents idle").
+Each start takes a snapshot first: "vmagents undo" takes back what Claude did.
 When Claude needs you, a desktop notification appears on this computer, and
-what you copy on the VM lands in this computer's clipboard. Codex, Gemini CLI
-and aider work the same way (vmclaude dev --codex).
+what you copy on the VM lands in this computer's clipboard.
+(vmagents was called vmclaude before 0.11; that name still works.)
 
 GET STARTED
   The easy way: a terminal UI to make, open and manage VMs:
-    vmclaude ui
+    vmagents ui
 
   No VM yet? Make one (Linux computer with libvirt):
-    vmclaude create dev                      new Debian 13 VM with Claude Code, no password
-    vmclaude create box --image arch         the same with Arch Linux
-    vmclaude create web --memory 8192 --cpus 4 --agents claude,codex --ports 3000
-    vmclaude login dev                       log Claude in (browser opens on this computer)
-    vmclaude dev                             open Claude Code in it
+    vmagents create dev                      new Debian 13 VM with Claude Code, no password
+    vmagents create box --image arch         the same with Arch Linux
+    vmagents create web --memory 8192 --cpus 4 --agents claude,codex --ports 3000
+    vmagents login dev                       log Claude in (browser opens on this computer)
+    vmagents dev                             open Claude Code in it
 
   A VM you already have:
-    vmclaude add win10 --domain win10 --user emin     a libvirt VM (vmclaude starts it)
-    vmclaude add srv --host 192.168.1.50 --user dev   any machine you can SSH into
-    vmclaude setup srv                       install SSH key + Claude Code (asks the VM password once)
-    vmclaude srv                             open Claude Code in it
+    vmagents add win10 --domain win10 --user emin     a libvirt VM (vmagents starts it)
+    vmagents add srv --host 192.168.1.50 --user dev   any machine you can SSH into
+    vmagents setup srv                       install SSH key + Claude Code (asks the VM password once)
+    vmagents srv                             open Claude Code in it
 
   Every day:
-    vmclaude                                 open Claude on the default VM
-    vmclaude dev --continue                  arguments after the name go to Claude
-    vmclaude open dev 3000                   a web server on the VM, in your browser here
-    vmclaude dev --codex                     Codex instead of Claude (also --gemini, --aider)
+    vmagents                                 open Claude on the default VM
+    vmagents dev --continue                  arguments after the name go to Claude
+    vmagents open dev 3000                   a web server on the VM, in your browser here
+    vmagents dev --codex                     Codex instead of Claude (also --gemini, --opencode, --aider)
     ssh dev@VM                               any SSH app opens Claude too (after setup)
 
 COMMANDS
@@ -81,7 +86,7 @@ COMMANDS
     ui                   all of this in a terminal UI
 
   Use a VM:
-    connect NAME         open Claude Code ("vmclaude NAME" does the same)
+    connect NAME         open Claude Code ("vmagents NAME" does the same)
     shell NAME [CMD]     a normal shell on the VM, or run one command there
     start NAME           start a libvirt VM and wait until SSH answers
     stop NAME            shut a libvirt VM down (--force: pull the plug)
@@ -101,22 +106,22 @@ COMMANDS
     add NAME             add an existing VM, or change the settings of a profile
     setup NAME           install the SSH key, tmux and Claude Code on the VM
     list                 show all profiles; * marks the default
-    default NAME         choose the VM that plain "vmclaude" opens
+    default NAME         choose the VM that plain "vmagents" opens
     autostart NAME on|off   open Claude on every SSH login, or stop doing so
     autostop NAME on|off    shut the VM down when you leave Claude (default: on)
     idle NAME MINUTES|off   the VM shuts itself down after MINUTES unused (create: 30)
     notify NAME on|off      desktop notifications when Claude needs you (default: on)
     clipboard NAME on|off   what you copy in tmux on the VM lands here (default: on)
-    agent NAME [AGENT]      what "vmclaude NAME" opens: claude, codex, gemini or aider
+    agent NAME [AGENT]      what "vmagents NAME" opens: claude, codex, gemini, opencode, aider
     desktop NAME         add "Claude Code (NAME)" to your app menu
     edit NAME            open the profile file in your editor
     forget NAME          forget the VM's SSH host key (after reinstalling the VM)
     rm NAME              delete the profile only (the VM stays)
 
 MORE HELP
-  vmclaude help COMMAND     what a command does, its options and examples
-                            (e.g. "vmclaude help create"; "vmclaude create --help" works too)
-  vmclaude images           where downloaded images and VM disks are stored
+  vmagents help COMMAND     what a command does, its options and examples
+                            (e.g. "vmagents help create"; "vmagents create --help" works too)
+  vmagents images           where downloaded images and VM disks are stored
 EOF
 }
 
@@ -125,12 +130,12 @@ help_cmd() { # COMMAND
   u=$(id -un)
   case $1 in
     create) cat <<EOF
-vmclaude create NAME [options]
+vmagents create NAME [options]
 
 Makes a new Linux VM in libvirt and sets it up for Claude Code. You need
 virt-install and virsh (Debian/Ubuntu: sudo apt install virtinst libvirt-daemon-system)
 and your user in the "libvirt" group. No password is set or asked: the VM
-lets you in with vmclaude's SSH key only, and sudo works without a password.
+lets you in with vmagents's SSH key only, and sudo works without a password.
 
 What happens:
   1. The official cloud image is downloaded once and checked against the
@@ -139,90 +144,90 @@ What happens:
      own small disk that only stores what differs from the base, so more VMs
      from the same image need no download and little space.
   3. cloud-init in the VM creates your user with the SSH key and installs tmux.
-  4. "vmclaude setup NAME" installs Claude Code and the SSH-login autostart.
+  4. "vmagents setup NAME" installs Claude Code and the SSH-login autostart.
 
 Options:
   --image IMAGE    debian13 (default), debian12, ubuntu24.04 or arch
-                   ("vmclaude images" lists them, with what is downloaded)
+                   ("vmagents images" lists them, with what is downloaded)
   --memory MB      RAM in megabytes          (default 4096)
   --cpus N         virtual CPUs              (default 2)
   --disk GB        disk size in gigabytes    (default 20)
   --user USER      user created in the VM    (default: $u)
   --uri URI        libvirt connection        (default: qemu:///system)
   --agents LIST    AI assistants to install, e.g. claude,codex (default: claude;
-                   also gemini, aider); the first one is what "vmclaude NAME" opens
+                   also gemini, opencode, aider); the first one is what "vmagents NAME" opens
   --ports LIST     ports of the VM to reach here while connected, e.g. 3000,5173
   --idle MINUTES   the VM shuts itself down after MINUTES unused (default 30; off)
-  --no-setup       only make the VM; run "vmclaude setup NAME" later
+  --no-setup       only make the VM; run "vmagents setup NAME" later
 
 Examples:
-  vmclaude create dev                              Debian 13: 4 GB RAM, 2 CPUs, 20 GB disk
-  vmclaude create big --memory 16384 --cpus 8 --disk 100
+  vmagents create dev                              Debian 13: 4 GB RAM, 2 CPUs, 20 GB disk
+  vmagents create big --memory 16384 --cpus 8 --disk 100
                                                    16 GB RAM, 8 CPUs, 100 GB disk
-  vmclaude create u24 --image ubuntu24.04          Ubuntu 24.04
-  vmclaude create box --image arch                 Arch Linux
-  VMCLAUDE_ARCH_MIRROR=https://mirrors.dotsrc.org/archlinux vmclaude create box --image arch
+  vmagents create u24 --image ubuntu24.04          Ubuntu 24.04
+  vmagents create box --image arch                 Arch Linux
+  VMAGENTS_ARCH_MIRROR=https://mirrors.dotsrc.org/archlinux vmagents create box --image arch
                                                    Arch Linux, image from a faster mirror
 
-Then: "vmclaude dev" opens Claude. "vmclaude delete dev" removes the VM again.
+Then: "vmagents dev" opens Claude. "vmagents delete dev" removes the VM again.
 EOF
       ;;
     delete) cat <<EOF
-vmclaude delete NAME [--yes]
+vmagents delete NAME [--yes]
 
-Deletes a VM that "vmclaude create" made: stops it, removes it from libvirt with
+Deletes a VM that "vmagents create" made: stops it, removes it from libvirt with
 its disk and cloud-init disk, and removes its profile. The shared base image
-stays (see "vmclaude prune"). Asks you to type the name unless --yes is given.
+stays (see "vmagents prune"). Asks you to type the name unless --yes is given.
 
 Only VMs made by create can be deleted: both the profile and the VM's libvirt
 description must say so. Your other VMs (for example a Windows VM you added
-with "vmclaude add") are never deleted; "vmclaude rm NAME" forgets their profile.
+with "vmagents add") are never deleted; "vmagents rm NAME" forgets their profile.
 
 Examples:
-  vmclaude delete dev
-  vmclaude delete dev --yes
+  vmagents delete dev
+  vmagents delete dev --yes
 EOF
       ;;
     images) cat <<EOF
-vmclaude images [--uri URI] [--json]
+vmagents images [--uri URI] [--json]
 
-Lists the images "vmclaude create --image" can use, and for each one whether it
+Lists the images "vmagents create --image" can use, and for each one whether it
 is downloaded, whether a base image of it is in the libvirt pool, its size,
 and which VMs use it (--json: the images, and this computer's RAM, CPUs and
-free space for new VMs, for scripts and "vmclaude ui"). Also shows where all
+free space for new VMs, for scripts and "vmagents ui"). Also shows where all
 of it is stored:
 
   downloads (the original image files):
       ${CACHE_DIR/#$HOME/\~}/images/
   base images, one per image release, shared by the VMs made from it:
-      <libvirt pool>/vmclaude-base-IMAGE-CHECKSUM.qcow2
+      <libvirt pool>/vmagents-base-IMAGE-CHECKSUM.qcow2
   each VM's own disk (only what differs from its base image):
       <libvirt pool>/NAME.qcow2
   each VM's cloud-init settings (user, SSH key):
       <libvirt pool>/NAME-seed.iso
 
-The pool is "$CREATE_POOL" (usually /var/lib/libvirt/images); set VMCLAUDE_POOL
-for another. Free the space of unused images with "vmclaude prune".
+The pool is "$CREATE_POOL" (usually /var/lib/libvirt/images); set VMAGENTS_POOL
+for another. Free the space of unused images with "vmagents prune".
 EOF
       ;;
     prune) cat <<EOF
-vmclaude prune [--uri URI]
+vmagents prune [--uri URI]
 
 Deletes base images in the libvirt pool that no VM disk is built on, and the
 downloads in ${CACHE_DIR/#$HOME/\~}/images/. Base images that a VM still uses are
-kept. The next "vmclaude create" downloads again what it needs.
+kept. The next "vmagents create" downloads again what it needs.
 
 Example:
-  vmclaude delete dev && vmclaude prune
+  vmagents delete dev && vmagents prune
 EOF
       ;;
     connect) cat <<EOF
-vmclaude connect [--keep] [--hold] [--no-tmux] [--codex|--gemini|--aider|--claude] [NAME] [-- ARGS...]
-vmclaude NAME [CLAUDE_ARGS...]
-vmclaude
+vmagents connect [--keep] [--hold] [--no-tmux] [--codex|--gemini|--aider|--claude] [NAME] [-- ARGS...]
+vmagents NAME [CLAUDE_ARGS...]
+vmagents
 
 Opens Claude Code on the VM. A libvirt VM is started first if it is off.
-Without NAME the default VM is used (see "vmclaude default").
+Without NAME the default VM is used (see "vmagents default").
 
 On Linux VMs Claude runs in tmux session "claude": if the connection drops,
 Claude keeps running and the next connect returns to it. Leave it running on
@@ -230,49 +235,49 @@ purpose with Ctrl-b d. Arguments for Claude only apply when a new session
 starts. Windows VMs have no tmux; there Claude ends with the connection.
 
 When you quit Claude, a libvirt VM shuts down (autostop), unless something
-still uses it: Claude left running in tmux (Ctrl-b d), another vmclaude shell,
+still uses it: Claude left running in tmux (Ctrl-b d), another vmagents shell,
 mount or connection, someone logged in on the VM. It then stays on and says
-why. Keep it on every time: "vmclaude autostop NAME off".
+why. Keep it on every time: "vmagents autostop NAME off".
 
 Before a libvirt VM is started from "shut off", a snapshot is taken:
-"vmclaude undo NAME" returns to it. While Claude runs (also after Ctrl-b d),
+"vmagents undo NAME" returns to it. While Claude runs (also after Ctrl-b d),
 this computer shows a desktop notification when Claude needs you (see
-"vmclaude help notify"). What you copy in Claude's tmux session lands in
-this computer's clipboard (see "vmclaude help clipboard").
+"vmagents help notify"). What you copy in Claude's tmux session lands in
+this computer's clipboard (see "vmagents help clipboard").
 
 Options:
   --keep        leave the VM running this time
-  --codex, --gemini, --aider
+  --codex, --gemini, --opencode, --aider
                 open that agent instead of Claude, in its own tmux session; it
-                is installed on the VM the first time (see "vmclaude help agent")
-  --claude      Claude, when "vmclaude agent" chose another one
+                is installed on the VM the first time (see "vmagents help agent")
+  --claude      Claude, when "vmagents agent" chose another one
   --no-tmux     run Claude directly, without tmux
   --hold        keep the terminal open after an error (used by app-menu launchers)
   -- ARGS       everything after -- goes to Claude
 
 Examples:
-  vmclaude dev
-  vmclaude dev --continue                    continue the last conversation
-  vmclaude connect dev -- --model opus       pass options to Claude
-  vmclaude                                   the default VM
+  vmagents dev
+  vmagents dev --continue                    continue the last conversation
+  vmagents connect dev -- --model opus       pass options to Claude
+  vmagents                                   the default VM
 EOF
       ;;
     shell) cat <<EOF
-vmclaude shell [--keep] NAME [COMMAND...]
+vmagents shell [--keep] NAME [COMMAND...]
 
 Opens a normal shell on the VM (without starting Claude), or runs one command
 there and prints its output. A libvirt VM is started if it is off. When you
-leave the shell, the VM shuts down like after connect (see "vmclaude help
+leave the shell, the VM shuts down like after connect (see "vmagents help
 autostop"); --keep leaves it on. A single COMMAND never shuts it down.
 
 Examples:
-  vmclaude shell dev
-  vmclaude shell dev df -h
-  vmclaude shell dev 'cd ~/work && git status'
+  vmagents shell dev
+  vmagents shell dev df -h
+  vmagents shell dev 'cd ~/work && git status'
 EOF
       ;;
     doctor) cat <<EOF
-vmclaude doctor [NAME]
+vmagents doctor [NAME]
 
 Checks each step of the connection and says which one fails: ssh on this
 computer, the key, the libvirt VM state, its IP address, the SSH server, key
@@ -280,22 +285,22 @@ login, and on the VM Claude Code, tmux (Linux) or Git (Windows), autostart.
 It does not start or change anything.
 
 Example:
-  vmclaude doctor dev
+  vmagents doctor dev
 EOF
       ;;
     add) cat <<EOF
-vmclaude add NAME [options]
+vmagents add NAME [options]
 
 Adds a profile for a VM (or any machine) you already have, or changes settings
 of an existing profile: only the options you give change. Then run
-"vmclaude setup NAME" once.
+"vmagents setup NAME" once.
 
 Options:
   --host HOST        IP or hostname. Optional with --domain (the IP is found)
-  --domain DOMAIN    libvirt VM name: vmclaude starts it and finds its IP
+  --domain DOMAIN    libvirt VM name: vmagents starts it and finds its IP
   --user USER        login user on the VM          (default: $u)
   --port PORT        SSH port                      (default: 22)
-  --key FILE         SSH private key               (default: ~/.ssh/vmclaude_ed25519)
+  --key FILE         SSH private key               (default: ~/.ssh/vmagents_ed25519)
   --uri URI          libvirt connection            (default: qemu:///system)
   --dir DIR          folder on the VM where Claude starts, created if missing
                      (default: home; ~/work style paths are fine)
@@ -304,17 +309,17 @@ Options:
   --os linux|windows normally detected on first connect
 
 Examples:
-  vmclaude add win10 --domain win10 --user emin              libvirt VM
-  vmclaude add srv --host 192.168.1.50 --user dev            any SSH machine
-  vmclaude add vbox --host 127.0.0.1 --port 2222 --user dev  VirtualBox port forward
-  vmclaude add dev --dir ~/projects/site                     change one setting
+  vmagents add win10 --domain win10 --user emin              libvirt VM
+  vmagents add srv --host 192.168.1.50 --user dev            any SSH machine
+  vmagents add vbox --host 127.0.0.1 --port 2222 --user dev  VirtualBox port forward
+  vmagents add dev --dir ~/projects/site                     change one setting
 EOF
       ;;
     setup) cat <<EOF
-vmclaude setup NAME [--no-install] [--no-autostart]
+vmagents setup NAME [--no-install] [--no-autostart]
 
 Prepares the VM for Claude Code. Safe to run again: done steps are skipped.
-  1. SSH key: creates ~/.ssh/vmclaude_ed25519 if needed and adds it to the VM.
+  1. SSH key: creates ~/.ssh/vmagents_ed25519 if needed and adds it to the VM.
      The VM password is asked once, for this step only.
   2. Linux: tmux (with the VM's package manager and sudo) and Claude Code.
      Windows: Git for Windows and Claude Code.
@@ -326,64 +331,64 @@ Options:
   --no-autostart    skip step 3
 
 Example:
-  vmclaude add srv --host 192.168.1.50 --user dev && vmclaude setup srv
+  vmagents add srv --host 192.168.1.50 --user dev && vmagents setup srv
 EOF
       ;;
     start) cat <<EOF
-vmclaude start NAME
+vmagents start NAME
 
 Starts a libvirt VM (or resumes a paused one) and waits until it has an IP
 address and its SSH server answers. connect, shell, mount and mcp do this by
 themselves; use start to boot a VM ahead of time.
 
 Example:
-  vmclaude start dev
+  vmagents start dev
 EOF
       ;;
     stop) cat <<EOF
-vmclaude stop NAME [--force]
+vmagents stop NAME [--force]
 
 Shuts a libvirt VM down the clean way, like pressing its power button, and
-waits until it is off (at most ${STOP_TIMEOUT}s; VMCLAUDE_STOP_TIMEOUT changes this).
+waits until it is off (at most ${STOP_TIMEOUT}s; VMAGENTS_STOP_TIMEOUT changes this).
 Claude sessions still running in tmux on the VM end with it.
 
 Options:
   --force       pull the plug at once (virsh destroy): unsaved data in the VM is lost
 
 Examples:
-  vmclaude stop dev
-  vmclaude stop win10 --force         when Windows does not react
+  vmagents stop dev
+  vmagents stop win10 --force         when Windows does not react
 EOF
       ;;
     autostop) cat <<EOF
-vmclaude autostop NAME on|off
+vmagents autostop NAME on|off
 
 With "on" (the default for libvirt VMs), the VM shuts down when you leave
-Claude ("vmclaude NAME") or "vmclaude shell NAME", so it does not use RAM and
+Claude ("vmagents NAME") or "vmagents shell NAME", so it does not use RAM and
 CPU in the background. It stays on, and says why, while something still uses
 it:
   - Claude left running in tmux (you pressed Ctrl-b d)
-  - another vmclaude connect, shell or mount to this VM from this computer
+  - another vmagents connect, shell or mount to this VM from this computer
   - someone logged in on the VM (another SSH login; on Windows, the screen)
   - a Claude process still running on the VM
 It also stays on when the connection broke rather than ended.
-"vmclaude NAME --keep" leaves it on once. Plain ssh logins (autostart) do not
-shut it down: vmclaude is not running then.
+"vmagents NAME --keep" leaves it on once. Plain ssh logins (autostart) do not
+shut it down: vmagents is not running then.
 
 Examples:
-  vmclaude autostop dev off          the VM keeps running after you leave
-  vmclaude autostop dev on
-  vmclaude stop dev                  shut it down by hand
+  vmagents autostop dev off          the VM keeps running after you leave
+  vmagents autostop dev on
+  vmagents stop dev                  shut it down by hand
 EOF
       ;;
     snapshot | snapshots) cat <<EOF
-vmclaude snapshots NAME
-vmclaude snapshot NAME [NOTE]
-vmclaude snapshot NAME --delete SNAPSHOT
+vmagents snapshots NAME
+vmagents snapshot NAME [NOTE]
+vmagents snapshot NAME --delete SNAPSHOT
 
 A snapshot saves the whole VM (its disk; for a running VM its memory too),
-so "vmclaude undo" can return to it. vmclaude takes one by itself each time
-it starts the VM ("auto-..."; see "vmclaude help autosnap"). snapshot takes
+so "vmagents undo" can return to it. vmagents takes one by itself each time
+it starts the VM ("auto-..."; see "vmagents help autosnap"). snapshot takes
 one now ("snap-..."), with an optional note; these are never deleted
 automatically. snapshots lists them all, oldest first.
 
@@ -391,72 +396,72 @@ They live inside the VM's disk file (libvirt internal snapshots) and need
 a qcow2 disk. They take space as the VM changes after them.
 
 Examples:
-  vmclaude snapshot dev "before the big refactor"
-  vmclaude snapshots dev
-  vmclaude snapshot dev --delete snap-20261016-224927
+  vmagents snapshot dev "before the big refactor"
+  vmagents snapshots dev
+  vmagents snapshot dev --delete snap-20261016-224927
 EOF
       ;;
     undo) cat <<EOF
-vmclaude undo NAME [SNAPSHOT] [--yes]
+vmagents undo NAME [SNAPSHOT] [--yes]
 
-Puts the VM back to a snapshot: by default the newest one, which vmclaude
+Puts the VM back to a snapshot: by default the newest one, which vmagents
 took right before it last started the VM, so this takes back everything
 done since then: Claude's changes, installed programs, deleted files. A
 running VM is stopped first. Asks before it does anything, unless --yes.
 
 Examples:
-  vmclaude undo dev                         back to before this session
-  vmclaude snapshots dev                    which snapshots there are
-  vmclaude undo dev snap-20261016-224927    back to a particular one
+  vmagents undo dev                         back to before this session
+  vmagents snapshots dev                    which snapshots there are
+  vmagents undo dev snap-20261016-224927    back to a particular one
 EOF
       ;;
     autosnap) cat <<EOF
-vmclaude autosnap NAME on|off|N
+vmagents autosnap NAME on|off|N
 
-Each time vmclaude starts a libvirt VM that is off (connect, shell, mount,
+Each time vmagents starts a libvirt VM that is off (connect, shell, mount,
 mcp, start), it first takes a snapshot named auto-DATE-TIME. That takes a
 moment, since the VM is off. The newest N are kept (default 3), older
-automatic ones are deleted; snapshots you took with "vmclaude snapshot"
+automatic ones are deleted; snapshots you took with "vmagents snapshot"
 are never deleted.
 
 Examples:
-  vmclaude autosnap dev 10      keep the newest 10
-  vmclaude autosnap dev off     take none
-  vmclaude autosnap dev on      back to 3
+  vmagents autosnap dev 10      keep the newest 10
+  vmagents autosnap dev off     take none
+  vmagents autosnap dev on      back to 3
 EOF
       ;;
     idle) cat <<EOF
-vmclaude idle NAME MINUTES|off
+vmagents idle NAME MINUTES|off
 
 Installs a small service on the VM that shuts it down after MINUTES in which
-nothing used it. "vmclaude create" sets 30. This covers what autostop cannot:
+nothing used it. "vmagents create" sets 30. This covers what autostop cannot:
 Claude left running in tmux after it finished, a plain ssh login that ended,
 a VM you forgot. Used means:
   Linux:   an SSH session (a shell, a command, a mount), a console login,
-           Claude Code working (from its hooks, see "vmclaude help notify"),
+           Claude Code working (from its hooks, see "vmagents help notify"),
            or a busy CPU (load average 1 or more)
   Windows: an SSH connection, someone signed in on the screen, Claude running
 Claude waiting for you counts as unused; its conversation is saved, so
-"vmclaude NAME --continue" resumes it.
+"vmagents NAME --continue" resumes it.
 
 Linux VMs need systemd and sudo (asked for the password if needed); Windows
 VMs an administrator account (a scheduled task runs as SYSTEM).
 
 Examples:
-  vmclaude idle dev 30
-  vmclaude idle dev 120     for long jobs that do not keep the CPU busy
-  vmclaude idle dev off
+  vmagents idle dev 30
+  vmagents idle dev 120     for long jobs that do not keep the CPU busy
+  vmagents idle dev off
 EOF
       ;;
     notify) cat <<EOF
-vmclaude notify NAME on|off
+vmagents notify NAME on|off
 
 While Claude runs on the VM, also after you detached with Ctrl-b d, this
 computer shows a desktop notification when Claude needs you: it asks for
 permission, or it finished and waited a minute for your answer.
 
-How: "vmclaude NAME" keeps two files in ~/.config/vmclaude on the VM:
-hook.sh and claude-settings.json, which vmclaude passes to Claude with
+How: "vmagents NAME" keeps two files in ~/.config/vmagents on the VM:
+hook.sh and claude-settings.json, which vmagents passes to Claude with
 --settings (your own ~/.claude/settings.json is not changed). Claude's hooks
 note there what Claude does (on Windows they run with Git Bash, which Claude
 Code needs there anyway). A small background process here asks the VM every
@@ -464,12 +469,12 @@ Code needs there anyway). A small background process here asks the VM every
 Needs notify-send here (Debian/Ubuntu: sudo apt install libnotify-bin).
 
 Examples:
-  vmclaude notify dev off
-  vmclaude notify dev on
+  vmagents notify dev off
+  vmagents notify dev on
 EOF
       ;;
     open) cat <<EOF
-vmclaude open [NAME] [PORT...] [--no-browser] [--keep] [--lan]
+vmagents open [NAME] [PORT...] [--no-browser] [--keep] [--lan]
 
 Makes port PORT of the VM a port of this computer, over SSH, and opens
 http://localhost:PORT in your browser: for the web server or app Claude
@@ -477,7 +482,7 @@ started on the VM. It also works when that server only listens on the VM's
 localhost, and for VMs elsewhere. When PORT is taken here, the next free one
 is used (it says which). LOCAL:PORT picks the port here yourself.
 
-Without PORT: the ports set with "vmclaude ports NAME". --lan makes them
+Without PORT: the ports set with "vmagents ports NAME". --lan makes them
 reachable from other devices on your network too (http://THIS-COMPUTER:PORT);
 without it only from this computer.
 
@@ -485,60 +490,60 @@ It runs until Ctrl-C; then the VM shuts down if nothing else uses it, as
 after connect (--keep: leave it on).
 
 Examples:
-  vmclaude open dev 3000
-  vmclaude open dev 5173 8080            two ports
-  vmclaude open dev 9000:3000            the VM's 3000 as localhost:9000
-  vmclaude open 3000 --no-browser        the default VM; only forward
+  vmagents open dev 3000
+  vmagents open dev 5173 8080            two ports
+  vmagents open dev 9000:3000            the VM's 3000 as localhost:9000
+  vmagents open 3000 --no-browser        the default VM; only forward
 EOF
       ;;
     ports) cat <<EOF
-vmclaude ports NAME [PORT,PORT...|off]
+vmagents ports NAME [PORT,PORT...|off]
 
 Ports of the VM that become ports of this computer each time you connect
-("vmclaude NAME"), as long as you stay connected: http://localhost:PORT reaches
+("vmagents NAME"), as long as you stay connected: http://localhost:PORT reaches
 the web server or app Claude started on the VM. A port taken here is skipped
-(it says so). Without a list it shows them; "vmclaude open NAME" forwards them
-without connecting. "vmclaude create --ports" sets them for a new VM.
+(it says so). Without a list it shows them; "vmagents open NAME" forwards them
+without connecting. "vmagents create --ports" sets them for a new VM.
 
 Examples:
-  vmclaude ports dev 3000,5173
-  vmclaude ports dev off
+  vmagents ports dev 3000,5173
+  vmagents ports dev off
 EOF
       ;;
     resize) cat <<EOF
-vmclaude resize NAME [--memory MB] [--cpus N] [--stop]
+vmagents resize NAME [--memory MB] [--cpus N] [--stop]
 
 Changes how much RAM and how many CPUs a libvirt VM has. The VM has to be
 off: --stop shuts it down first (otherwise it says so). The disk keeps its
 size; it grows as it fills, up to the size given to create.
 
 Examples:
-  vmclaude resize dev --memory 8192
-  vmclaude resize dev --cpus 4 --stop
+  vmagents resize dev --memory 8192
+  vmagents resize dev --cpus 4 --stop
 EOF
       ;;
     ui) cat <<EOF
-vmclaude ui
+vmagents ui
 
-A terminal UI for everything vmclaude does. The list shows your VMs with
+A terminal UI for everything vmagents does. The list shows your VMs with
 their state, RAM, CPUs, AI assistants and ports; on the right the details of
 the selected one. Keys:
   Enter  open the VM's AI assistant (the UI steps aside until you quit it)
-  a      open another one: Claude Code, Codex, Gemini CLI, aider
+  a      open another one: Claude Code, Codex, Gemini CLI, OpenCode, aider
   n      new VM: name, system, RAM, CPUs, disk, AI assistants, ports, idle
-         shutdown; it shows the same "vmclaude create" command line
+         shutdown; it shows the same "vmagents create" command line
   o      ports: forward them now (and stop again), every time, or to your LAN
   t      start or stop      s  shell       l  log Claude in
   p      snapshot           u  undo (back to a snapshot)
   r      RAM and CPUs       d  delete (asks you to type the name)
   q      quit (stops port forwards the UI started)
 
-It runs this vmclaude, so all it does works from the command line too. Needs
-Python with Textual 8; with uv installed vmclaude fetches it by itself.
+It runs this vmagents, so all it does works from the command line too. Needs
+Python with Textual 8; with uv installed vmagents fetches it by itself.
 EOF
       ;;
     clipboard) cat <<EOF
-vmclaude clipboard NAME on|off
+vmagents clipboard NAME on|off
 
 While you are connected to Claude's tmux session on a Linux VM, what you copy
 there lands in this computer's clipboard: text Claude Code copies (it puts it
@@ -550,121 +555,122 @@ sudo apt install xclip. Terminals that understand OSC 52 (kitty, WezTerm,
 foot, iTerm2, Windows Terminal) get it from tmux as well.
 
 Examples:
-  vmclaude clipboard dev off
-  vmclaude clipboard dev on
+  vmagents clipboard dev off
+  vmagents clipboard dev on
 EOF
       ;;
     agent) cat <<EOF
-vmclaude agent NAME [claude|codex|gemini|aider]
+vmagents agent NAME [claude|codex|gemini|opencode|aider]
 
-Chooses what "vmclaude NAME" opens on the VM: Claude Code (the default),
-OpenAI's Codex CLI, Google's Gemini CLI or aider. The agent is installed on
-the VM first if it is missing (for the user, in ~/.local/bin):
+Chooses what "vmagents NAME" opens on the VM: Claude Code (the default),
+OpenAI's Codex CLI, Google's Gemini CLI, OpenCode or aider. The agent is
+installed on the VM first if it is missing (for the user):
   codex    its own installer (chatgpt.com/codex/install.sh)
   gemini   npm package @google/gemini-cli; needs Node.js 20 or newer (installed
            with the package manager when missing)
+  opencode its own installer (opencode.ai/install), in ~/.opencode/bin
   aider    its own installer (aider.chat/install.sh)
 Without an agent it says which one is chosen. For one time only:
-"vmclaude NAME --codex" (also --gemini, --aider, --claude).
+"vmagents NAME --codex" (also --gemini, --opencode, --aider, --claude).
 
-Each agent runs in its own tmux session (codex, gemini, aider), so Claude's
+Each agent runs in its own tmux session (codex, gemini, ...), so Claude's
 session stays as it is. Log in once inside the agent: Codex's "Sign in with
-ChatGPT" works with the browser here (vmclaude forwards its port 1455).
-API keys can go into ~/.config/vmclaude/AGENT-env on the VM (e.g. gemini-env
+ChatGPT" works with the browser here (vmagents forwards its port 1455).
+API keys can go into ~/.config/vmagents/AGENT-env on the VM (e.g. gemini-env
 with GEMINI_API_KEY=...); it is read when the agent starts. Notifications and Claude's hooks are for
 Claude only; Linux VMs only.
 
 Examples:
-  vmclaude dev --codex
-  vmclaude agent dev gemini
-  vmclaude agent dev claude
+  vmagents dev --codex
+  vmagents agent dev gemini
+  vmagents agent dev claude
 EOF
       ;;
     autostart) cat <<EOF
-vmclaude autostart NAME on|off
+vmagents autostart NAME on|off
 
 With "on", every interactive SSH login to the VM opens Claude Code, from any
 SSH program (a terminal, PuTTY, a phone app). Quit Claude, or press Ctrl-b d,
 to get a normal shell. "setup" turns it on.
 
-Skip it for one login (Linux VMs): ssh -o SetEnv=LC_VMCLAUDE=off user@VM
-A shell without Claude, on any VM: vmclaude shell NAME
+Skip it for one login (Linux VMs): ssh -o SetEnv=LC_VMAGENTS=off user@VM
+A shell without Claude, on any VM: vmagents shell NAME
 
 Examples:
-  vmclaude autostart dev off
-  vmclaude autostart dev on
+  vmagents autostart dev off
+  vmagents autostart dev on
 EOF
       ;;
     list | ls) cat <<EOF
-vmclaude list [--json]
+vmagents list [--json]
 
 Shows all profiles: name, user@host[:port], libvirt VM with its state
 (running, shut off, ...) and system. A * marks
-the default VM, the one plain "vmclaude" opens.
+the default VM, the one plain "vmagents" opens.
 
 --json: one object per VM with all its settings, and for libvirt VMs state,
-memory_mb, cpus and snapshots (for scripts; "vmclaude ui" uses it).
+memory_mb, cpus and snapshots (for scripts; "vmagents ui" uses it).
 EOF
       ;;
     default) cat <<EOF
-vmclaude default NAME
+vmagents default NAME
 
-Makes NAME the VM that "vmclaude" opens without a name. With only one profile,
+Makes NAME the VM that "vmagents" opens without a name. With only one profile,
 that one is the default anyway.
 
 Example:
-  vmclaude default dev
+  vmagents default dev
 EOF
       ;;
     desktop) cat <<EOF
-vmclaude desktop NAME
+vmagents desktop NAME
 
 Adds "Claude Code (NAME)" to your app menu
-(${APPS_DIR/#$HOME/\~}/vmclaude-NAME.desktop). Clicking it opens a terminal
-connected to Claude on the VM. "vmclaude rm NAME" removes it again.
+(${APPS_DIR/#$HOME/\~}/vmagents-NAME.desktop). Clicking it opens a terminal
+connected to Claude on the VM. "vmagents rm NAME" removes it again.
 EOF
       ;;
     edit) cat <<EOF
-vmclaude edit NAME
+vmagents edit NAME
 
 Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
 The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
-SESSION OS (see "vmclaude help add" for what they mean), AGENT=claude|codex|
+SESSION OS (see "vmagents help add" for what they mean), AGENT=claude|codex|
 gemini|aider, AGENTS (installed ones), PORTS=3000,5173, AUTOSTOP=on|off,
-AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle" set up), NOTIFY=on|off and
+AUTOSNAP=N, IDLE=MINUTES (what "vmagents idle" set up), NOTIFY=on|off and
 CLIPBOARD=on|off.
 EOF
       ;;
     forget) cat <<EOF
-vmclaude forget NAME
+vmagents forget NAME
 
-vmclaude remembers each VM's SSH host key and refuses to connect when it
+vmagents remembers each VM's SSH host key and refuses to connect when it
 changes, as protection against a wrong machine. After you reinstall a VM its
 key changes legitimately: run this once, and the next connection accepts the
 new key.
 EOF
       ;;
     rm | remove) cat <<EOF
-vmclaude rm NAME
+vmagents rm NAME
 
 Deletes the profile, its app-menu entry and remembered host key. The VM itself
-is not touched. To delete a VM made with create: "vmclaude delete NAME".
+is not touched. To delete a VM made with create: "vmagents delete NAME".
 EOF
       ;;
     login) cat <<EOF
-vmclaude login NAME [--remove]
+vmagents login NAME [--remove]
 
 Logs Claude Code on the VM in, so it never shows its login screen there
 (whose long link is hard to copy out of a terminal). The login happens on
 THIS computer, with its browser:
   1. "claude setup-token" runs here and opens your browser; confirm there.
-  2. vmclaude takes the long-lived token it prints (no copy and paste) and
-     stores it on the VM in ~/.config/vmclaude/claude-env, readable only by
+  2. vmagents takes the long-lived token it prints (no copy and paste) and
+     stores it on the VM in ~/.config/vmagents/claude-env, readable only by
      your user there.
   3. Claude on the VM uses it from then on, however you start it.
 Needs Claude Code on this computer and a Claude subscription. If the token
 cannot be read automatically, you are asked to paste it (hidden input).
-An API key (sk-ant-api...) works too: echo "\$ANTHROPIC_API_KEY" | vmclaude login NAME
+An API key (sk-ant-api...) works too: echo "\$ANTHROPIC_API_KEY" | vmagents login NAME
 
 Tokens made this way can only be used for chatting and coding (no remote-
 control features); for those, use /login inside Claude instead.
@@ -673,15 +679,15 @@ Options:
   --remove      delete the stored token from the VM
 
 Examples:
-  vmclaude login arch
-  vmclaude login win10
-  claude setup-token            (by hand) then: vmclaude login arch   and paste it
-  vmclaude login arch --remove
+  vmagents login arch
+  vmagents login win10
+  claude setup-token            (by hand) then: vmagents login arch   and paste it
+  vmagents login arch --remove
 EOF
       ;;
     mount | umount) cat <<EOF
-vmclaude mount NAME [FOLDER]
-vmclaude umount NAME [FOLDER]
+vmagents mount NAME [FOLDER]
+vmagents umount NAME [FOLDER]
 
 Makes the VM's working folder (the profile's DIR, or the home folder) appear
 as a folder on this computer, over SSH (sshfs). Programs here, Claude Code
@@ -690,18 +696,18 @@ FOLDER defaults to ~/vm/NAME and must be empty. Needs sshfs
 (Debian/Ubuntu: sudo apt install sshfs). The VM is started if it is off.
 
 Mind: commands started in that folder still run on THIS computer, with its
-programs. To run them in the VM use "vmclaude shell NAME 'COMMAND'", or the
-run tool of "vmclaude mcp NAME --add".
+programs. To run them in the VM use "vmagents shell NAME 'COMMAND'", or the
+run tool of "vmagents mcp NAME --add".
 
 Examples:
-  vmclaude mount arch               ~/vm/arch is now the VM's home folder
+  vmagents mount arch               ~/vm/arch is now the VM's home folder
   cd ~/vm/arch && claude            edit the VM's files with Claude Code here
-  vmclaude shell arch 'make test'   run things in the VM
-  vmclaude umount arch
+  vmagents shell arch 'make test'   run things in the VM
+  vmagents umount arch
 EOF
       ;;
     mcp) cat <<EOF
-vmclaude mcp NAME [--add]
+vmagents mcp NAME [--add]
 
 Lets Claude Code running on this computer work inside the VM: it gets four
 tools that act in the VM over SSH:
@@ -713,12 +719,12 @@ Paths are relative to the profile's DIR (or the home folder); ~ works.
 The VM is started if it is off. Files move over SFTP, so size and special
 characters do not matter.
 
-  vmclaude mcp NAME --add   register it once, for all your projects:
-                            claude mcp add --scope user NAME -- vmclaude mcp NAME
-  vmclaude mcp NAME         the server itself; Claude Code starts it
+  vmagents mcp NAME --add   register it once, for all your projects:
+                            claude mcp add --scope user NAME -- vmagents mcp NAME
+  vmagents mcp NAME         the server itself; Claude Code starts it
 
 Examples:
-  vmclaude mcp arch --add
+  vmagents mcp arch --add
   claude                        then ask: "arch VM'inde ~/work/app.py yaz ve çalıştır"
   claude mcp remove arch --scope user        unregister
 
@@ -768,7 +774,7 @@ write_profile() {
   mkdir -p "$HOSTS_DIR"
   tmp=$(mktemp "$HOSTS_DIR/.tmp.XXXXXX")
   {
-    printf '# vmclaude profile "%s"\n' "$name"
+    printf '# vmagents profile "%s"\n' "$name"
     for k in $PROFILE_KEYS; do
       [[ -v P[$k] ]] && printf '%s=%s\n' "$k" "${P[$k]}"
     done
@@ -1002,12 +1008,12 @@ resolve_target() {
 # ------------------------------------------------------------------ ssh
 
 # The host key is stored under an alias, so a VM whose DHCP address changes
-# keeps its identity, and in vmclaude's own known_hosts file.
+# keeps its identity, and in vmagents's own known_hosts file.
 SSH_OPTS=()
 build_ssh_opts() {
   mkdir -p "$CONF_DIR"
   SSH_OPTS=(-l "$C_USER" -p "$C_PORT"
-    -o "HostKeyAlias=vmclaude-$NAME"
+    -o "HostKeyAlias=vmagents-$NAME"
     -o "UserKnownHostsFile=$KNOWN_HOSTS"
     -o StrictHostKeyChecking=accept-new
     -o ConnectTimeout=15
@@ -1029,7 +1035,7 @@ sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 # under sh on the VM, whatever the user's login shell is.
 remote_cmd() {
   local out a
-  out="sh -c $(sq "$1") vmclaude"
+  out="sh -c $(sq "$1") vmagents"
   shift
   for a in "$@"; do out+=" $(sq "$a")"; done
   printf '%s' "$out"
@@ -1037,38 +1043,44 @@ remote_cmd() {
 
 # --- scripts that run on the VM (POSIX sh) ---
 
+# Before 0.11 vmagents kept its files on the VM in ~/.config/vmclaude: move
+# them once, and leave a link, so older hooks and autostart lines still work.
 # shellcheck disable=SC2016
-REMOTE_ENV='PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/bin:$PATH"; export PATH
+MIGRATE_SH='[ -d "$HOME/.config/vmclaude" ] && [ ! -L "$HOME/.config/vmclaude" ] && [ ! -e "$HOME/.config/vmagents" ] &&
+  mv "$HOME/.config/vmclaude" "$HOME/.config/vmagents" && ln -s vmagents "$HOME/.config/vmclaude"
+'
+# shellcheck disable=SC2016
+REMOTE_ENV=$MIGRATE_SH'PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.claude/local:$HOME/bin:$PATH"; export PATH
 cd_dir() {
   case $1 in
     "") cd || return 1; return 0 ;;
     "~") set -- "$HOME" ;;
     "~/"*) set -- "$HOME/${1#"~/"}" ;;
   esac
-  [ -d "$1" ] || { mkdir -p "$1" && echo "vmclaude: created $1 on the VM" >&2; } || return 1
+  [ -d "$1" ] || { mkdir -p "$1" && echo "vmagents: created $1 on the VM" >&2; } || return 1
   cd "$1"
 }
 '
 
 # Starts "$2 ..." with the variables from file $1 in its environment (the
-# token from "vmclaude login", other agents' API keys), and for Claude with
-# vmclaude's hooks (claude-settings.json in the same folder). A wrapper, not
+# token from "vmagents login", other agents' API keys), and for Claude with
+# vmagents's hooks (claude-settings.json in the same folder). A wrapper, not
 # tmux -e: tokens stay out of command lines.
 # shellcheck disable=SC2016
 CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"'
 
 # ------------------------------------------------------------------ hooks, idle shutdown, notifications
 # Claude Code on the VM runs hook.sh from its hooks (loaded with --settings
-# by vmclaude's launcher). It records whether Claude is working, for the idle
+# by vmagents's launcher). It records whether Claude is working, for the idle
 # shutdown, and queues "Claude needs you" messages, which the watcher on this
 # computer shows as desktop notifications. connect keeps both files current.
 IFS= read -r -d '' HOOK_SH <<'EOS' || true
 #!/bin/sh
-# Installed by vmclaude: Claude Code runs this from the hooks in
+# Installed by vmagents: Claude Code runs this from the hooks in
 # claude-settings.json next to it. It tells the VM's idle shutdown whether
-# Claude is working, and queues "Claude needs you" messages that vmclaude
+# Claude is working, and queues "Claude needs you" messages that vmagents
 # shows on your computer as desktop notifications.
-d=$HOME/.config/vmclaude
+d=$HOME/.config/vmagents
 case ${1-} in
   busy | idle) cat >/dev/null; echo "$1" >"$d/claude-state" ;;
   notify)
@@ -1087,7 +1099,7 @@ HOOK_SH=${HOOK_SH%$'\n'}
 
 hook_entry() { # MATCHER|"" ARG
   # shellcheck disable=SC2016 # $HOME is for the VM's shell
-  printf '[{%s"hooks": [{"type": "command", "command": "sh \\"$HOME/.config/vmclaude/hook.sh\\" %s"}]}]' \
+  printf '[{%s"hooks": [{"type": "command", "command": "sh \\"$HOME/.config/vmagents/hook.sh\\" %s"}]}]' \
     "${1:+\"matcher\": \"$1\", }" "$2"
 }
 CLAUDE_SETTINGS="{
@@ -1100,25 +1112,25 @@ CLAUDE_SETTINGS="{
   }
 }"
 
-# Runs as root on the VM (systemd service vmclaude-idle): powers it off after
+# Runs as root on the VM (systemd service vmagents-idle): powers it off after
 # $1 minutes in which nothing used it.
 IFS= read -r -d '' IDLE_LOOP_SH <<'EOS' || true
 #!/bin/sh
-# Installed by vmclaude ("vmclaude idle NAME MINUTES"): powers this VM off
+# Installed by vmagents ("vmagents idle NAME MINUTES"): powers this VM off
 # after MINUTES in which nothing used it. Used means: an SSH session (a shell,
-# a command, an sftp mount; not vmclaude's notification watcher), a console
-# login, Claude Code working (its vmclaude hooks say so), or load >= 1.
+# a command, an sftp mount; not vmagents's notification watcher), a console
+# login, Claude Code working (its vmagents hooks say so), or load >= 1.
 limit=$((${1:-30} * 60)) step=${2:-60}
 
 in_use() {
   for p in $(cat /proc/[0-9]*/status 2>/dev/null | awk '
       /^Name:/ { n = $2 } /^Pid:/ { p = $2 } /^PPid:/ { name[p] = n; pp[p] = $2 }
       END { for (p in pp) if (name[pp[p]] ~ /^sshd(-session)?$/ && name[p] !~ /^sshd(-session|-auth)?$/) print p }'); do
-    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q vmclaude-watch || { echo "SSH session"; return 0; }
+    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q vmagents-watch || { echo "SSH session"; return 0; }
   done
   who 2>/dev/null | grep -qv '(tmux(' && { echo "login"; return 0; }
   for u in $(ps -C claude -o uid= 2>/dev/null | sort -u); do
-    f=$(getent passwd "$u" | cut -d: -f6)/.config/vmclaude/claude-state
+    f=$(getent passwd "$u" | cut -d: -f6)/.config/vmagents/claude-state
     [ "$(cat "$f" 2>/dev/null)" = idle ] && continue
     # "busy" left by an interrupted answer (no Stop hook then) expires
     [ -f "$f" ] && [ -z "$(find "$f" -mmin -120 2>/dev/null)" ] && continue
@@ -1136,7 +1148,7 @@ while sleep "$step"; do
   prev=$now
   if in_use >/dev/null; then since=$now; continue; fi
   if [ $((now - since)) -ge "$limit" ]; then
-    echo "vmclaude: unused for ${1:-30} minutes, powering off"
+    echo "vmagents: unused for ${1:-30} minutes, powering off"
     systemctl poweroff
     exit 0
   fi
@@ -1148,29 +1160,32 @@ IFS= read -r -d '' IDLE_INSTALL_SH <<'EOS' || true
 m=$1
 if [ "$(id -u)" = 0 ]; then su_=
 elif command -v sudo >/dev/null 2>&1; then su_=sudo
-else echo "vmclaude: idle shutdown needs root or sudo on the VM" >&2; exit 1
+else echo "vmagents: idle shutdown needs root or sudo on the VM" >&2; exit 1
 fi
 command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] ||
-  { echo "vmclaude: idle shutdown needs systemd on the VM" >&2; exit 1; }
-unit=/etc/systemd/system/vmclaude-idle.service
+  { echo "vmagents: idle shutdown needs systemd on the VM" >&2; exit 1; }
+unit=/etc/systemd/system/vmagents-idle.service
+if [ -f /etc/systemd/system/vmclaude-idle.service ]; then  # from before 0.11
+  $su_ sh -c "systemctl disable --now vmclaude-idle.service >/dev/null 2>&1; rm -f /etc/systemd/system/vmclaude-idle.service /usr/local/libexec/vmclaude-idle"
+fi
 if [ "$m" = 0 ]; then
-  $su_ sh -c "systemctl disable --now vmclaude-idle.service >/dev/null 2>&1; rm -f $unit /usr/local/libexec/vmclaude-idle; systemctl daemon-reload" || exit 1
+  $su_ sh -c "systemctl disable --now vmagents-idle.service >/dev/null 2>&1; rm -f $unit /usr/local/libexec/vmagents-idle; systemctl daemon-reload" || exit 1
   echo "Idle shutdown is off."
   exit 0
 fi
-printf '%s' "$2" | $su_ sh -c 'mkdir -p /usr/local/libexec && cat >/usr/local/libexec/vmclaude-idle && chmod 755 /usr/local/libexec/vmclaude-idle' || exit 1
-printf '%s\n' "[Unit]" "Description=vmclaude: power off after $m minutes without use" "" "[Service]" \
-  "ExecStart=/bin/sh /usr/local/libexec/vmclaude-idle $m" "Restart=always" "" "[Install]" "WantedBy=multi-user.target" |
+printf '%s' "$2" | $su_ sh -c 'mkdir -p /usr/local/libexec && cat >/usr/local/libexec/vmagents-idle && chmod 755 /usr/local/libexec/vmagents-idle' || exit 1
+printf '%s\n' "[Unit]" "Description=vmagents: power off after $m minutes without use" "" "[Service]" \
+  "ExecStart=/bin/sh /usr/local/libexec/vmagents-idle $m" "Restart=always" "" "[Install]" "WantedBy=multi-user.target" |
   $su_ sh -c "cat >$unit" || exit 1
-$su_ systemctl daemon-reload && $su_ systemctl enable vmclaude-idle.service >/dev/null 2>&1 &&
-  $su_ systemctl restart vmclaude-idle.service || exit 1
+$su_ systemctl daemon-reload && $su_ systemctl enable vmagents-idle.service >/dev/null 2>&1 &&
+  $su_ systemctl restart vmagents-idle.service || exit 1
 echo "Idle shutdown is on: the VM powers off after $m minutes without use."
 EOS
 
 # Windows: the same as a SYSTEM task that starts with Windows.
 IFS= read -r -d '' WIN_IDLE_LOOP_PS <<'EOS' || true
 param([int]$Minutes = 30, [int]$Step = 60)
-# Installed by vmclaude ("vmclaude idle NAME MINUTES"): shuts this VM down
+# Installed by vmagents ("vmagents idle NAME MINUTES"): shuts this VM down
 # after $Minutes minutes in which nothing used it: no SSH connection, nobody
 # signed in on the screen, no Claude Code running.
 $since = Get-Date
@@ -1195,12 +1210,14 @@ win_idle_ps() { # MINUTES
   cat <<EOF
 \$ErrorActionPreference = "Stop"
 \$m = $1
-\$d = Join-Path \$env:ProgramData "vmclaude"
+\$d = Join-Path \$env:ProgramData "vmagents"
 \$f = Join-Path \$d "idle.ps1"
 try {
-  if (Get-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue) {
-    Stop-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName vmclaude-idle -Confirm:\$false
+  foreach (\$old in "vmagents-idle", "vmclaude-idle") {
+    if (Get-ScheduledTask -TaskName \$old -ErrorAction SilentlyContinue) {
+      Stop-ScheduledTask -TaskName \$old -ErrorAction SilentlyContinue
+      Unregister-ScheduledTask -TaskName \$old -Confirm:\$false
+    }
   }
   if (\$m -eq 0) { Remove-Item -LiteralPath \$f -ErrorAction SilentlyContinue; "Idle shutdown is off."; exit 0 }
   New-Item -ItemType Directory -Force -Path \$d | Out-Null
@@ -1209,10 +1226,10 @@ try {
   \$t = New-ScheduledTaskTrigger -AtStartup
   \$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
   \$p = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-  Register-ScheduledTask -TaskName vmclaude-idle -Action \$a -Trigger \$t -Settings \$s -Principal \$p -Force | Out-Null
-  Start-ScheduledTask -TaskName vmclaude-idle
+  Register-ScheduledTask -TaskName vmagents-idle -Action \$a -Trigger \$t -Settings \$s -Principal \$p -Force | Out-Null
+  Start-ScheduledTask -TaskName vmagents-idle
 } catch {
-  [Console]::Error.WriteLine("vmclaude: setting up idle shutdown failed (an administrator account is needed): \$_")
+  [Console]::Error.WriteLine("vmagents: setting up idle shutdown failed (an administrator account is needed): \$_")
   exit 1
 }
 "Idle shutdown is on: the VM shuts down after \$m minutes without use."
@@ -1220,15 +1237,16 @@ EOF
 }
 
 # Polled by the watcher ($1: last event id seen, "" on the first poll).
-# The marker on the first line lets the idle shutdown ignore this session.
+# The marker on the first line lets the idle shutdown ignore this session
+# (the old name too, for idle services installed before 0.11).
 IFS= read -r -d '' WATCH_SH <<'EOS' || true
-: vmclaude-watch
+: vmagents-watch vmclaude-watch
 n=$(pgrep -c -x claude 2>/dev/null) || true
 echo "claude=${n:-0}"
 t=$(date +%s%3N 2>/dev/null)
 case $t in "" | *[!0-9]*) t=$(date +%s)000 ;; esac
 echo "now=$t"
-f=$HOME/.config/vmclaude/events
+f=$HOME/.config/vmagents/events
 [ -n "$1" ] && [ -f "$f" ] && awk -F '\t' -v t="$1" '$1 + 0 > t + 0' "$f"
 exit 0
 EOS
@@ -1254,11 +1272,11 @@ EOS
 # hook.sh works as it is.
 win_watch_ps() { # LAST_ID
   cat <<EOF
-# vmclaude-watch
+# vmagents-watch
 "claude=" + @(Get-Process claude -ErrorAction SilentlyContinue).Count
 "now=" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 \$last = $(psq "$1")
-\$f = Join-Path \$env:USERPROFILE ".config\vmclaude\events"
+\$f = Join-Path \$env:USERPROFILE ".config\vmagents\events"
 if (\$last -ne "" -and (Test-Path -LiteralPath \$f)) {
   foreach (\$l in [IO.File]::ReadAllLines(\$f)) { \$p = \$l -split "\`t", 3; if (\$p.Count -eq 3 -and [long]\$p[0] -gt [long]\$last) { \$l } }
 }
@@ -1269,7 +1287,13 @@ EOF
 # connect script does that; on Windows its command line has no room.)
 win_hooks_ps() {
   cat <<EOF
-\$d = Join-Path \$env:USERPROFILE ".config\vmclaude"
+\$o = Join-Path \$env:USERPROFILE ".config\\vmclaude"
+\$n = Join-Path \$env:USERPROFILE ".config\\vmagents"
+if ((Test-Path -LiteralPath \$o) -and -not (Get-Item -LiteralPath \$o).LinkType -and -not (Test-Path -LiteralPath \$n)) {
+  Move-Item -LiteralPath \$o -Destination \$n
+  New-Item -ItemType Junction -Path \$o -Target \$n | Out-Null
+}
+\$d = Join-Path \$env:USERPROFILE ".config\vmagents"
 New-Item -ItemType Directory -Force -Path \$d | Out-Null
 \$u = New-Object Text.UTF8Encoding \$false
 [IO.File]::WriteAllText((Join-Path \$d "hook.sh"), $(psq "$HOOK_SH"$'\n'), \$u)
@@ -1279,36 +1303,36 @@ EOF
 
 # $1 dir, $2 tmux session ("" = no tmux), $3 profile name, $4 agent
 # (claude, codex, ...), rest: its arguments. Exits 120 when another agent
-# than Claude is not installed: vmclaude installs it then.
+# than Claude is not installed: vmagents installs it then.
 # shellcheck disable=SC2016
 CONNECT_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")
-VMCLAUDE_HOOK=$(sq "$HOOK_SH")
-VMCLAUDE_SETTINGS=$(sq "$CLAUDE_SETTINGS")"'
-h=$HOME/.config/vmclaude
+VMAGENTS_HOOK=$(sq "$HOOK_SH")
+VMAGENTS_SETTINGS=$(sq "$CLAUDE_SETTINGS")"'
+h=$HOME/.config/vmagents
 if mkdir -p "$h" 2>/dev/null; then
-  [ "$(cat "$h/hook.sh" 2>/dev/null)" = "$VMCLAUDE_HOOK" ] || printf "%s\n" "$VMCLAUDE_HOOK" >"$h/hook.sh"
-  [ "$(cat "$h/claude-settings.json" 2>/dev/null)" = "$VMCLAUDE_SETTINGS" ] || printf "%s\n" "$VMCLAUDE_SETTINGS" >"$h/claude-settings.json"
+  [ "$(cat "$h/hook.sh" 2>/dev/null)" = "$VMAGENTS_HOOK" ] || printf "%s\n" "$VMAGENTS_HOOK" >"$h/hook.sh"
+  [ "$(cat "$h/claude-settings.json" 2>/dev/null)" = "$VMAGENTS_SETTINGS" ] || printf "%s\n" "$VMAGENTS_SETTINGS" >"$h/claude-settings.json"
 fi
 d=$1; s=$2; n=$3; a=$4; shift 4
-cd_dir "$d" || { echo "vmclaude: cannot use directory $d on the VM" >&2; exit 1; }
+cd_dir "$d" || { echo "vmagents: cannot use directory $d on the VM" >&2; exit 1; }
 if ! c=$(command -v "$a"); then
   [ "$a" = claude ] || exit 120
-  echo "vmclaude: Claude Code is not installed on the VM. Run: vmclaude setup $n" >&2; exit 127
+  echo "vmagents: Claude Code is not installed on the VM. Run: vmagents setup $n" >&2; exit 127
 fi
 if [ -n "${TERM-}" ] && command -v tput >/dev/null 2>&1 && ! tput -T "$TERM" longname >/dev/null 2>&1; then
   TERM=xterm-256color; export TERM
 fi
 if [ -n "$s" ] && command -v tmux >/dev/null 2>&1; then
-  exec tmux new-session -A -s "$s" -c "$PWD" sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/$a-env" "$c" "$@"
+  exec tmux new-session -A -s "$s" -c "$PWD" sh -c "$CLAUDE_ENV_SH" vmagents "$HOME/.config/vmagents/$a-env" "$c" "$@"
 fi
-exec sh -c "$CLAUDE_ENV_SH" vmclaude "$HOME/.config/vmclaude/$a-env" "$c" "$@"
+exec sh -c "$CLAUDE_ENV_SH" vmagents "$HOME/.config/vmagents/$a-env" "$c" "$@"
 '
 
 # Reads one public key on stdin and adds it to authorized_keys once.
 # shellcheck disable=SC2016
 ADDKEY_SH='umask 077
 k=$(cat)
-case $k in ssh-*|ecdsa-*|sk-*) ;; *) echo "vmclaude: not a public key" >&2; exit 1 ;; esac
+case $k in ssh-*|ecdsa-*|sk-*) ;; *) echo "vmagents: not a public key" >&2; exit 1 ;; esac
 mkdir -p "$HOME/.ssh" || exit 1
 f=$HOME/.ssh/authorized_keys
 touch "$f" || exit 1
@@ -1335,7 +1359,7 @@ if [ -n "$need" ]; then
   else su_=none
   fi
   if [ "$su_" = none ]; then
-    echo "vmclaude: cannot install$need without root or sudo; install it yourself" >&2
+    echo "vmagents: cannot install$need without root or sudo; install it yourself" >&2
   elif command -v apt-get >/dev/null 2>&1; then
     $su_ apt-get update -qq && $su_ env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Use-Pty=0 $need
   elif command -v dnf >/dev/null 2>&1; then $su_ dnf install -y $need
@@ -1344,15 +1368,15 @@ if [ -n "$need" ]; then
     $su_ pacman -S --needed --noconfirm $need || $su_ pacman -Syu --needed --noconfirm $need
   elif command -v zypper >/dev/null 2>&1; then $su_ zypper --non-interactive install $need
   elif command -v apk >/dev/null 2>&1; then $su_ apk add $need
-  else echo "vmclaude: no known package manager; install$need yourself" >&2
-  fi || echo "vmclaude: installing$need failed" >&2
+  else echo "vmagents: no known package manager; install$need yourself" >&2
+  fi || echo "vmagents: installing$need failed" >&2
 fi
 if [ "$cl" = no ]; then
   :
 elif command -v claude >/dev/null 2>&1; then
   echo "Claude Code is already installed: $(claude --version 2>/dev/null || echo unknown version)"
 else
-  command -v curl >/dev/null 2>&1 || { echo "vmclaude: curl is missing; cannot install Claude Code" >&2; exit 1; }
+  command -v curl >/dev/null 2>&1 || { echo "vmagents: curl is missing; cannot install Claude Code" >&2; exit 1; }
   echo "Installing Claude Code (a download of about 270 MB)..."
   curl -fsSL https://claude.ai/install.sh | bash &
   pid=$! i=0
@@ -1363,10 +1387,10 @@ else
     fi
   done
   wait "$pid"
-  command -v claude >/dev/null 2>&1 || { echo "vmclaude: Claude Code installation failed" >&2; exit 1; }
+  command -v claude >/dev/null 2>&1 || { echo "vmagents: Claude Code installation failed" >&2; exit 1; }
   echo "Installed Claude Code: $(claude --version 2>/dev/null || echo unknown version)"
 fi
-command -v tmux >/dev/null 2>&1 || echo "vmclaude: tmux is not available; the agent will stop when the connection drops" >&2
+command -v tmux >/dev/null 2>&1 || echo "vmagents: tmux is not available; the agent will stop when the connection drops" >&2
 exit 0
 '
 
@@ -1380,7 +1404,7 @@ else su_=none
 fi
 pkg() {
   echo "Installing: $*"
-  if [ "$su_" = none ]; then echo "vmclaude: cannot install $* without root or sudo; install it yourself" >&2; return 1
+  if [ "$su_" = none ]; then echo "vmagents: cannot install $* without root or sudo; install it yourself" >&2; return 1
   elif command -v apt-get >/dev/null 2>&1; then
     $su_ apt-get update -qq && $su_ env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Use-Pty=0 "$@"
   elif command -v dnf >/dev/null 2>&1; then $su_ dnf install -y "$@"
@@ -1389,7 +1413,7 @@ pkg() {
     $su_ pacman -S --needed --noconfirm "$@" || $su_ pacman -Syu --needed --noconfirm "$@"
   elif command -v zypper >/dev/null 2>&1; then $su_ zypper --non-interactive install "$@"
   elif command -v apk >/dev/null 2>&1; then $su_ apk add "$@"
-  else echo "vmclaude: no known package manager; install $* yourself" >&2; return 1
+  else echo "vmagents: no known package manager; install $* yourself" >&2; return 1
   fi
 }
 command -v curl >/dev/null 2>&1 || pkg curl || exit 1
@@ -1397,33 +1421,40 @@ mkdir -p "$HOME/.local/bin" || exit 1
 case $a in
   codex)
     echo "Installing Codex (its own installer, from chatgpt.com/codex)..."
-    curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh || { echo "vmclaude: installing Codex failed" >&2; exit 1; } ;;
+    curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh || { echo "vmagents: installing Codex failed" >&2; exit 1; } ;;
   gemini)
     node_ok() { command -v npm >/dev/null 2>&1 && node -e "process.exit(parseInt(process.versions.node) >= 20 ? 0 : 1)" 2>/dev/null; }
     node_ok || pkg nodejs npm || exit 1
-    node_ok || { echo "vmclaude: Gemini CLI needs Node.js 20 or newer; the VM has $(node --version 2>/dev/null || echo none)" >&2; exit 1; }
+    node_ok || { echo "vmagents: Gemini CLI needs Node.js 20 or newer; the VM has $(node --version 2>/dev/null || echo none)" >&2; exit 1; }
     echo "Installing Gemini CLI..."
-    npm install -g --prefix "$HOME/.local" --no-fund --no-audit --loglevel=error @google/gemini-cli || { echo "vmclaude: installing Gemini CLI failed" >&2; exit 1; } ;;
+    npm install -g --prefix "$HOME/.local" --no-fund --no-audit --loglevel=error @google/gemini-cli || { echo "vmagents: installing Gemini CLI failed" >&2; exit 1; } ;;
+  opencode)
+    command -v bash >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 || pkg bash tar || exit 1
+    echo "Installing OpenCode (its own installer, from opencode.ai)..."
+    curl -fsSL https://opencode.ai/install | bash || { echo "vmagents: installing OpenCode failed" >&2; exit 1; } ;;
   aider)
     echo "Installing aider..."
-    curl -LsSf https://aider.chat/install.sh | sh || { echo "vmclaude: installing aider failed" >&2; exit 1; } ;;
-  *) echo "vmclaude: unknown agent $a" >&2; exit 1 ;;
+    curl -LsSf https://aider.chat/install.sh | sh || { echo "vmagents: installing aider failed" >&2; exit 1; } ;;
+  *) echo "vmagents: unknown agent $a" >&2; exit 1 ;;
 esac
-command -v "$a" >/dev/null 2>&1 || { echo "vmclaude: $a was installed but is not on PATH" >&2; exit 1; }
+command -v "$a" >/dev/null 2>&1 || { echo "vmagents: $a was installed but is not on PATH" >&2; exit 1; }
 echo "Installed $a: $("$a" --version 2>/dev/null | head -n 1)"
 '
 
 # $1 on|off; with "on" the hook body comes on stdin.
 # shellcheck disable=SC2016
-AUTOSTART_SH='umask 022
-d=$HOME/.config/vmclaude
+AUTOSTART_SH=$MIGRATE_SH'umask 022
+d=$HOME/.config/vmagents
 hook=$d/autostart.sh
-begin="# >>> vmclaude autostart >>>"
-end="# <<< vmclaude autostart <<<"
+begin="# >>> vmagents autostart >>>"
+end="# <<< vmagents autostart <<<"
+oldb="# >>> vmclaude autostart >>>"
+olde="# <<< vmclaude autostart <<<"
 strip() {
   [ -f "$1" ] || return 0
-  awk -v b="$begin" -v e="$end" "\$0 == b { skip = 1; next } \$0 == e { skip = 0; next } !skip" "$1" >"$1.vmclaude.tmp" &&
-    cat "$1.vmclaude.tmp" >"$1" && rm -f "$1.vmclaude.tmp"
+  awk -v b="$begin" -v e="$end" -v ob="$oldb" -v oe="$olde" \
+    "\$0 == b || \$0 == ob { skip = 1; next } \$0 == e || \$0 == oe { skip = 0; next } !skip" "$1" >"$1.vmagents.tmp" &&
+    cat "$1.vmagents.tmp" >"$1" && rm -f "$1.vmagents.tmp"
 }
 rcs="$HOME/.bashrc"
 case ${SHELL-} in */zsh) rcs="$rcs $HOME/.zshrc" ;; esac
@@ -1440,8 +1471,8 @@ for rc in $rcs; do
   [ -f "$rc" ] && [ -s "$rc" ] && [ "$(tail -c 1 "$rc" | wc -l)" -eq 0 ] && echo >>"$rc"
   printf "%s\n%s\n%s\n%s\n%s\n" "$begin" \
     "case \":\$PATH:\" in *\":\$HOME/.local/bin:\"*) ;; *) PATH=\"\$HOME/.local/bin:\$PATH\" ;; esac" \
-    "[ -r \"\$HOME/.config/vmclaude/claude-env\" ] && { set -a; . \"\$HOME/.config/vmclaude/claude-env\"; set +a; }" \
-    "[ -r \"\$HOME/.config/vmclaude/autostart.sh\" ] && . \"\$HOME/.config/vmclaude/autostart.sh\"" "$end" >>"$rc" || exit 1
+    "[ -r \"\$HOME/.config/vmagents/claude-env\" ] && { set -a; . \"\$HOME/.config/vmagents/claude-env\"; set +a; }" \
+    "[ -r \"\$HOME/.config/vmagents/autostart.sh\" ] && . \"\$HOME/.config/vmagents/autostart.sh\"" "$end" >>"$rc" || exit 1
 done
 echo "Autostart is on: SSH logins open Claude Code (quit Claude to get a shell)."
 '
@@ -1449,23 +1480,23 @@ echo "Autostart is on: SSH logins open Claude Code (quit Claude to get a shell).
 # The hook sourced from ~/.bashrc / ~/.zshrc on the VM.
 autostart_hook() { # DIR SESSION
   cat <<EOF
-# Installed by vmclaude: open Claude Code on interactive SSH logins.
+# Installed by vmagents: open Claude Code on interactive SSH logins.
 # Quit Claude (or detach tmux with Ctrl-b d) to get a normal shell.
-# Skip it once:  ssh -o SetEnv=LC_VMCLAUDE=off ...   Turn it off:  vmclaude autostart NAME off
+# Skip it once:  ssh -o SetEnv=LC_VMAGENTS=off ...   Turn it off:  vmagents autostart NAME off
 case \$- in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
-if [ -n "\${SSH_CONNECTION-}" ] && [ -z "\${TMUX-}" ] && [ -z "\${VMCLAUDE_NO_AUTOSTART-}" ] && [ "\${LC_VMCLAUDE-}" != off ] && [ -t 0 ] && [ -t 1 ]; then
-  VMCLAUDE_NO_AUTOSTART=1; export VMCLAUDE_NO_AUTOSTART
+if [ -n "\${SSH_CONNECTION-}" ] && [ -z "\${TMUX-}" ] && [ -z "\${VMAGENTS_NO_AUTOSTART-}\${VMCLAUDE_NO_AUTOSTART-}" ] && [ "\${LC_VMAGENTS-}" != off ] && [ "\${LC_VMCLAUDE-}" != off ] && [ -t 0 ] && [ -t 1 ]; then
+  VMAGENTS_NO_AUTOSTART=1; export VMAGENTS_NO_AUTOSTART
   case ":\$PATH:" in *":\$HOME/.local/bin:"*) ;; *) PATH="\$HOME/.local/bin:\$PATH"; export PATH ;; esac
-  vmclaude_dir=$(sq "$1")
-  case \$vmclaude_dir in "") vmclaude_dir=\$HOME ;; "~") vmclaude_dir=\$HOME ;; "~/"*) vmclaude_dir=\$HOME/\${vmclaude_dir#"~/"} ;; esac
+  vmagents_dir=$(sq "$1")
+  case \$vmagents_dir in "") vmagents_dir=\$HOME ;; "~") vmagents_dir=\$HOME ;; "~/"*) vmagents_dir=\$HOME/\${vmagents_dir#"~/"} ;; esac
   if command -v claude >/dev/null 2>&1; then
     if [ -n $(sq "$2") ] && command -v tmux >/dev/null 2>&1; then
-      tmux new-session -A -s $(sq "$2") -c "\$vmclaude_dir" sh -c $(sq "$CLAUDE_ENV_SH") vmclaude "\$HOME/.config/vmclaude/claude-env" "\$(command -v claude)"
+      tmux new-session -A -s $(sq "$2") -c "\$vmagents_dir" sh -c $(sq "$CLAUDE_ENV_SH") vmagents "\$HOME/.config/vmagents/claude-env" "\$(command -v claude)"
     else
-      (cd "\$vmclaude_dir" 2>/dev/null; exec sh -c $(sq "$CLAUDE_ENV_SH") vmclaude "\$HOME/.config/vmclaude/claude-env" claude)
+      (cd "\$vmagents_dir" 2>/dev/null; exec sh -c $(sq "$CLAUDE_ENV_SH") vmagents "\$HOME/.config/vmagents/claude-env" claude)
     fi
   fi
-  unset vmclaude_dir
+  unset vmagents_dir
 fi
 EOF
 }
@@ -1516,7 +1547,7 @@ win_run() { # SCRIPT
   local gz
   gz=$(printf '%s' "$1" | gzip -9n | base64 -w 0) || die "gzip/base64 failed"
   run_ssh -T -- "$TARGET" "$(win_cmd "\$z = New-Object IO.Compression.GZipStream (New-Object IO.MemoryStream (,[Convert]::FromBase64String('$gz'))), ([IO.Compression.CompressionMode]::Decompress)
-\$f = Join-Path \$env:TEMP (\"vmclaude-\" + [guid]::NewGuid() + \".ps1\")
+\$f = Join-Path \$env:TEMP (\"vmagents-\" + [guid]::NewGuid() + \".ps1\")
 [IO.File]::WriteAllText(\$f, (New-Object IO.StreamReader \$z, ([Text.Encoding]::UTF8)).ReadToEnd(), (New-Object Text.UTF8Encoding \$true))
 try { & \$f; \$rc = \$LASTEXITCODE } finally { Remove-Item -LiteralPath \$f -ErrorAction SilentlyContinue }
 exit \$rc")" </dev/null
@@ -1524,7 +1555,7 @@ exit \$rc")" </dev/null
 
 # shellcheck disable=SC2016
 WIN_ENV_PS='$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
-function Err($m) { [Console]::Error.WriteLine("vmclaude: $m") }
+function Err($m) { [Console]::Error.WriteLine("vmagents: $m") }
 function Resolve-Dir($d) {
   if ($d -eq "" -or $d -eq "~") { return $env:USERPROFILE }
   if ($d -match "^~[\\/]") { return Join-Path $env:USERPROFILE $d.Substring(2) }
@@ -1537,26 +1568,26 @@ function Resolve-Dir($d) {
 # never exits. Raw (VT) input first, then line mode for 2 s, means it is done.
 # shellcheck disable=SC2016
 WIN_INVOKE_PS='function Invoke-Claude($exe, $line, $dir) {
-  $tf = "$env:USERPROFILE\.config\vmclaude\claude-env"
+  $tf = "$env:USERPROFILE\.config\vmagents\claude-env"
   if (Test-Path -LiteralPath $tf) {
     foreach ($l in Get-Content -LiteralPath $tf) {
       if ($l -match "^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=(\S+)$") { Set-Item "env:$($Matches[1])" $Matches[2] }
     }
   }
-  if (-not ("VmClaude.Con" -as [type])) {
-    Add-Type -Namespace VmClaude -Name Con -MemberDefinition ("[DllImport(`"kernel32.dll`")] public static extern IntPtr GetStdHandle(int n);" +
+  if (-not ("VmAgents.Con" -as [type])) {
+    Add-Type -Namespace VmAgents -Name Con -MemberDefinition ("[DllImport(`"kernel32.dll`")] public static extern IntPtr GetStdHandle(int n);" +
       "[DllImport(`"kernel32.dll`")] public static extern bool GetConsoleMode(IntPtr h, out uint m);")
   }
   $si = New-Object System.Diagnostics.ProcessStartInfo $exe, $line
   $si.UseShellExecute = $false
   $si.WorkingDirectory = $dir
   $p = [System.Diagnostics.Process]::Start($si)
-  $h = [VmClaude.Con]::GetStdHandle(-10)
+  $h = [VmAgents.Con]::GetStdHandle(-10)
   $raw = $false
   $since = $null
   while (-not $p.WaitForExit(250)) {
     $m = [uint32]0
-    if (-not [VmClaude.Con]::GetConsoleMode($h, [ref]$m)) { continue }
+    if (-not [VmAgents.Con]::GetConsoleMode($h, [ref]$m)) { continue }
     if ($m -band 0x200) { $raw = $true; $since = $null }
     elseif ($raw -and ($m -band 2)) {
       if (-not $since) { $since = Get-Date }
@@ -1577,14 +1608,14 @@ win_connect_ps() { # DIR NAME CLAUDE_ARGS...
 if (-not (Test-Path -LiteralPath \$d)) { New-Item -ItemType Directory -Force -Path \$d | Out-Null; Err "created \$d on the VM" }
 Set-Location -LiteralPath \$d
 \$c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not \$c) { Err "Claude Code is not installed on the VM. Run: vmclaude setup $name"; exit 127 }
+if (-not \$c) { Err "Claude Code is not installed on the VM. Run: vmagents setup $name"; exit 127 }
 # Build the command line ourselves: Windows PowerShell 5.1 mangles quotes in
 # arguments of native programs.
 \$line = (@(foreach (\$a in $(ps_array "$@")) {
   if (\$a -ne "" -and \$a -notmatch '[\s"]') { \$a }
   else { '"' + [regex]::Replace(\$a, '(\\\\*)("|\$)', { param(\$m) \$m.Groups[1].Value * 2 + \$(if (\$m.Groups[2].Value) { '\\"' } else { "" }) }) + '"' }
 })) -join " "
-\$s = "\$env:USERPROFILE\.config\vmclaude\claude-settings.json"
+\$s = "\$env:USERPROFILE\.config\vmagents\claude-settings.json"
 if (Test-Path -LiteralPath \$s) { \$line = ('--settings "' + \$s + '" ' + \$line).TrimEnd() }
 exit (Invoke-Claude \$c.Source \$line \$d)
 EOF
@@ -1679,20 +1710,20 @@ exit 0
 # The hook dot-sourced from the PowerShell profile on the VM.
 win_autostart_hook() { # DIR
   cat <<EOF
-# Installed by vmclaude: open Claude Code on interactive SSH logins.
-# Quit Claude to get a normal PowerShell prompt. Turn off: vmclaude autostart NAME off
+# Installed by vmagents: open Claude Code on interactive SSH logins.
+# Quit Claude to get a normal PowerShell prompt. Turn off: vmagents autostart NAME off
 $WIN_INVOKE_PS
-if (\$env:SSH_CONNECTION -and -not \$env:VMCLAUDE_NO_AUTOSTART -and [Environment]::GetCommandLineArgs().Count -le 1 -and -not [Console]::IsInputRedirected) {
-  \$env:VMCLAUDE_NO_AUTOSTART = "1"
+if (\$env:SSH_CONNECTION -and -not \$env:VMAGENTS_NO_AUTOSTART -and -not \$env:VMCLAUDE_NO_AUTOSTART -and [Environment]::GetCommandLineArgs().Count -le 1 -and -not [Console]::IsInputRedirected) {
+  \$env:VMAGENTS_NO_AUTOSTART = "1"
   \$env:Path = "\$env:USERPROFILE\.local\bin;\$env:Path"
-  \$vmclaudeDir = $(psq "$1")
-  if (\$vmclaudeDir -eq "" -or \$vmclaudeDir -eq "~") { \$vmclaudeDir = \$env:USERPROFILE }
-  elseif (\$vmclaudeDir -match "^~[\\\\/]") { \$vmclaudeDir = Join-Path \$env:USERPROFILE \$vmclaudeDir.Substring(2) }
-  \$vmclaudeExe = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (\$vmclaudeExe -and (Test-Path -LiteralPath \$vmclaudeDir)) {
-    [void](Invoke-Claude \$vmclaudeExe.Source "" (Resolve-Path -LiteralPath \$vmclaudeDir).Path)
+  \$vmagentsDir = $(psq "$1")
+  if (\$vmagentsDir -eq "" -or \$vmagentsDir -eq "~") { \$vmagentsDir = \$env:USERPROFILE }
+  elseif (\$vmagentsDir -match "^~[\\\\/]") { \$vmagentsDir = Join-Path \$env:USERPROFILE \$vmagentsDir.Substring(2) }
+  \$vmagentsExe = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (\$vmagentsExe -and (Test-Path -LiteralPath \$vmagentsDir)) {
+    [void](Invoke-Claude \$vmagentsExe.Source "" (Resolve-Path -LiteralPath \$vmagentsDir).Path)
   }
-  Remove-Variable vmclaudeDir, vmclaudeExe -ErrorAction SilentlyContinue
+  Remove-Variable vmagentsDir, vmagentsExe -ErrorAction SilentlyContinue
 }
 EOF
 }
@@ -1701,8 +1732,8 @@ EOF
 # (Two steps: together they do not fit in one Windows command line.)
 win_hook_ps() { # DIR
   cat <<EOF
-New-Item -ItemType Directory -Force -Path "\$env:USERPROFILE\.config\vmclaude" | Out-Null
-Set-Content -LiteralPath "\$env:USERPROFILE\.config\vmclaude\autostart.ps1" -Value $(psq "$(win_autostart_hook "$1")") -Encoding UTF8
+New-Item -ItemType Directory -Force -Path "\$env:USERPROFILE\.config\vmagents" | Out-Null
+Set-Content -LiteralPath "\$env:USERPROFILE\.config\vmagents\autostart.ps1" -Value $(psq "$(win_autostart_hook "$1")") -Encoding UTF8
 exit 0
 EOF
 }
@@ -1712,16 +1743,18 @@ win_autostart_ps() { # on|off
   printf '%s' "$WIN_ENV_PS"
   cat <<EOF
 \$mode = $(psq "$1")
-\$dir = "\$env:USERPROFILE\.config\vmclaude"
+\$dir = "\$env:USERPROFILE\.config\vmagents"
 \$hook = "\$dir\autostart.ps1"
 \$prof = \$PROFILE.CurrentUserCurrentHost
-\$begin = "# >>> vmclaude autostart >>>"
-\$end = "# <<< vmclaude autostart <<<"
+\$begin = "# >>> vmagents autostart >>>"
+\$end = "# <<< vmagents autostart <<<"
+\$oldb = "# >>> vmclaude autostart >>>"
+\$olde = "# <<< vmclaude autostart <<<"
 \$out = New-Object System.Collections.Generic.List[string]
 \$skip = \$false
 if (Test-Path -LiteralPath \$prof) {
   foreach (\$l in @(Get-Content -LiteralPath \$prof)) {
-    if (\$l -eq \$begin) { \$skip = \$true } elseif (\$l -eq \$end) { \$skip = \$false } elseif (-not \$skip) { \$out.Add(\$l) }
+    if (\$l -eq \$begin -or \$l -eq \$oldb) { \$skip = \$true } elseif (\$l -eq \$end -or \$l -eq \$olde) { \$skip = \$false } elseif (-not \$skip) { \$out.Add(\$l) }
   }
 }
 if (\$mode -eq "off") {
@@ -1732,7 +1765,7 @@ if (\$mode -eq "off") {
 }
 if (-not (Test-Path -LiteralPath \$hook)) { Err "the hook \$hook is missing"; exit 1 }
 \$out.Add(\$begin)
-\$out.Add('if (Test-Path "\$env:USERPROFILE\.config\vmclaude\autostart.ps1") { . "\$env:USERPROFILE\.config\vmclaude\autostart.ps1" }')
+\$out.Add('if (Test-Path "\$env:USERPROFILE\.config\vmagents\autostart.ps1") { . "\$env:USERPROFILE\.config\vmagents\autostart.ps1" }')
 \$out.Add(\$end)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent \$prof) | Out-Null
 Set-Content -LiteralPath \$prof -Value \$out -Encoding UTF8
@@ -1768,9 +1801,9 @@ WIN_DOCTOR_PS=$WIN_ENV_PS'$c = Get-Command claude -CommandType Application -Erro
 "claude=" + $(if ($c) { & $c.Source --version 2>$null | Select-Object -First 1 })
 $g = Get-Command git -ErrorAction SilentlyContinue
 "git=" + $(if ($g) { & $g.Source --version })
-"hook=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\autostart.ps1") { "on" })
-"login=" + $(if (Test-Path "$env:USERPROFILE\.config\vmclaude\claude-env") { "token" } elseif (Test-Path "$env:USERPROFILE\.claude\.credentials.json") { "login" })
-$t = Get-ScheduledTask -TaskName vmclaude-idle -ErrorAction SilentlyContinue
+"hook=" + $(if (Test-Path "$env:USERPROFILE\.config\vmagents\autostart.ps1") { "on" })
+"login=" + $(if (Test-Path "$env:USERPROFILE\.config\vmagents\claude-env") { "token" } elseif (Test-Path "$env:USERPROFILE\.claude\.credentials.json") { "login" })
+$t = Get-ScheduledTask -TaskName vmagents-idle -ErrorAction SilentlyContinue
 "idle=" + $(if ($t) { [regex]::Match($t.Actions[0].Arguments, "-Minutes (\d+)").Groups[1].Value + " " + $(if ($t.State -eq "Running") { "active" } else { "$($t.State)".ToLower() }) })
 '
 
@@ -1802,7 +1835,7 @@ ensure_key() {
   mkdir -p "$(dirname "$C_KEY")"
   chmod 700 "$(dirname "$C_KEY")"
   info "Creating SSH key $C_KEY"
-  ssh-keygen -q -t ed25519 -N '' -C "vmclaude@$(hostname 2>/dev/null || echo host)" -f "$C_KEY" ||
+  ssh-keygen -q -t ed25519 -N '' -C "vmagents@$(hostname 2>/dev/null || echo host)" -f "$C_KEY" ||
     die "ssh-keygen failed"
 }
 
@@ -1926,9 +1959,13 @@ cmd_default() {
 cmd_rm() {
   [[ $# = 1 ]] || usage_error "rm: give one NAME"
   profile_exists "$1" || die "no VM profile named '$1'"
-  rm -f "$(profile_file "$1")" "$APPS_DIR/vmclaude-$1.desktop"
+  rm -f "$(profile_file "$1")" "$APPS_DIR/vmagents-$1.desktop" "$APPS_DIR/vmclaude-$1.desktop"
   if [[ -f $CONF_DIR/default && $(<"$CONF_DIR/default") == "$1" ]]; then rm -f "$CONF_DIR/default"; fi
-  if [[ -f $KNOWN_HOSTS ]]; then ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true; rm -f "$KNOWN_HOSTS.old"; fi
+  if [[ -f $KNOWN_HOSTS ]]; then
+    ssh-keygen -R "vmagents-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+    ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+    rm -f "$KNOWN_HOSTS.old"
+  fi
   say "Removed VM '$1'."
 }
 
@@ -1941,13 +1978,14 @@ cmd_edit() {
 cmd_forget() {
   [[ $# = 1 ]] || usage_error "forget: give one NAME"
   profile_exists "$1" || die "no VM profile named '$1'"
-  if [[ -f $KNOWN_HOSTS ]] && ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1; then
+  if [[ -f $KNOWN_HOSTS ]] && ssh-keygen -R "vmagents-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1; then
+    ssh-keygen -R "vmclaude-$1" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
     rm -f "$KNOWN_HOSTS.old"
   fi
   say "Forgot the host key of '$1'; the next connection will accept the new one."
 }
 
-# Windows: (re)writes the hook files when this vmclaude has other ones than
+# Windows: (re)writes the hook files when this vmagents has other ones than
 # the VM got last time.
 hooks_mark() { printf '%s/hooks-%s' "$CACHE_DIR" "$NAME"; }
 win_hooks() {
@@ -1992,7 +2030,7 @@ cmd_connect() {
       --no-tmux) notmux=1; shift ;;
       --keep) keep=1; shift ;;
       # Not --agent: that is Claude's own option.
-      --claude | --codex | --gemini | --aider) agent=${1#--}; shift ;;
+      --claude | --codex | --gemini | --opencode | --aider) agent=${1#--}; shift ;;
       --) shift; cargs+=("$@"); break ;;
       *)
         if [[ -z $name ]] && [[ $1 != -* ]]; then name=$1; shift
@@ -2064,11 +2102,11 @@ cmd_shell() {
     return
   elif [[ $C_OS == windows ]]; then
     # shellcheck disable=SC2016
-    run_ssh "$TTY_FLAG" -- "$TARGET" "$(win_cmd -noexit '$env:VMCLAUDE_NO_AUTOSTART = "1"
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(win_cmd -noexit '$env:VMAGENTS_NO_AUTOSTART = "1"; $env:VMCLAUDE_NO_AUTOSTART = "1"
 if (Test-Path -LiteralPath $PROFILE) { . $PROFILE }')" || rc=$?
   else
     # shellcheck disable=SC2016
-    run_ssh "$TTY_FLAG" -- "$TARGET" 'VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l' || rc=$?
+    run_ssh "$TTY_FLAG" -- "$TARGET" 'VMAGENTS_NO_AUTOSTART=1 VMCLAUDE_NO_AUTOSTART=1 exec "${SHELL:-/bin/sh}" -l' || rc=$?
   fi
   ((rc == 255 || keep)) || autostop
   return "$rc"
@@ -2096,15 +2134,15 @@ install_autostart() { # on|off
 }
 
 # Why the VM should stay on ("" when nothing uses it): other connections from
-# here (vmclaude shell, mount, another connect), tmux sessions, logins.
+# here (vmagents shell, mount, another connect), tmux sessions, logins.
 vm_busy() {
   local pid args n=0 out
   while read -r pid args; do
-    [[ $pid == "$$" || $args == *vmclaude-watch* ]] && continue
-    [[ " $args " == *"HostKeyAlias=vmclaude-$NAME "* ]] && n=$((n + 1))
+    [[ $pid == "$$" || $args == *vmagents-watch* ]] && continue
+    [[ " $args " == *"HostKeyAlias=vmagents-$NAME "* ]] && n=$((n + 1))
   done < <(ps -eo pid=,args= 2>/dev/null || true)
   if ((n)); then
-    printf 'another connection from this computer is open (vmclaude shell, mount, ...)'
+    printf 'another connection from this computer is open (vmagents shell, mount, ...)'
     return 0
   fi
   if [[ $C_OS == windows ]]; then
@@ -2259,7 +2297,7 @@ cmd_setup() {
       run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$a")" </dev/null || die "installing $a on the VM failed"
       note_agent "$a"
     done
-    # The first one is what "vmclaude NAME" opens.
+    # The first one is what "vmagents NAME" opens.
     if [[ ${agents%%,*} != "${P[AGENT]:-claude}" ]]; then P[AGENT]=${agents%%,*}; write_profile "$NAME"; fi
   else
     info "[2/3] skipped installing Claude Code"
@@ -2322,10 +2360,10 @@ cmd_doctor() {
     probe=$(remote_cmd "$REMOTE_ENV"'
 printf "claude=%s\n" "$(command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | head -n 1)"
 printf "tmux=%s\n" "$(command -v tmux >/dev/null 2>&1 && tmux -V)"
-printf "hook=%s\n" "$([ -f "$HOME/.config/vmclaude/autostart.sh" ] && echo on)"
-printf "login=%s\n" "$(if [ -f "$HOME/.config/vmclaude/claude-env" ]; then echo token; elif [ -f "$HOME/.claude/.credentials.json" ]; then echo login; fi)"
-printf "hooks=%s\n" "$([ -f "$HOME/.config/vmclaude/claude-settings.json" ] && echo on)"
-printf "idle=%s\n" "$(sed -n "s/^ExecStart=.* \([0-9][0-9]*\)\$/\1/p" /etc/systemd/system/vmclaude-idle.service 2>/dev/null) $(systemctl is-active vmclaude-idle 2>/dev/null)"
+printf "hook=%s\n" "$([ -f "$HOME/.config/vmagents/autostart.sh" ] && echo on)"
+printf "login=%s\n" "$(if [ -f "$HOME/.config/vmagents/claude-env" ]; then echo token; elif [ -f "$HOME/.claude/.credentials.json" ]; then echo login; fi)"
+printf "hooks=%s\n" "$([ -f "$HOME/.config/vmagents/claude-settings.json" ] && echo on)"
+printf "idle=%s\n" "$(sed -n "s/^ExecStart=.* \([0-9][0-9]*\)\$/\1/p" /etc/systemd/system/vmagents-idle.service 2>/dev/null) $(systemctl is-active vmagents-idle 2>/dev/null)"
 ')
   fi
   out=$(run_ssh -T -o BatchMode=yes -- "$TARGET" "$probe" </dev/null 2>/dev/null | tr -d '\r') ||
@@ -2369,9 +2407,9 @@ printf "idle=%s\n" "$(sed -n "s/^ExecStart=.* \([0-9][0-9]*\)\$/\1/p" /etc/syste
 
 # ------------------------------------------------------------------ create / delete
 
-CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/vmclaude
-CREATE_POOL=${VMCLAUDE_POOL:-default}
-CREATE_NETWORK=${VMCLAUDE_NETWORK:-default}
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/vmagents
+CREATE_POOL=${VMAGENTS_POOL:-${VMCLAUDE_POOL:-default}}
+CREATE_NETWORK=${VMAGENTS_NETWORK:-${VMCLAUDE_NETWORK:-default}}
 
 # Sets IMG_URL, IMG_SUMS (checksum list), IMG_ALGO, IMG_OSINFO for an image name.
 IMG_URL='' IMG_SUMS='' IMG_ALGO='' IMG_OSINFO=''
@@ -2391,8 +2429,8 @@ image_info() {
       IMG_ALGO=sha256 IMG_OSINFO=ubuntu24.04 ;;
     arch | archlinux)
       # The checksum always comes from Arch itself; the image may come from
-      # a faster mirror (VMCLAUDE_ARCH_MIRROR, e.g. https://mirrors.dotsrc.org/archlinux).
-      IMG_URL=${VMCLAUDE_ARCH_MIRROR:-https://geo.mirror.pkgbuild.com}
+      # a faster mirror (VMAGENTS_ARCH_MIRROR, e.g. https://mirrors.dotsrc.org/archlinux).
+      IMG_URL=${VMAGENTS_ARCH_MIRROR:-${VMCLAUDE_ARCH_MIRROR:-https://geo.mirror.pkgbuild.com}}
       IMG_URL=${IMG_URL%/}/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
       IMG_SUMS=https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256
       IMG_ALGO=sha256 IMG_OSINFO=archlinux ;;
@@ -2507,8 +2545,8 @@ cmd_create() {
   done
   C_URI=$uri
   vsh dominfo "$name" >/dev/null 2>&1 && die "libvirt already has a VM named '$name'"
-  vsh pool-info "$CREATE_POOL" >/dev/null 2>&1 || die "libvirt storage pool '$CREATE_POOL' not found (set VMCLAUDE_POOL)"
-  vsh net-info "$CREATE_NETWORK" >/dev/null 2>&1 || die "libvirt network '$CREATE_NETWORK' not found (set VMCLAUDE_NETWORK)"
+  vsh pool-info "$CREATE_POOL" >/dev/null 2>&1 || die "libvirt storage pool '$CREATE_POOL' not found (set VMAGENTS_POOL)"
+  vsh net-info "$CREATE_NETWORK" >/dev/null 2>&1 || die "libvirt network '$CREATE_NETWORK' not found (set VMAGENTS_NETWORK)"
   vsh net-start "$CREATE_NETWORK" >/dev/null 2>&1 || true
 
   C_KEY=$DEFAULT_KEY
@@ -2518,7 +2556,11 @@ cmd_create() {
   # One base volume per image release, shared by all VMs as a backing file.
   # (--video vga below matters: without any video device the GRUB of the
   # Debian cloud image resets the VM in a loop right after "Booting".)
-  local base="vmclaude-base-$image-${IMG_HASH:0:12}.qcow2" vol="$name.qcow2" out
+  local base="vmagents-base-$image-${IMG_HASH:0:12}.qcow2" vol="$name.qcow2" out
+  # One made under the old name is just as good.
+  vsh vol-info --pool "$CREATE_POOL" "$base" >/dev/null 2>&1 ||
+    ! vsh vol-info --pool "$CREATE_POOL" "vmclaude-base-$image-${IMG_HASH:0:12}.qcow2" >/dev/null 2>&1 ||
+    base="vmclaude-base-$image-${IMG_HASH:0:12}.qcow2"
   if vsh vol-info --pool "$CREATE_POOL" "$base" >/dev/null 2>&1; then
     info "Using base volume $base"
   else
@@ -2557,7 +2599,7 @@ cmd_create() {
   if ! out=$(virt-install --connect "$uri" --name "$name" --memory "$memory" --vcpus "$cpus" \
     --import --disk "vol=$CREATE_POOL/$vol,bus=virtio" --disk "vol=$CREATE_POOL/$seed,device=disk,bus=virtio,readonly=on" \
     --osinfo "$(osinfo_name "$IMG_OSINFO")" --network "network=$CREATE_NETWORK,model=virtio" \
-    --metadata description="created by vmclaude" \
+    --metadata description="created by vmagents" \
     --graphics none --video vga --console pty,target_type=serial --noautoconsole 2>&1); then
     vsh vol-delete --pool "$CREATE_POOL" "$vol" >/dev/null 2>&1 || true
     vsh vol-delete --pool "$CREATE_POOL" "$seed" >/dev/null 2>&1 || true
@@ -2641,11 +2683,11 @@ cmd_delete() {
   done
   [[ -n $name ]] || usage_error "delete: missing NAME"
   load "$name"
-  # Only VMs that vmclaude created, and whose libvirt description says so.
+  # Only VMs that vmagents created, and whose libvirt description says so.
   [[ ${P[CREATED]:-} == 1 && -n $C_DOMAIN ]] ||
-    die "'$NAME' was not created by vmclaude; delete the VM yourself (to forget it here: $PROG rm $NAME)"
-  [[ $(vsh desc "$C_DOMAIN" 2>/dev/null) == *"created by vmclaude"* ]] ||
-    die "libvirt VM '$C_DOMAIN' is not marked as created by vmclaude; not deleting it"
+    die "'$NAME' was not created by vmagents; delete the VM yourself (to forget it here: $PROG rm $NAME)"
+  [[ $(vsh desc "$C_DOMAIN" 2>/dev/null) == *"created by vm"@(agents|claude)* ]] ||
+    die "libvirt VM '$C_DOMAIN' is not marked as created by vmagents; not deleting it"
   if ((!yes)); then
     [[ -t 0 ]] || die "delete: add --yes to confirm without a terminal"
     read -r -p "Delete VM '$C_DOMAIN' and its disk for good? Type its name: " a || a=
@@ -2731,7 +2773,7 @@ cmd_images() {
     [[ -f $file ]] && dl=$(du -h "$file" | cut -f1)
     row=-
     for base in $vols; do
-      [[ $base == vmclaude-base-"$img"-*.qcow2 ]] || continue
+      [[ $base == vm@(agents|claude)-base-"$img"-*.qcow2 ]] || continue
       size=$(vsh vol-info --pool "$CREATE_POOL" "$base" 2>/dev/null | awk '/^Allocation:/ { print $2 $3 }')
       users=${used_by[$base]:-no VM}
       [[ $row == - ]] && row='' || row+='; '
@@ -2747,8 +2789,8 @@ cmd_images() {
   say "    $CACHE_DIR/images/"
   if ((lv)); then
     say "  Base images, one per image release, in libvirt pool \"$CREATE_POOL\":"
-    say "    $pool_path/vmclaude-base-IMAGE-CHECKSUM.qcow2"
-    for base in $vols; do [[ $base == vmclaude-base-*.qcow2 ]] && say "      $base"; done
+    say "    $pool_path/vmagents-base-IMAGE-CHECKSUM.qcow2"
+    for base in $vols; do [[ $base == vm@(agents|claude)-base-*.qcow2 ]] && say "      $base"; done
     say "  Each VM made with create: its own disk (only what differs from the base)"
     say "  and its cloud-init settings:"
     say "    $pool_path/NAME.qcow2   $pool_path/NAME-seed.iso"
@@ -2776,7 +2818,7 @@ cmd_prune() {
       sed -n '/<backingStore>/,/<\/backingStore>/s:.*<path>\(.*\)</path>.*:\1:p')$'\n'
   done
   for v in $vols; do
-    [[ $v == vmclaude-base-*.qcow2 ]] || continue
+    [[ $v == vm@(agents|claude)-base-*.qcow2 ]] || continue
     path=$(vsh vol-path --pool "$CREATE_POOL" "$v" 2>/dev/null) || continue
     if grep -qxF "$path" <<<"$used"; then
       say "Kept $v (a VM uses it)"
@@ -2793,7 +2835,7 @@ cmd_prune() {
 }
 
 # ------------------------------------------------------------------ MCP server
-# "vmclaude mcp NAME" speaks MCP on stdin/stdout so that a Claude Code on this
+# "vmagents mcp NAME" speaks MCP on stdin/stdout so that a Claude Code on this
 # computer can run commands and edit files inside the VM. The protocol part is
 # the Python program below; it calls the hidden __mcp-* commands for each step,
 # so SSH options, VM start-up and Linux/Windows differences stay in one place.
@@ -2832,16 +2874,16 @@ cmd___mcp-run() {
     # Errors are written as plain text: left to PowerShell, they reach us
     # as CLIXML when stderr is not a console.
     win_run "$WIN_ENV_PS\$global:LASTEXITCODE = 0
-\$vmclaudeFailed = \$false
+\$vmagentsFailed = \$false
 Set-Location -LiteralPath $(psq "$dir")
 & {
 $command
 } 2>&1 | ForEach-Object {
-  if (\$_ -is [System.Management.Automation.ErrorRecord]) { \$script:vmclaudeFailed = \$true; [Console]::Error.WriteLine(\$_.ToString()) }
+  if (\$_ -is [System.Management.Automation.ErrorRecord]) { \$script:vmagentsFailed = \$true; [Console]::Error.WriteLine(\$_.ToString()) }
   else { \$_ }
 }
 if (\$LASTEXITCODE) { exit \$LASTEXITCODE }
-if (\$vmclaudeFailed) { exit 1 }
+if (\$vmagentsFailed) { exit 1 }
 exit 0"
   else
     # shellcheck disable=SC2016
@@ -2861,7 +2903,7 @@ sftp_path() {
 }
 
 run_scp() { # SRC DST (one of them remote, as host:path)
-  local -a scp_opts=(-q -s -P "$C_PORT" -o "HostKeyAlias=vmclaude-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
+  local -a scp_opts=(-q -s -P "$C_PORT" -o "HostKeyAlias=vmagents-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
     -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15)
   [[ -f $C_KEY ]] && scp_opts+=(-i "$C_KEY" -o IdentitiesOnly=yes)
   scp "${scp_opts[@]}" -- "$1" "$2"
@@ -2916,15 +2958,15 @@ cmd_mcp() {
     return 0
   fi
   command -v python3 >/dev/null || die "python3 is needed for the MCP server"
-  VMCLAUDE_VERSION=$VERSION exec python3 -c "$MCP_PY" "$(readlink -f "$0")" "$NAME" "$C_OS" "$C_DIR"
+  VMAGENTS_VERSION=$VERSION exec python3 -c "$MCP_PY" "$(readlink -f "$0")" "$NAME" "$C_OS" "$C_DIR"
 }
 
 MCP_PY=$(cat <<'PYTHON_END'
-# The MCP server behind "vmclaude mcp NAME": JSON-RPC over stdin/stdout.
+# The MCP server behind "vmagents mcp NAME": JSON-RPC over stdin/stdout.
 import json, os, re, subprocess, sys, tempfile
 
-VMCLAUDE, NAME, OS, DIR = sys.argv[1:5]
-VERSION = os.environ.get("VMCLAUDE_VERSION", "")
+VMAGENTS, NAME, OS, DIR = sys.argv[1:5]
+VERSION = os.environ.get("VMAGENTS_VERSION", "")
 LIMIT = 30000  # characters of command output returned to the model
 info = {}
 
@@ -2933,9 +2975,9 @@ class ToolError(Exception):
     pass
 
 
-def vmclaude(args, timeout):
+def vmagents(args, timeout):
     # Own process group, so a timeout also stops the ssh under it.
-    p = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    p = subprocess.Popen([VMAGENTS, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          stdin=subprocess.DEVNULL, start_new_session=True)
     try:
         out, err = p.communicate(timeout=timeout)
@@ -2952,9 +2994,9 @@ def text(b):
 
 def vm_info():
     if not info:
-        r = vmclaude(["__mcp-info", NAME], 600)
+        r = vmagents(["__mcp-info", NAME], 600)
         if r.returncode:
-            raise ToolError(f"cannot reach VM {NAME}: {text(r.stderr or r.stdout).strip()} (try: vmclaude doctor {NAME})")
+            raise ToolError(f"cannot reach VM {NAME}: {text(r.stderr or r.stdout).strip()} (try: vmagents doctor {NAME})")
         for line in text(r.stdout).splitlines():
             k, _, v = line.partition("=")
             info[k] = v
@@ -2990,7 +3032,7 @@ def get(path):
     remote = remote_path(path)
     with tempfile.TemporaryDirectory() as d:
         local = os.path.join(d, "f")
-        r = vmclaude(["__mcp-get", NAME, remote, local], 600)
+        r = vmagents(["__mcp-get", NAME, remote, local], 600)
         if r.returncode or not os.path.exists(local):
             raise ToolError(f"cannot read {remote}: {text(r.stderr).strip() or 'not found'}")
         with open(local, "rb") as f:
@@ -3003,7 +3045,7 @@ def put(path, data):
         local = os.path.join(d, "f")
         with open(local, "wb") as f:
             f.write(data)
-        r = vmclaude(["__mcp-put", NAME, local, remote], 600)
+        r = vmagents(["__mcp-put", NAME, local, remote], 600)
         if r.returncode:
             raise ToolError(f"cannot write {remote}: {text(r.stderr).strip()}")
     return remote
@@ -3014,7 +3056,7 @@ def run(a):
     if not command.strip():
         raise ToolError("command is empty")
     timeout = max(1, min(int(a.get("timeout") or 120), 600))
-    r = vmclaude(["__mcp-run", NAME, vm_info()["dir"], command], timeout)
+    r = vmagents(["__mcp-run", NAME, vm_info()["dir"], command], timeout)
     if r.returncode == 255 and not r.stdout:
         raise ToolError(f"SSH to VM {NAME} failed: {text(r.stderr).strip()}")
     out = text(r.stdout)
@@ -3081,7 +3123,7 @@ TOOLS = [
     {"name": "run", "handler": run,
      "description": f"Run a shell command inside {where}, in {start_dir}. Returns its output and exit code. "
                     "Starts the VM first if it is off. Use this for everything inside the VM: building, "
-                    "testing, installing packages (sudo works without a password on VMs made by vmclaude create).",
+                    "testing, installing packages (sudo works without a password on VMs made by vmagents create).",
      "inputSchema": {"type": "object", "properties": {
          "command": {"type": "string", "description": "The command line to run"},
          "timeout": {"type": "integer", "description": "Seconds before it is stopped (default 120, max 600)"}},
@@ -3108,7 +3150,7 @@ TOOLS = [
          "required": ["path", "old_string", "new_string"]}},
 ]
 HANDLERS = {t["name"]: t.pop("handler") for t in TOOLS}
-INSTRUCTIONS = (f"These tools work inside the virtual machine '{NAME}' over SSH (vmclaude). Use them, not the "
+INSTRUCTIONS = (f"These tools work inside the virtual machine '{NAME}' over SSH (vmagents). Use them, not the "
                 f"local file and shell tools, whenever the task is about that VM. Paths and commands start in "
                 f"{start_dir} on the VM.")
 
@@ -3130,7 +3172,7 @@ def handle(msg):
     if method == "initialize":
         reply(id_, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": f"vmclaude-{NAME}", "version": VERSION},
+                    "serverInfo": {"name": f"vmagents-{NAME}", "version": VERSION},
                     "instructions": INSTRUCTIONS})
     elif method == "ping":
         reply(id_, {})
@@ -3178,13 +3220,13 @@ snapshot_rows() {
     awk 'NR > 2 && NF >= 5 { print $1 "\t" $2 " " $3 "\t" $5 }' | sort -t $'\t' -k2,2 -k1,1
 }
 
-# Taken each time vmclaude starts the VM from "shut off" (instant then, and
-# without memory), so "vmclaude undo" can return to before the session.
+# Taken each time vmagents starts the VM from "shut off" (instant then, and
+# without memory), so "vmagents undo" can return to before the session.
 auto_snapshot() {
   local keep=${P[AUTOSNAP]:-3} snap out old
   ((keep > 0)) || return 0
   snap=auto-$(date +%Y%m%d-%H%M%S)
-  if ! out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "taken by vmclaude before starting the VM" 2>&1); then
+  if ! out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "taken by vmagents before starting the VM" 2>&1); then
     warn "no automatic snapshot: ${out%%$'\n'*} (turn them off: $PROG autosnap $NAME off)"
     return 0
   fi
@@ -3217,7 +3259,7 @@ cmd_snapshot() {
   fi
   snap=snap-$(date +%Y%m%d-%H%M%S)
   [[ $(domstate) == running ]] && info "The VM is running: its memory is saved too, and it pauses for a moment..."
-  out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "${note:-taken with vmclaude snapshot}" 2>&1) ||
+  out=$(vsh snapshot-create-as "$C_DOMAIN" "$snap" --description "${note:-taken with vmagents snapshot}" 2>&1) ||
     die "libvirt: $out"
   say "Snapshot $snap taken. Back to it later: $PROG undo $NAME $snap"
 }
@@ -3243,7 +3285,7 @@ cmd_snapshots() {
     return 0
   fi
   if [[ -z $rows ]]; then
-    say "No snapshots of $NAME yet. One is taken each time vmclaude starts the VM; or: $PROG snapshot $NAME"
+    say "No snapshots of $NAME yet. One is taken each time vmagents starts the VM; or: $PROG snapshot $NAME"
     return 0
   fi
   while IFS=$'\t' read -r snap when state; do
@@ -3270,7 +3312,7 @@ cmd_undo() {
   load "$name"
   need_domain undo
   rows=$(snapshot_rows)
-  [[ -n $rows ]] || die "no snapshots of $NAME yet. One is taken each time vmclaude starts the VM; take one now: $PROG snapshot $NAME"
+  [[ -n $rows ]] || die "no snapshots of $NAME yet. One is taken each time vmagents starts the VM; take one now: $PROG snapshot $NAME"
   if [[ -n $snap ]]; then
     row=$(awk -F '\t' -v s="$snap" '$1 == s' <<<"$rows")
     [[ -n $row ]] || die "no snapshot '$snap' of $NAME (see: $PROG snapshots $NAME)"
@@ -3306,7 +3348,7 @@ cmd_autosnap() {
   P[AUTOSNAP]=$((10#$n))
   write_profile "$NAME"
   if ((P[AUTOSNAP])); then
-    say "Automatic snapshots are on: one each time vmclaude starts the VM, the newest ${P[AUTOSNAP]} are kept."
+    say "Automatic snapshots are on: one each time vmagents starts the VM, the newest ${P[AUTOSNAP]} are kept."
   else
     say "Automatic snapshots are off (existing ones stay; see: $PROG snapshots $NAME)."
   fi
@@ -3344,7 +3386,7 @@ cmd___watch() {
   load "$1"
   command -v flock >/dev/null || return 0
   local lock
-  lock=${XDG_RUNTIME_DIR:-/tmp}/vmclaude-watch-$(id -u)-$NAME.lock
+  lock=${XDG_RUNTIME_DIR:-/tmp}/vmagents-watch-$(id -u)-$NAME.lock
   exec 9>>"$lock"
   flock -n 9 || return 0  # one watcher per VM
   if [[ -n $C_DOMAIN ]]; then
@@ -3356,7 +3398,7 @@ cmd___watch() {
   build_ssh_opts
   local last='' fails=0 gone=0 out id dir msg first=1 cmd
   while :; do
-    ((first)) || sleep "${VMCLAUDE_WATCH_INTERVAL:-15}"
+    ((first)) || sleep "${VMAGENTS_WATCH_INTERVAL:-15}"
     first=0
     if [[ -n $C_DOMAIN && $(domstate) != running ]]; then return 0; fi
     if [[ $C_OS == windows ]]; then
@@ -3375,7 +3417,7 @@ cmd___watch() {
     while IFS=$'\t' read -r id dir msg; do
       [[ $id =~ ^[0-9]+$ ]] || continue
       last=$id
-      notify-send -a vmclaude "Claude Code ($NAME)" "${dir:+$dir: }$msg" 2>/dev/null || true
+      notify-send -a vmagents "Claude Code ($NAME)" "${dir:+$dir: }$msg" 2>/dev/null || true
     done <<<"$out"
     if [[ $out == claude=0* ]]; then ((++gone < 2)) || return 0; else gone=0; fi
   done
@@ -3596,7 +3638,7 @@ cmd_ui() {
   mkdir -p "$CACHE_DIR" || die "cannot create $CACHE_DIR"
   f=$CACHE_DIR/ui-$VERSION.py
   [[ -f $f && $(<"$f") == "$UI_PY" ]] || printf '%s\n' "$UI_PY" >"$f" || die "cannot write $f"
-  export VMCLAUDE_BIN=$self
+  export VMAGENTS_BIN=$self
   if python3 -c 'from textual.app import App; App.suspend; import textual.widgets' 2>/dev/null; then
     exec python3 "$f"
   elif command -v uv >/dev/null; then
@@ -3606,8 +3648,8 @@ cmd_ui() {
 }
 
 UI_PY=$(cat <<'UI_END'
-"""vmclaude ui: a terminal UI for vmclaude. It only runs the vmclaude command
-(VMCLAUDE_BIN) and reads its JSON (list --json, images --json, snapshots
+"""vmagents ui: a terminal UI for vmagents. It only runs the vmagents command
+(VMAGENTS_BIN) and reads its JSON (list --json, images --json, snapshots
 --json), so everything it does can also be done by hand."""
 import json
 import os
@@ -3626,8 +3668,9 @@ from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Input,
                              RichLog, Select, Static)
 from textual.widgets.option_list import Option
 
-VMCLAUDE = os.environ.get("VMCLAUDE_BIN", "vmclaude")
-AGENTS = [("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("aider", "aider")]
+VMAGENTS = os.environ.get("VMAGENTS_BIN", "vmagents")
+AGENTS = [("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("opencode", "OpenCode"),
+          ("aider", "aider")]
 AGENT_NAMES = dict(AGENTS)
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PORTS_RE = re.compile(r"^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$")
@@ -3636,9 +3679,9 @@ IDLE = [("off", 0), ("15 minutes", 15), ("30 minutes", 30), ("1 hour", 60), ("2 
 
 
 def cli(*args, timeout=120):
-    """Runs vmclaude; returns (exit code, stdout, stderr)."""
+    """Runs vmagents; returns (exit code, stdout, stderr)."""
     try:
-        r = subprocess.run([VMCLAUDE, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        r = subprocess.run([VMAGENTS, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            timeout=timeout)
         return r.returncode, r.stdout, r.stderr
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -3670,7 +3713,7 @@ def state_mark(vm):
 
 
 def create_args(v):
-    """The "vmclaude create" arguments for the form values v (a dict)."""
+    """The "vmagents create" arguments for the form values v (a dict)."""
     a = ["create", v["name"], "--image", v["image"], "--memory", str(v["memory"]), "--cpus", str(v["cpus"]),
          "--disk", str(v["disk"]), "--agents", ",".join(v["agents"]), "--idle", str(v["idle"] or "off")]
     if v["ports"]:
@@ -3861,7 +3904,7 @@ class NewVM(Screen):
                 with Vertical():
                     yield Label("Disk GB" + (f" [dim]({avail} free)[/]" if avail is not None else ""))
                     yield Input("20", type="integer", id="disk", compact=True)
-            yield Label("AI assistants [dim](the first one checked opens with \"vmclaude NAME\")[/]")
+            yield Label("AI assistants [dim](the first one checked opens with \"vmagents NAME\")[/]")
             with Horizontal(id="agents"):
                 for key, label in AGENTS:
                     yield Checkbox(label, key == "claude", id=f"agent-{key}", compact=True)
@@ -3921,7 +3964,7 @@ class NewVM(Screen):
     def refresh_command(self):
         v = self.values()
         v2 = dict(v, name=v["name"] or "NAME", agents=v["agents"] or ["claude"], disk=v["disk"] or "20")
-        self.query_one("#command", Static).update("[dim]The same from a terminal: vmclaude "
+        self.query_one("#command", Static).update("[dim]The same from a terminal: vmagents "
                                                   + shlex.join(create_args(v2)) + "[/]")
 
     @on(Input.Changed)
@@ -3947,7 +3990,7 @@ class NewVM(Screen):
 
 
 class Creating(Screen):
-    """Runs "vmclaude create" and shows what it prints."""
+    """Runs "vmagents create" and shows what it prints."""
     BINDINGS = [Binding("escape", "back", "Back")]
 
     def __init__(self, v):
@@ -3975,9 +4018,9 @@ class Creating(Screen):
     def run_create(self):
         log = self.query_one("#output", RichLog)
         args = create_args(self.v)
-        self.app.call_from_thread(log.write, "$ vmclaude " + shlex.join(args))
+        self.app.call_from_thread(log.write, "$ vmagents " + shlex.join(args))
         try:
-            self.proc = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            self.proc = subprocess.Popen([VMAGENTS, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                          stdin=subprocess.DEVNULL, text=True, bufsize=1, start_new_session=True)
         except OSError as e:
             self.app.call_from_thread(log.write, str(e))
@@ -4028,8 +4071,8 @@ class VMTable(DataTable):
     BINDINGS = [Binding("enter", "select_cursor", "Open", show=True)]
 
 
-class VmClaudeUI(App):
-    TITLE = "vmclaude"
+class VmAgentsUI(App):
+    TITLE = "vmagents"
     CSS = """
     #vms { width: 3fr; }
     #side { width: 2fr; border-left: solid $primary; padding: 0 1; }
@@ -4071,7 +4114,7 @@ class VmClaudeUI(App):
         self.vms, self.info = [], {}
         self.forwards = {}  # name -> list of (Popen, description)
         self.busy = set()
-        self.away = False  # running vmclaude in the terminal
+        self.away = False  # running vmagents in the terminal
 
     def compose(self):
         yield Header()
@@ -4151,7 +4194,7 @@ class VmClaudeUI(App):
         vm = self.selected()
         if not vm:
             d.update("[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, "
-                     "the AI assistants and the ports you want.\n\nOr add one you have: vmclaude add NAME --host IP")
+                     "the AI assistants and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP")
             return
         n = vm["name"]
         lines = [f"[b]{n}[/b]  {state_mark(vm)}" + ("  [dim](default)[/]" if vm.get("default") else "")]
@@ -4178,19 +4221,19 @@ class VmClaudeUI(App):
             "notifications " + ("on" if vm.get("notify") else "off"),
             "clipboard " + ("on" if vm.get("clipboard") else "off")]))
         lines.append("")
-        lines.append(f"[dim]From a terminal: vmclaude {n}" + (f" · vmclaude open {n}" if ports else "") + "[/]")
+        lines.append(f"[dim]From a terminal: vmagents {n}" + (f" · vmagents open {n}" if ports else "") + "[/]")
         d.update("\n".join(lines))
 
     def log_line(self, text):
         self.query_one("#log", RichLog).write(text)
 
-    # --- running vmclaude
+    # --- running vmagents
     def interactive(self, args):
-        """Runs vmclaude in this terminal (the UI steps aside until it ends)."""
+        """Runs vmagents in this terminal (the UI steps aside until it ends)."""
         self.away = True
         try:
             with self.suspend():
-                subprocess.run([VMCLAUDE, *args])
+                subprocess.run([VMAGENTS, *args])
         finally:
             self.away = False
         self.refresh_vms()
@@ -4200,17 +4243,17 @@ class VmClaudeUI(App):
 
     @work(thread=True)
     def background(self, args, done=None, name=None):
-        """Runs vmclaude without a terminal; its output goes to the log."""
+        """Runs vmagents without a terminal; its output goes to the log."""
         if name:
             self.busy.add(name)
             self.call_from_thread(self.refresh_vms)
-        self.call_from_thread(self.log_line, "[b]$ vmclaude " + shlex.join(args) + "[/b]")
+        self.call_from_thread(self.log_line, "[b]$ vmagents " + shlex.join(args) + "[/b]")
         rc, out, err = cli(*args, timeout=3600)
         for line in (out + err).splitlines():
             if line.strip():
                 self.call_from_thread(self.log_line, line)
         if rc != 0:
-            self.call_from_thread(self.notify, f"vmclaude {args[0]} failed (exit code {rc})", severity="error")
+            self.call_from_thread(self.notify, f"vmagents {args[0]} failed (exit code {rc})", severity="error")
         if name:
             self.busy.discard(name)
         if done:
@@ -4226,7 +4269,7 @@ class VmClaudeUI(App):
             self.notify(f"{vm['name']} is busy; wait a moment.")
             return None
         if libvirt and not vm.get("domain"):
-            self.notify(f"{vm['name']} is not a libvirt VM: vmclaude cannot start, stop or snapshot it.")
+            self.notify(f"{vm['name']} is not a libvirt VM: vmagents cannot start, stop or snapshot it.")
             return None
         return vm
 
@@ -4343,7 +4386,7 @@ class VmClaudeUI(App):
             if v and extra.get("now"):
                 self.start_forward(n, v.split(","), extra.get("lan"), extra.get("browser"))
         self.push_screen(AskText(
-            f"Ports of {n} to reach from this computer (a web server Claude started, for example):",
+            f"Ports of {n} to reach from this computer (a web server the agent started, for example):",
             current, "3000,5173", check,
             extra=[("now", "Forward them now", True), ("browser", "Open them in the browser", True),
                    ("lan", "Also reachable from other devices on my network", False),
@@ -4351,9 +4394,9 @@ class VmClaudeUI(App):
 
     def start_forward(self, name, ports, lan, browser):
         args = ["open", name, *ports, "--keep"] + ([] if browser else ["--no-browser"]) + (["--lan"] if lan else [])
-        self.log_line("[b]$ vmclaude " + shlex.join(args) + "[/b]")
+        self.log_line("[b]$ vmagents " + shlex.join(args) + "[/b]")
         try:
-            p = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            p = subprocess.Popen([VMAGENTS, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, text=True, bufsize=1, start_new_session=True)
         except OSError as e:
             self.notify(str(e), severity="error")
@@ -4400,7 +4443,7 @@ class VmClaudeUI(App):
             def rm(yes):
                 if yes:
                     self.background(["rm", n])
-            self.push_screen(Confirm(f"{n} was not made by vmclaude, so only its profile can be removed "
+            self.push_screen(Confirm(f"{n} was not made by vmagents, so only its profile can be removed "
                                      "(the VM stays as it is). Remove the profile?", yes="Remove"), rm)
             return
 
@@ -4417,7 +4460,7 @@ class VmClaudeUI(App):
 
 
 def main():
-    VmClaudeUI().run()
+    VmAgentsUI().run()
 
 
 if __name__ == "__main__":
@@ -4427,12 +4470,12 @@ UI_END
 
 # ------------------------------------------------------------------ mount
 
-MOUNT_BASE=${VMCLAUDE_MOUNT_DIR:-$HOME/vm}
+MOUNT_BASE=${VMAGENTS_MOUNT_DIR:-${VMCLAUDE_MOUNT_DIR:-$HOME/vm}}
 
 is_mounted() { # DIR
   local d
   d=$(readlink -f "$1" 2>/dev/null) || return 1
-  awk -v d="$d" '$2 == d { found = 1 } END { exit !found }' "${VMCLAUDE_MOUNTS_FILE:-/proc/mounts}" 2>/dev/null
+  awk -v d="$d" '$2 == d { found = 1 } END { exit !found }' "${VMAGENTS_MOUNTS_FILE:-/proc/mounts}" 2>/dev/null
 }
 
 cmd_mount() {
@@ -4462,7 +4505,7 @@ cmd_mount() {
   remote=$(vm_info_lines | sed -n 's/^dir=//p') || true
   [[ -n $remote ]] || die "cannot reach VM $NAME (see: $PROG doctor $NAME)"
   local -a o=(-o "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,idmap=user"
-    -o "Port=$C_PORT" -o "HostKeyAlias=vmclaude-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
+    -o "Port=$C_PORT" -o "HostKeyAlias=vmagents-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
     -o StrictHostKeyChecking=accept-new -o BatchMode=yes)
   [[ -f $C_KEY ]] && o+=(-o "IdentityFile=$C_KEY" -o IdentitiesOnly=yes)
   if ! line=$(sshfs "${o[@]}" "$(scp_host):$(sftp_path "$remote")" "$dir" 2>&1); then
@@ -4500,7 +4543,7 @@ cmd_umount() {
 
 # Logs Claude Code on the VM in without a browser there: the token is made
 # here ("claude setup-token", whose browser step works on this computer) and
-# stored on the VM in ~/.config/vmclaude/claude-env, readable only by you.
+# stored on the VM in ~/.config/vmagents/claude-env, readable only by you.
 TOKEN_RE='^sk-ant-[A-Za-z0-9_-]{20,}$'
 
 cmd_login() {
@@ -4518,11 +4561,11 @@ cmd_login() {
   local token='' var
   if ((!remove)); then
     if [[ ! -t 0 ]]; then
-      token=$(head -c 4096 | tr -d ' \r\n\t')        # piped in: echo TOKEN | vmclaude login NAME
+      token=$(head -c 4096 | tr -d ' \r\n\t')        # piped in: echo TOKEN | vmagents login NAME
     else
       if command -v claude >/dev/null && command -v script >/dev/null; then
         info "Making a login token with Claude Code on this computer (claude setup-token)."
-        info "Confirm in the browser that opens; vmclaude takes the token from there."
+        info "Confirm in the browser that opens; vmagents takes the token from there."
         local log
         log=$(mktemp)
         # A wide terminal, so the token is printed on one line.
@@ -4548,7 +4591,7 @@ cmd_login() {
   build_ssh_opts
   if [[ $C_OS == windows ]]; then
     # shellcheck disable=SC2016
-    local ps='$d = "$env:USERPROFILE\.config\vmclaude"; $f = "$d\claude-env"'
+    local ps='$d = "$env:USERPROFILE\.config\vmagents"; $f = "$d\claude-env"'
     if ((remove)); then
       ps+=$'\nRemove-Item -LiteralPath $f -ErrorAction SilentlyContinue'
       run_ssh -T -- "$TARGET" "$(win_cmd "$ps")" </dev/null || die "could not remove the token"
@@ -4560,11 +4603,11 @@ cmd_login() {
   else
     if ((remove)); then
       # shellcheck disable=SC2016
-      run_ssh -T -- "$TARGET" 'rm -f "$HOME/.config/vmclaude/claude-env"' </dev/null || die "could not remove the token"
+      run_ssh -T -- "$TARGET" 'rm -f "$HOME/.config/vmagents/claude-env"' </dev/null || die "could not remove the token"
     else
       # shellcheck disable=SC2016
-      printf '%s=%s\n' "$var" "$token" | run_ssh -T -- "$TARGET" "$(remote_cmd 'umask 077
-mkdir -p "$HOME/.config/vmclaude" && cat >"$HOME/.config/vmclaude/claude-env" && chmod 600 "$HOME/.config/vmclaude/claude-env"')" ||
+      printf '%s=%s\n' "$var" "$token" | run_ssh -T -- "$TARGET" "$(remote_cmd "$MIGRATE_SH"'umask 077
+mkdir -p "$HOME/.config/vmagents" && cat >"$HOME/.config/vmagents/claude-env" && chmod 600 "$HOME/.config/vmagents/claude-env"')" ||
         die "could not store the token"
     fi
   fi
@@ -4587,7 +4630,7 @@ cmd_desktop() {
   profile_exists "$1" || die "no VM profile named '$1'"
   local self file
   self=$(readlink -f "$0")
-  file=$APPS_DIR/vmclaude-$1.desktop
+  file=$APPS_DIR/vmagents-$1.desktop
   mkdir -p "$APPS_DIR"
   cat >"$file" <<EOF
 [Desktop Entry]
@@ -4641,7 +4684,7 @@ first_run() {
   cmd_connect "$name"
 }
 
-# "vmclaude COMMAND --help". For connect and shell only right after the
+# "vmagents COMMAND --help". For connect and shell only right after the
 # command: later arguments belong to Claude or to the remote command.
 wants_help() { # COMMAND ARGS...
   local cmd=$1 a
@@ -4657,15 +4700,38 @@ wants_help() { # COMMAND ARGS...
   return 1
 }
 
+# vmagents was called vmclaude before 0.11: move its settings and cache once.
+# Host keys were stored under the alias vmclaude-NAME; they get vmagents-NAME.
+migrate_old_name() {
+  local old=${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude oldc=${XDG_CACHE_HOME:-$HOME/.cache}/vmclaude n
+  if [[ -z ${VMAGENTS_CONFIG_DIR:-}${VMCLAUDE_CONFIG_DIR:-} && -d $old && ! -L $old && ! -e $CONF_DIR ]]; then
+    mkdir -p "${CONF_DIR%/*}" && mv "$old" "$CONF_DIR" || return 0
+    if [[ -f $KNOWN_HOSTS ]]; then
+      local keys=''
+      for n in $(profile_names); do
+        keys+=$(ssh-keygen -F "vmclaude-$n" -f "$KNOWN_HOSTS" 2>/dev/null |
+          awk -v a="vmagents-$n" '!/^#/ && NF >= 3 { print a, $2, $3 }')$'\n'
+      done
+      printf '%s' "${keys##$'\n'}" | sed '/^$/d' >>"$KNOWN_HOSTS"
+    fi
+    info "vmclaude is now called vmagents: moved its settings to $CONF_DIR"
+  fi
+  if [[ -d $oldc && ! -L $oldc && ! -e $CACHE_DIR ]]; then
+    { mkdir -p "${CACHE_DIR%/*}" && mv "$oldc" "$CACHE_DIR"; } || true
+  fi
+  return 0
+}
+
 main() {
   ((BASH_VERSINFO[0] >= 4)) || { echo "$PROG: bash 4 or newer is required" >&2; exit 1; }
+  migrate_old_name
   local cmd=${1-}
   case $cmd in
     "")
       if [[ -z $(profile_names) ]]; then first_run; else cmd_connect; fi ;;
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
-    version | -V | --version) say "vmclaude $VERSION" ;;
+    version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
     add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
@@ -4673,7 +4739,7 @@ main() {
       "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
-    --hold | --no-tmux | --keep | --claude | --codex | --gemini | --aider) cmd_connect "$@" ;;
+    --hold | --no-tmux | --keep | --claude | --codex | --gemini | --opencode | --aider) cmd_connect "$@" ;;
     -*) usage_error "unknown option $cmd" ;;
     *)
       profile_exists "$cmd" || usage_error "unknown command or VM: $cmd"

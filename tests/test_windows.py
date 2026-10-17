@@ -1,5 +1,5 @@
 """Windows VMs, against the fake ssh: OS detection from the SSH banner, and
-the PowerShell commands vmclaude sends (decoded and checked). The scripts
+the PowerShell commands vmagents sends (decoded and checked). The scripts
 themselves were run on a real Windows 10 VM; see the README."""
 import base64
 import gzip
@@ -26,8 +26,8 @@ def decode(command):
 
 
 def bash_fn(*args):
-    """Call a vmclaude function directly."""
-    r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"; exit$/d" "$0"); "$@"', str(ROOT / "vmclaude"), *args],
+    """Call a vmagents function directly."""
+    r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"; exit$/d" "$0"); "$@"', str(ROOT / "vmagents"), *args],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -78,7 +78,7 @@ class CommandTests(SandboxTest):
         self.assertIn("Resolve-Dir '~/work'", script)
         self.assertIn("@('-p', 'it''s ‘‘curly’’')", script)
         self.assertIn("exit (Invoke-Claude $c.Source $line $d)", script)
-        self.assertIn("Run: vmclaude setup w", script)
+        self.assertIn("Run: vmagents setup w", script)
         self.assertIn("-T", self.sb.calls("ssh")[-1]["argv"])
 
     def test_too_many_arguments_fail_cleanly(self):
@@ -90,7 +90,7 @@ class CommandTests(SandboxTest):
         self.sb.run("shell", "w", check=0)
         flags, script = decode(self.last_command())
         self.assertIn("-NoExit", flags)
-        self.assertIn('$env:VMCLAUDE_NO_AUTOSTART = "1"', script)
+        self.assertIn('$env:VMAGENTS_NO_AUTOSTART = "1"', script)
 
     def test_setup(self):
         batch = self.sb.tmp / "batch"
@@ -99,7 +99,7 @@ class CommandTests(SandboxTest):
         self.assertIn("Windows has no tmux", r.stdout)
         cmds = [c["argv"][-1] for c in self.sb.calls("ssh") if c["argv"][-1] != "exit 0"]
         self.assertEqual(len(cmds), 4)  # key, install, hook file, profile
-        pub = (self.sb.home / ".ssh" / "vmclaude_ed25519.pub").read_text().strip()
+        pub = (self.sb.home / ".ssh" / "vmagents_ed25519.pub").read_text().strip()
         _, addkey = decode(cmds[0])
         self.assertIn(f"$k = '{pub}'", addkey)
         self.assertIn("administrators_authorized_keys", addkey)
@@ -110,7 +110,7 @@ class CommandTests(SandboxTest):
         self.assertIn("winget install --id Git.Git", install)
         _, hook = decode(cmds[2])
         self.assertIn("function Invoke-Claude", hook)
-        self.assertIn("$vmclaudeDir = ''~/work''", hook)  # a literal inside a literal
+        self.assertIn("$vmagentsDir = ''~/work''", hook)  # a literal inside a literal
         _, profile = decode(cmds[3])
         self.assertIn("Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned", profile)
         for c in cmds:
@@ -122,7 +122,7 @@ class CommandTests(SandboxTest):
         self.addCleanup(srv.close)
         self.sb.run("add", "w", "--host", "127.0.0.1", "--port", str(port), check=0)
         (self.sb.home / ".ssh").mkdir()
-        (self.sb.home / ".ssh" / "vmclaude_ed25519").write_text("x")
+        (self.sb.home / ".ssh" / "vmagents_ed25519").write_text("x")
         batch = self.sb.tmp / "batch"
         batch.write_text("0")
         r = self.sb.run("doctor", "w", env={"STUB_SSH_BATCH_RC": str(batch), "STUB_SSH_OUTPUT": out}, check=0)

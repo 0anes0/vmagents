@@ -1,4 +1,4 @@
-"""`vmclaude create` / `delete` against fake curl, virsh and virt-install.
+"""`vmagents create` / `delete` against fake curl, virsh and virt-install.
 A real run on libvirt is described in the README."""
 import hashlib
 import json
@@ -125,11 +125,11 @@ class CreateBase(SandboxTest):
 class CreateTests(CreateBase):
     def test_create(self):
         r = self.create("box", "--memory", "2048", "--cpus", "3", "--disk", "30", "--user", "dev")
-        self.assertIn("Created. Next: vmclaude setup box", r.stdout)
-        key = (self.sb.home / ".ssh" / "vmclaude_ed25519.pub").read_text().strip()
-        cached = self.sb.home / ".cache" / "vmclaude" / "images" / "debian-13-genericcloud-amd64.qcow2"
+        self.assertIn("Created. Next: vmagents setup box", r.stdout)
+        key = (self.sb.home / ".ssh" / "vmagents_ed25519.pub").read_text().strip()
+        cached = self.sb.home / ".cache" / "vmagents" / "images" / "debian-13-genericcloud-amd64.qcow2"
         self.assertEqual(cached.read_bytes(), IMAGE)
-        base = f"vmclaude-base-debian13-{hashlib.sha512(IMAGE).hexdigest()[:12]}.qcow2"
+        base = f"vmagents-base-debian13-{hashlib.sha512(IMAGE).hexdigest()[:12]}.qcow2"
         vols = self.state()["volumes"]
         self.assertEqual(vols[base]["uploaded"].encode("latin-1"), IMAGE)
         self.assertEqual(vols["box.qcow2"], {"size": "30G", "backing": base})
@@ -141,7 +141,7 @@ class CreateTests(CreateBase):
         for a, b in [("--memory", "2048"), ("--vcpus", "3"), ("--osinfo", "debian13"),
                      ("--disk", "vol=default/box.qcow2,bus=virtio")]:
             self.assertEqual(argv[argv.index(a) + 1], b)
-        self.assertIn("description=created by vmclaude", argv)
+        self.assertIn("description=created by vmagents", argv)
         # Without a video device the Debian cloud image's GRUB resets in a loop.
         self.assertEqual(argv[argv.index("--video") + 1], "vga")
         self.assertTrue(user_data.startswith("#cloud-config\n"))
@@ -159,7 +159,7 @@ class CreateTests(CreateBase):
         self.create("a")
         self.sb.clear_log()
         r = self.create("b")
-        self.assertIn("Using base volume vmclaude-base-debian13-", r.stderr)
+        self.assertIn("Using base volume vmagents-base-debian13-", r.stderr)
         self.assertEqual([c for c in self.sb.calls("curl") if "-o" in c["argv"]], [])
         uploads = [c["argv"][3] for c in self.sb.calls("virsh") if c["argv"][0] == "vol-upload"]
         self.assertEqual(uploads, ["b-seed.iso"])  # the base volume is not uploaded again
@@ -167,7 +167,7 @@ class CreateTests(CreateBase):
     def test_checksum_mismatch(self):
         r = self.create("box", check=1, env={"FAKE_SUM": "0" * 128})
         self.assertIn("checksum mismatch", r.stderr)
-        self.assertEqual(os.listdir(self.sb.home / ".cache" / "vmclaude" / "images"), [])
+        self.assertEqual(os.listdir(self.sb.home / ".cache" / "vmagents" / "images"), [])
         self.assertFalse((self.sb.conf / "hosts" / "box.conf").exists())
 
     def test_refuses_existing_names_and_bad_numbers(self):
@@ -206,12 +206,12 @@ class CreateTests(CreateBase):
         self.sb.run("add", "win10", "--domain", "win10", "--os", "windows", check=0)
         r = self.sb.run("delete", "win10", "--yes")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("was not created by vmclaude", r.stderr)
+        self.assertIn("was not created by vmagents", r.stderr)
         # Even a profile claiming CREATED=1 needs libvirt's own marker.
         conf = self.sb.conf / "hosts" / "win10.conf"
         conf.write_text(conf.read_text() + "CREATED=1\n")
         r = self.sb.run("delete", "win10", "--yes")
-        self.assertIn("not marked as created by vmclaude", r.stderr)
+        self.assertIn("not marked as created by vmagents", r.stderr)
         self.assertIn("win10", self.state()["domains"])
         self.assertEqual(self.state()["domains"]["win10"]["state"], "running")
         self.assertEqual([c for c in self.sb.calls("virsh") if c["argv"][0] in ("destroy", "undefine")], [])
@@ -222,9 +222,9 @@ class CreateTests(CreateBase):
         self.create("b")
         self.sb.run("delete", "a", "--yes", check=0)
         r = self.sb.run("prune", check=0)
-        self.assertRegex(r.stdout, r"Kept vmclaude-base-debian13-\w+\.qcow2 \(a VM uses it\)")
+        self.assertRegex(r.stdout, r"Kept vmagents-base-debian13-\w+\.qcow2 \(a VM uses it\)")
         self.assertIn("Removed downloaded images", r.stdout)
-        self.assertFalse((self.sb.home / ".cache" / "vmclaude" / "images").exists())
+        self.assertFalse((self.sb.home / ".cache" / "vmagents" / "images").exists())
         # The base volume is still there, so a new VM needs no download.
         self.sb.clear_log()
         self.create("c")
@@ -232,7 +232,7 @@ class CreateTests(CreateBase):
         for name in ("b", "c"):
             self.sb.run("delete", name, "--yes", check=0)
         r = self.sb.run("prune", check=0)
-        self.assertRegex(r.stdout, r"Removed vmclaude-base-debian13-\w+\.qcow2")
+        self.assertRegex(r.stdout, r"Removed vmagents-base-debian13-\w+\.qcow2")
         self.assertEqual(self.state()["volumes"], {})
         self.assertIn("No unused base volumes.", self.sb.run("prune", check=0).stdout)
 
@@ -244,6 +244,6 @@ class CreateTests(CreateBase):
         r = self.sb.run("images", check=0)
         self.assertRegex(r.stdout, r"debian13 +Debian 13 .* +\S+ +325.69MiB \(a, b\)\n")
         self.assertRegex(r.stdout, r"arch +Arch Linux \(rolling release\) +- +-\n")
-        self.assertIn("/pool/vmclaude-base-IMAGE-CHECKSUM.qcow2", r.stdout)
-        self.assertIn(str(self.sb.home / ".cache" / "vmclaude" / "images") + "/", r.stdout)
-        self.assertRegex(r.stdout, r"\n      vmclaude-base-debian13-\w{12}\.qcow2\n")
+        self.assertIn("/pool/vmagents-base-IMAGE-CHECKSUM.qcow2", r.stdout)
+        self.assertIn(str(self.sb.home / ".cache" / "vmagents" / "images") + "/", r.stdout)
+        self.assertRegex(r.stdout, r"\n      vmagents-base-debian13-\w{12}\.qcow2\n")

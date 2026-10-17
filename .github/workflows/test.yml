@@ -11,6 +11,6 @@ jobs:
           sudo apt-get install -y -qq shellcheck zsh openssh-client desktop-file-utils
           pip install asyncssh 'textual>=8,<9'
       - name: shellcheck
-        run: shellcheck vmclaude install.sh
+        run: shellcheck vmagents install.sh
       - name: tests
         run: python3 -m unittest discover -v -s tests -t .

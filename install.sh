@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install vmclaude for the current user.
+# Install vmagents for the current user.
 # Usage: ./install.sh [--prefix DIR] [--uninstall]
-#    or: curl -fsSL https://raw.githubusercontent.com/emincan2000/vmclaude/main/install.sh | bash
+#    or: curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
 set -euo pipefail
 
-RAW=https://raw.githubusercontent.com/emincan2000/vmclaude/main/vmclaude
+RAW=https://raw.githubusercontent.com/emincan2000/vmagents/main/vmagents
 PREFIX=$HOME/.local
 UNINSTALL=0
 while (($#)); do
@@ -15,20 +15,21 @@ while (($#)); do
     *) echo "install.sh: unknown option $1" >&2; exit 2 ;;
   esac
 done
-BIN=$PREFIX/bin/vmclaude
+BIN=$PREFIX/bin/vmagents
 
 if ((UNINSTALL)); then
   rm -f "$BIN"
+  [[ -L $PREFIX/bin/vmclaude ]] && rm -f "$PREFIX/bin/vmclaude"
   echo "Removed $BIN."
-  echo "Your VM profiles stay in ${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude; delete that folder to remove them."
+  echo "Your VM profiles stay in ${XDG_CONFIG_HOME:-$HOME/.config}/vmagents; delete that folder to remove them."
   exit 0
 fi
 
 mkdir -p "$PREFIX/bin"
 SRC=
 if [[ -n ${BASH_SOURCE[0]:-} ]]; then SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || SRC=; fi
-if [[ -n $SRC && -f $SRC/vmclaude ]]; then
-  cp "$SRC/vmclaude" "$BIN.tmp"
+if [[ -n $SRC && -f $SRC/vmagents ]]; then
+  cp "$SRC/vmagents" "$BIN.tmp"
 else
   command -v curl >/dev/null || { echo "install.sh: curl is required" >&2; exit 1; }
   curl -fsSL "$RAW" -o "$BIN.tmp"
@@ -36,6 +37,12 @@ fi
 chmod 755 "$BIN.tmp"
 mv -f "$BIN.tmp" "$BIN"
 echo "Installed $BIN ($("$BIN" --version))"
+# Before 0.11 this was "vmclaude": that name keeps working.
+OLD=$PREFIX/bin/vmclaude
+if [[ -e $OLD || -L $OLD ]]; then
+  ln -sfn vmagents "$OLD"
+  echo "vmclaude was renamed to vmagents; \"vmclaude\" still works. Settings move to the new name on first use."
+fi
 
 for tool in ssh ssh-keygen; do
   command -v "$tool" >/dev/null || echo "note: $tool is missing — install openssh-client" >&2
@@ -45,4 +52,4 @@ case ":$PATH:" in
   *) echo "note: $PREFIX/bin is not on your PATH; add it, e.g. in ~/.bashrc or ~/.zshrc:"
      echo "  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
-echo "Next: vmclaude   (it asks for your VM the first time)"
+echo "Next: vmagents   (it asks for your VM the first time)"

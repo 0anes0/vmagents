@@ -1,5 +1,5 @@
-"""The terminal UI (vmclaude ui), driven with Textual's test pilot against a
-fake vmclaude that answers --json and records what the UI runs. Needs
+"""The terminal UI (vmagents ui), driven with Textual's test pilot against a
+fake vmagents that answers --json and records what the UI runs. Needs
 Textual (skipped otherwise): uv run --with 'textual>=8,<9' python -m unittest
 tests.test_ui"""
 import importlib.util
@@ -32,7 +32,7 @@ elif a[:2] == ["images", "--json"]: show("images.json")
 elif a[:1] == ["snapshots"]: show("snaps.json")
 elif a[:1] == ["create"]:
     print("Creating VM " + a[1], flush=True)
-    print("Done. Open Claude on the VM with:  vmclaude " + a[1], flush=True)
+    print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
 elif a[:1] == ["open"]:
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
@@ -51,7 +51,7 @@ VM = {"name": "dev", "default": True, "host": "", "user": "me", "port": 22, "dom
 IMAGES = {"images": [{"name": "debian13", "description": "Debian 13", "downloaded": True},
                      {"name": "arch", "description": "Arch Linux", "downloaded": False}],
           "host": {"memory_mb": 16384, "memory_available_mb": 9000, "cpus": 8, "libvirt": True, "pool": "default",
-                   "pool_available_gb": 100, "missing": [], "agents": ["claude", "codex", "gemini", "aider"]}}
+                   "pool_available_gb": 100, "missing": [], "agents": ["claude", "codex", "gemini", "opencode", "aider"]}}
 SNAPS = [{"name": "auto-1", "time": "2026-10-16 09:00:00", "state": "shutoff", "description": ""},
          {"name": "snap-2", "time": "2026-10-16 10:00:00", "state": "running", "description": "before refactor"}]
 
@@ -59,20 +59,20 @@ SNAPS = [{"name": "auto-1", "time": "2026-10-16 09:00:00", "state": "shutoff", "
 @unittest.skipUnless(HAVE_TEXTUAL, "needs Textual")
 class UITests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.d = Path(tempfile.mkdtemp(prefix="vmclaude-ui-"))
+        self.d = Path(tempfile.mkdtemp(prefix="vmagents-ui-"))
         self.addCleanup(shutil.rmtree, self.d, True)
         self.write(list=[VM, dict(VM, name="srv", default=False, domain="", host="192.0.2.5", state=None,
                                   memory_mb=None, cpus=None, created=False, ports=[])])
         self.write(images=IMAGES, snaps=SNAPS)
-        fake = write_exe(self.d / "vmclaude", FAKE)
+        fake = write_exe(self.d / "vmagents", FAKE)
         os.environ["FAKE_UI_DIR"] = str(self.d)
-        os.environ["VMCLAUDE_BIN"] = str(fake)
+        os.environ["VMAGENTS_BIN"] = str(fake)
         src = self.d / "ui.py"
         src.write_text(var("UI_PY"))
-        spec = importlib.util.spec_from_file_location("vmclaude_ui", src)
+        spec = importlib.util.spec_from_file_location("vmagents_ui", src)
         self.ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.ui)
-        self.app = self.ui.VmClaudeUI()
+        self.app = self.ui.VmAgentsUI()
         self.ran = []
         self.app.interactive = lambda args: self.ran.append(args)  # no terminal to hand over in tests
 
@@ -146,7 +146,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             form.query_one("#ports").value = "3000,5173"
             form.query_one("#idle").value = 0
             await pilot.pause(0.2)
-            self.assertIn("vmclaude create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,codex "
+            self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,codex "
                           "--idle off --ports 3000,5173", str(form.query_one("#command").render()))
             await pilot.press("ctrl+s")
             await self.wait_for(pilot, lambda: getattr(self.app.screen, "rc", None) is not None)
@@ -257,7 +257,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             await self.wait_for(pilot, lambda: self.calls("delete"))
             self.assertEqual(self.calls("delete"), [["delete", "dev", "--yes"]])
-            await pilot.press("down", "d")  # not made by vmclaude: only the profile
+            await pilot.press("down", "d")  # not made by vmagents: only the profile
             await pilot.pause(0.2)
             await pilot.click("#yes")
             await self.wait_for(pilot, lambda: self.calls("rm"))

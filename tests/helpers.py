@@ -11,12 +11,12 @@ from pathlib import Path
 from tests import stubs
 
 ROOT = Path(__file__).resolve().parent.parent
-VMCLAUDE = ROOT / "vmclaude"
+VMAGENTS = ROOT / "vmagents"
 
 # Tools the remote scripts may use; the fake VM gets only these.
 REMOTE_TOOLS = ["sh", "bash", "cat", "grep", "mkdir", "touch", "tail", "wc", "chmod",
                 "awk", "rm", "basename", "id", "env", "head", "cp", "dirname", "ls",
-                "sed", "tr", "uname", "sleep", "du", "cut", "date"]
+                "sed", "tr", "uname", "sleep", "du", "cut", "date", "mv", "ln"]
 
 
 def write_exe(path, text):
@@ -31,7 +31,7 @@ class Sandbox:
     """A throwaway $HOME with fake ssh/virsh on PATH and a fake remote VM home."""
 
     def __init__(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="vmclaude-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="vmagents-test-"))
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.bin = self.tmp / "bin"
@@ -63,12 +63,12 @@ class Sandbox:
             "STUB_REMOTE_PATH": str(self.remote_bin),
             "STUB_REMOTE_LOG": str(self.remote_log),
             "STUB_RECORDER": str(self.recorder),
-            "VMCLAUDE_BOOT_TIMEOUT": "10",
+            "VMAGENTS_BOOT_TIMEOUT": "10",
         }
 
     @property
     def conf(self):
-        return self.home / ".config" / "vmclaude"
+        return self.home / ".config" / "vmagents"
 
     def remote_tool(self, name, text=None):
         """Put a recording stub (or a custom script) on the fake VM's PATH."""
@@ -84,7 +84,7 @@ class Sandbox:
         e = dict(self.env, **(env or {}))
         # Never inherit stdin: an open pipe there would block the fake ssh.
         stdin = None if input is not None else subprocess.DEVNULL
-        r = subprocess.run([str(VMCLAUDE), *args], input=input, stdin=stdin, env=e, cwd=self.tmp,
+        r = subprocess.run([str(VMAGENTS), *args], input=input, stdin=stdin, env=e, cwd=self.tmp,
                            capture_output=True, text=True, timeout=timeout)
         if check is not None and r.returncode != check:
             raise AssertionError(f"exit {r.returncode} != {check}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")

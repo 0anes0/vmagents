@@ -1,11 +1,11 @@
-"""vmclaude login: a token made on this computer reaches Claude on the VM,
+"""vmagents login: a token made on this computer reaches Claude on the VM,
 however Claude is started there, without passing through command lines."""
 import base64
 import os
 import re
 import subprocess
 
-from tests.helpers import SandboxTest, write_exe, VMCLAUDE
+from tests.helpers import SandboxTest, write_exe, VMAGENTS
 from tests.ptyrun import run_in_pty
 
 TOKEN = "sk-ant-oat01-" + "A1b2_C3d4-" * 9
@@ -26,7 +26,7 @@ class LoginTests(SandboxTest):
         super().setUp()
         self.sb.run("add", "vm", "--host", "192.0.2.7", "--os", "linux", check=0)
         self.env = {"STUB_SSH_EXEC": "1"}
-        self.file = self.sb.remote_home / ".config" / "vmclaude" / "claude-env"
+        self.file = self.sb.remote_home / ".config" / "vmagents" / "claude-env"
 
     def login(self, token, *args, check=0):
         return self.sb.run("login", "vm", *args, input=token + "\n", env=self.env, check=check)
@@ -56,13 +56,13 @@ class LoginTests(SandboxTest):
         write_exe(self.sb.bin / "claude", "#!/bin/sh\n"
                   f"printf 'Long-lived authentication token created successfully!\\n\\nYour OAuth token (valid for 1 year):\\n\\n"
                   f"\\033[1m{TOKEN}\\033[22m\\n\\nStore this token securely.\\n'\n")
-        out = run_in_pty([str(VMCLAUDE), "login", "vm"], dict(self.sb.env, **self.env), str(self.sb.tmp))
+        out = run_in_pty([str(VMAGENTS), "login", "vm"], dict(self.sb.env, **self.env), str(self.sb.tmp))
         self.assertIn("Logged in", out)
         self.assertEqual(self.file.read_text(), f"CLAUDE_CODE_OAUTH_TOKEN={TOKEN}\n")
 
     def test_paste_when_not_found(self):
         write_exe(self.sb.bin / "claude", "#!/bin/sh\necho 'cancelled'\n")
-        out = run_in_pty([str(VMCLAUDE), "login", "vm"], dict(self.sb.env, **self.env), str(self.sb.tmp),
+        out = run_in_pty([str(VMAGENTS), "login", "vm"], dict(self.sb.env, **self.env), str(self.sb.tmp),
                          answers=[("Token: ", TOKEN + "\r")])
         self.assertNotIn(TOKEN, out)  # hidden input
         self.assertEqual(self.file.read_text(), f"CLAUDE_CODE_OAUTH_TOKEN={TOKEN}\n")
@@ -76,14 +76,14 @@ class LoginTests(SandboxTest):
         calls = self.sb.remote_calls()
         self.assertTrue(calls[0].startswith("tmux new-session -A -s claude -c"), calls[0])
         self.assertNotIn(TOKEN, calls[0])  # not in tmux's command line either
-        hooks = f"--settings {self.sb.remote_home}/.config/vmclaude/claude-settings.json"
+        hooks = f"--settings {self.sb.remote_home}/.config/vmagents/claude-settings.json"
         self.assertEqual(calls[1], f"token={TOKEN} key= args={hooks} --continue")
         self.assertEqual(calls[2], f"token={TOKEN} key= args={hooks}")
 
     def test_no_token_no_change(self):
         self.sb.remote_tool("claude", CLAUDE_ENV)
         self.sb.run("vm", "--no-tmux", env=self.env, check=0)
-        hooks = f"--settings {self.sb.remote_home}/.config/vmclaude/claude-settings.json"
+        hooks = f"--settings {self.sb.remote_home}/.config/vmagents/claude-settings.json"
         self.assertEqual(self.sb.remote_calls(), [f"token= key= args={hooks}"])
 
     def test_shells_and_autostart_get_it(self):
@@ -110,13 +110,13 @@ class LoginTests(SandboxTest):
         self.addCleanup(srv.close)
         self.sb.run("add", "vm", "--host", "127.0.0.1", "--port", str(port), check=0)
         (self.sb.home / ".ssh").mkdir()
-        (self.sb.home / ".ssh" / "vmclaude_ed25519").write_text("x")
+        (self.sb.home / ".ssh" / "vmagents_ed25519").write_text("x")
         batch = self.sb.tmp / "batch"
         batch.write_text("0")
         env = dict(self.env, STUB_SSH_BATCH_RC=str(batch))
-        self.assertIn("info  Claude login: not yet (run: vmclaude login vm)", self.sb.run("doctor", "vm", env=env).stdout)
+        self.assertIn("info  Claude login: not yet (run: vmagents login vm)", self.sb.run("doctor", "vm", env=env).stdout)
         self.login(TOKEN)
-        self.assertIn('ok    Claude login: token from "vmclaude login"', self.sb.run("doctor", "vm", env=env).stdout)
+        self.assertIn('ok    Claude login: token from "vmagents login"', self.sb.run("doctor", "vm", env=env).stdout)
 
     def test_windows(self):
         self.sb.run("add", "vm", "--os", "windows", check=0)
