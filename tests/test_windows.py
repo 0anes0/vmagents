@@ -27,7 +27,7 @@ def decode(command):
 
 def bash_fn(*args):
     """Call a vmclaude function directly."""
-    r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"$/d" "$0"); "$@"', str(ROOT / "vmclaude"), *args],
+    r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"; exit$/d" "$0"); "$@"', str(ROOT / "vmclaude"), *args],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout

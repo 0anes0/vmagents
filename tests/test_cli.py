@@ -109,7 +109,7 @@ class ProfileTests(SandboxTest):
         self.assertRegex(self.sb.run("list", check=0).stdout, r"\* a\s")
 
     def test_help_for_every_command(self):
-        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "undo", "snapshot", "snapshots", "autosnap", "idle", "notify", "open", "clipboard", "agent", "doctor", "mcp", "add", "setup",
+        for cmd in ("create", "delete", "images", "prune", "connect", "shell", "start", "stop", "autostop", "undo", "snapshot", "snapshots", "autosnap", "idle", "notify", "open", "ports", "resize", "ui", "clipboard", "agent", "doctor", "mcp", "add", "setup",
                     "autostart", "list", "default", "desktop", "edit", "forget", "rm"):
             with self.subTest(cmd=cmd):
                 r = self.sb.run("help", cmd, check=0)
@@ -577,7 +577,7 @@ class DoctorAndDesktopTests(SandboxTest):
         self.assertFalse(f.exists())
 
     def test_desktop_escaping(self):
-        r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"$/d" "$1"); desktop_escape "$2"',
+        r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"; exit$/d" "$1"); desktop_escape "$2"',
                             "_", str(Path(__file__).parent.parent / "vmclaude"), 'a "b" $c `d` \\e 50%'],
                            capture_output=True, text=True, env={"HOME": str(self.sb.home), "PATH": "/usr/bin:/bin"})
         self.assertEqual(r.stdout, '"a \\"b\\" \\$c \\`d\\` \\\\e 50%%"')

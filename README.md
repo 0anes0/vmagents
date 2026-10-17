@@ -18,6 +18,13 @@ No VM yet? `vmclaude create dev` makes one: a fresh Debian VM with Claude
 Code inside, usually in half a minute to two minutes once the image is
 downloaded, without a single password prompt.
 
+Or do it all in a **terminal UI**: `vmclaude ui`. Pick the system, RAM, CPUs,
+disk, the AI assistants (Claude Code, Codex, Gemini CLI, aider) and the ports
+you want, then open, start, stop, snapshot, undo and resize your VMs from one
+list. See [Terminal UI](#terminal-ui).
+
+![vmclaude ui](docs/ui.png)
+
 You can also skip the command. After setup, **any SSH login to the VM opens
 Claude Code directly**: a terminal, a phone SSH app, PuTTY, Termius. There is
 also an app-menu launcher.
@@ -27,6 +34,7 @@ also an app-menu launcher.
 ## Features
 
 - **One command:** `vmclaude` (or `vmclaude NAME`) connects and opens Claude.
+- **Terminal UI:** `vmclaude ui` makes and manages VMs from one screen.
 - **New VMs on demand:** `vmclaude create NAME` builds a libvirt VM from an
   official cloud image (Debian 13, Debian 12, Ubuntu 24.04 or Arch Linux)
   and sets it up.
@@ -272,14 +280,50 @@ To reach the VM from **another device** (your phone, for example): a libvirt NAT
 network (`192.168.122.x`) is reachable only from the host. Use a bridged
 network, a port forward on the host, or a VPN such as Tailscale on the VM.
 
+## Terminal UI
+
+```sh
+vmclaude ui
+```
+
+The list shows your VMs with state, RAM, CPUs, AI assistants and ports; the
+right side, the details of the selected one. `n` opens the form for a new VM:
+
+![New VM](docs/ui-new.png)
+
+It shows the `vmclaude create` command line it is going to run, then the
+output while the VM is made (download, cloud-init, tmux, the assistants), and
+offers to open it or to log Claude in.
+
+| Key | |
+|---|---|
+| `Enter` | open the VM's AI assistant (the UI steps aside until you quit it) |
+| `a` | open another one: Claude Code, Codex, Gemini CLI, aider |
+| `n` | new VM |
+| `o` | ports: forward them now (`o` again stops), every time you connect, or to your LAN too |
+| `t` / `s` / `l` | start or stop / shell / log Claude in |
+| `p` / `u` | snapshot / undo (pick the snapshot) |
+| `r` | RAM and CPUs (shuts the VM down first) |
+| `d` | delete (type the name to confirm; profiles of VMs not made by vmclaude are only removed) |
+| `q` | quit (stops the port forwards the UI started) |
+
+The UI only runs this `vmclaude` and reads its `--json` output, so everything
+it does works from the command line too. It is a [Textual](https://textual.textualize.io/)
+app inside the same script: it needs Python 3 with Textual 8, which
+`vmclaude ui` fetches by itself when [uv](https://docs.astral.sh/uv/) is
+installed (or `pip install --user 'textual>=8'`).
+
 ## Commands
 
 ```
 vmclaude                         connect to the default VM (asks to add one if none)
 vmclaude NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmclaude dev --continue
+vmclaude ui                      a terminal UI for all of this
 vmclaude create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
+    --agents claude,codex,gemini,aider  --ports 3000,5173
     --user USER  --uri LIBVIRT_URI  --idle MINUTES|off  --no-setup
+vmclaude resize NAME [--memory MB] [--cpus N] [--stop]
 vmclaude delete NAME [--yes]     delete a VM made with create, and its disk
 vmclaude images                  which images exist, are downloaded, used, and where
 vmclaude prune                   remove downloaded images no VM uses any more
@@ -287,10 +331,11 @@ vmclaude add NAME [options]      add an existing VM, or change fields of a profi
     --host HOST  --user USER  --port PORT  --key FILE
     --domain LIBVIRT_DOMAIN  --uri LIBVIRT_URI  --dir DIR_ON_VM
     --session TMUX_SESSION  --no-tmux
-vmclaude setup NAME [--no-install] [--no-autostart]
+vmclaude setup NAME [--agents LIST] [--no-install] [--no-autostart]
 vmclaude connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmclaude NAME --codex|--gemini|--aider|--claude [ARGS...]   another agent this time
-vmclaude open [NAME] PORT...     the VM's port here, in your browser ([LOCAL:]PORT)
+vmclaude open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
+vmclaude ports NAME 3000,5173    ports forwarded each time you connect (off: none)
 vmclaude shell [--keep] NAME [CMD...]   plain shell or command on the VM
 vmclaude start NAME              boot a libvirt VM and wait for SSH
 vmclaude stop NAME [--force]     shut a libvirt VM down
@@ -307,7 +352,7 @@ vmclaude doctor NAME
 vmclaude login NAME [--remove]   log Claude in on the VM with this computer's browser
 vmclaude mcp NAME [--add]        tools for Claude Code on this computer to work in the VM
 vmclaude mount NAME [FOLDER]     the VM's folder as a folder here (~/vm/NAME); umount NAME
-vmclaude list | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
+vmclaude list [--json] | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
 ```
 
 Claude arguments apply when a new tmux session starts. An existing session is
@@ -332,6 +377,8 @@ DIR=~/work              # where Claude starts on the VM (created if missing)
 SESSION=claude          # tmux session; empty = no tmux
 OS=linux                # or windows; detected from the SSH banner on first use
 AGENT=claude            # or codex, gemini, aider
+AGENTS=claude,codex     # installed on the VM (noted by setup and vmclaude)
+PORTS=3000,5173         # forwarded to this computer while connected
 AUTOSTOP=on             # off: the VM keeps running after you leave Claude
 AUTOSNAP=3              # automatic snapshots to keep; 0 = none
 IDLE=30                 # what "vmclaude idle" set up on the VM (0 = off)
@@ -537,6 +584,16 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_idle_notify.py` runs `hook.sh` with Claude's hook input, the
   watcher against a fake VM (new events become notifications, it stops when
   Claude is gone, one per VM), and checks the idle installers.
+- `tests/test_ui.py` drives the terminal UI with Textual's test pilot
+  against a fake `vmclaude`: the list, the new-VM form and its checks, every
+  key. It needs Textual (`uv run --with 'textual>=8,<9' python -m unittest
+  tests.test_ui`), else it is skipped. `tests/test_ui_backend.py` covers what
+  it builds on: `list`/`images`/`snapshots --json`, `ports`, `create`/`setup
+  --agents`, `resize` and `open --lan`.
+- By hand, the UI on this computer's libvirt: a new Arch VM with Claude Code,
+  Codex and port 8000 made from the form (the port reached here while
+  connected, gone after detaching), then RAM and CPUs changed, and the VM
+  deleted, all from the UI.
 - `tests/test_extras.py` covers `open` (a fake ssh that really listens on
   the forwarded port; Ctrl-C on a pseudo-terminal), the clipboard script
   against a fake tmux and its way into a fake `xclip`, the agents (sessions,
@@ -688,6 +745,14 @@ açar. Port doluysa bir sonrakini kullanır. `Ctrl-C` ile biter.
 **Pano:** Claude'un VM'de kopyaladığı ya da tmux'ta kopyaladığın metin
 bilgisayarının panosuna gelir (bilgisayarında `xclip` gerekir). Kapatmak için:
 `vmclaude clipboard dev off`.
+
+**Terminal arayüzü:** `vmclaude ui` her şeyi tek ekranda toplar. `n` ile yeni
+VM: sistem, RAM, işlemci, disk, kurulacak yapay zekâ yardımcıları (Claude
+Code, Codex, Gemini CLI, aider) ve açılacak portlar seçilir; arayüz aynı işi
+yapan `vmclaude create` komutunu da gösterir. Listede `Enter` seçili VM'de
+yardımcıyı açar; `o` portlar, `t` başlat/durdur, `p` anlık görüntü, `u` geri
+alma, `r` RAM/işlemci, `d` silme (adını yazarak onaylanır). Python ve Textual
+gerekir; `uv` kuruluysa vmclaude Textual'ı kendisi getirir.
 
 **Diğer araçlar:** `vmclaude dev --codex`, `--gemini` ya da `--aider` Claude
 yerine o aracı açar; ilk seferde VM'e kendisi kurar. Kalıcı yapmak için:

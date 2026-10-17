@@ -134,7 +134,7 @@ class ClipboardTests(Base):
     def copy(self, text):
         f = self.sb.tmp / "clipboard"
         write_exe(self.sb.bin / "xclip", f'#!/bin/sh\necho "$*" >>{f}.args\ncat >>{f}\necho "<end>" >>{f}\n')
-        subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"$/d" "{ROOT}/vmclaude"); clip_copy'],
+        subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"; exit$/d" "{ROOT}/vmclaude"); clip_copy'],
                        input=text, text=True, check=True,
                        env={"PATH": f"{self.sb.bin}:/usr/bin:/bin", "DISPLAY": ":9", "HOME": str(self.sb.home)})
         return f.read_text() if f.exists() else ""

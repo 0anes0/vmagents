@@ -97,6 +97,23 @@ if cmd == "domifaddr":
     print(); sys.exit(0)
 if cmd == "list":
     print("testvm"); print(); sys.exit(0)
+# Memory (MB) and CPUs, in <state file>.config: {"memory": .., "cpus": ..}
+config_path = path + ".config"
+config = json.load(open(config_path)) if os.path.exists(config_path) else {"memory": 4096, "cpus": 2}
+if cmd == "dominfo":
+    print(f"Name:           {args[1]}\nState:          {state}\nCPU(s):         {config['cpus']}\n"
+          f"Max memory:     {config['memory'] * 1024} KiB\nUsed memory:    {config['memory'] * 1024} KiB\n")
+    sys.exit(0)
+if cmd in ("setmaxmem", "setmem", "setvcpus", "vcpucount"):
+    if state != "shut off" and "--config" not in args:
+        print("error: requires --config", file=sys.stderr); sys.exit(1)
+    if cmd == "vcpucount":
+        print(config["cpus"]); sys.exit(0)
+    if cmd == "setvcpus":
+        config["cpus"] = int(args[2])
+    else:
+        config["memory"] = int(args[2].rstrip("M"))
+    json.dump(config, open(config_path, "w")); sys.exit(0)
 # Snapshots, in <state file>.snaps: [[name, time, state, description], ...]
 snaps_path = path + ".snaps"
 snaps = json.load(open(snaps_path)) if os.path.exists(snaps_path) else []
@@ -115,6 +132,10 @@ if cmd == "snapshot-create-as":
     desc = args[args.index("--description") + 1] if "--description" in args else ""
     snaps.append([args[2], "2026-10-16 10:%02d:00 +0300" % len(snaps), state.replace(" ", ""), desc])
     save_snaps(); print(f"Domain snapshot {args[2]} created"); sys.exit(0)
+if cmd == "snapshot-list" and "--name" in args:
+    for s in snaps:
+        print(s[0])
+    print(); sys.exit(0)
 if cmd == "snapshot-list":
     print(" Name   Creation Time   State"); print("-" * 30)
     for s in snaps:

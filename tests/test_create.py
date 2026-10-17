@@ -101,7 +101,8 @@ open(out, "wb").write(data)
 '''
 
 
-class CreateTests(SandboxTest):
+class CreateBase(SandboxTest):
+    """A sandbox with fake libvirt, virt-install, curl and xorriso."""
     def setUp(self):
         super().setUp()
         self.lv = self.sb.tmp / "lv.json"
@@ -120,6 +121,8 @@ class CreateTests(SandboxTest):
     def create(self, *args, check=0, env=None):
         return self.sb.run("create", *args, "--no-setup", env=env, check=check)
 
+
+class CreateTests(CreateBase):
     def test_create(self):
         r = self.create("box", "--memory", "2048", "--cpus", "3", "--disk", "30", "--user", "dev")
         self.assertIn("Created. Next: vmclaude setup box", r.stdout)

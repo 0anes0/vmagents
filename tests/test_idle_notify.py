@@ -16,7 +16,7 @@ from tests.test_windows import decode
 
 def var(name):
     """A variable of the vmclaude script, as the script defines it."""
-    return subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"$/d" "$0"); printf "%s" "${name}"',
+    return subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"; exit$/d" "$0"); printf "%s" "${name}"',
                            str(ROOT / "vmclaude")], capture_output=True, text=True, check=True).stdout
 
 

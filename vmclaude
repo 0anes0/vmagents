@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # vmclaude — open Claude Code inside a virtual machine over SSH, in one step.
 # https://github.com/emincan2000/vmclaude
+# shellcheck disable=SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.9.0
+VERSION=0.10.0
 PROG=${0##*/}
 CONF_DIR=${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmclaude}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -12,7 +13,7 @@ DEFAULT_KEY=$HOME/.ssh/vmclaude_ed25519
 BOOT_TIMEOUT=${VMCLAUDE_BOOT_TIMEOUT:-180}
 STOP_TIMEOUT=${VMCLAUDE_STOP_TIMEOUT:-120}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD CREATED "
 HOLD=0
 AGENTS="claude codex gemini aider"
 
@@ -47,9 +48,13 @@ what you copy on the VM lands in this computer's clipboard. Codex, Gemini CLI
 and aider work the same way (vmclaude dev --codex).
 
 GET STARTED
+  The easy way: a terminal UI to make, open and manage VMs:
+    vmclaude ui
+
   No VM yet? Make one (Linux computer with libvirt):
     vmclaude create dev                      new Debian 13 VM with Claude Code, no password
     vmclaude create box --image arch         the same with Arch Linux
+    vmclaude create web --memory 8192 --cpus 4 --agents claude,codex --ports 3000
     vmclaude login dev                       log Claude in (browser opens on this computer)
     vmclaude dev                             open Claude Code in it
 
@@ -72,6 +77,8 @@ COMMANDS
     delete NAME          delete a VM made with create, with its disks
     images               list the images: which exist, which are downloaded, where
     prune                delete downloaded images that no VM uses any more
+    resize NAME          change RAM and CPUs (--memory MB --cpus N)
+    ui                   all of this in a terminal UI
 
   Use a VM:
     connect NAME         open Claude Code ("vmclaude NAME" does the same)
@@ -79,6 +86,7 @@ COMMANDS
     start NAME           start a libvirt VM and wait until SSH answers
     stop NAME            shut a libvirt VM down (--force: pull the plug)
     open NAME PORT       open the VM's port PORT here (http://localhost:PORT)
+    ports NAME 3000,...  ports forwarded each time you connect
     doctor NAME          check VM, network, SSH, key, Claude and tmux, step by step
     login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
@@ -141,6 +149,9 @@ Options:
   --disk GB        disk size in gigabytes    (default 20)
   --user USER      user created in the VM    (default: $u)
   --uri URI        libvirt connection        (default: qemu:///system)
+  --agents LIST    AI assistants to install, e.g. claude,codex (default: claude;
+                   also gemini, aider); the first one is what "vmclaude NAME" opens
+  --ports LIST     ports of the VM to reach here while connected, e.g. 3000,5173
   --idle MINUTES   the VM shuts itself down after MINUTES unused (default 30; off)
   --no-setup       only make the VM; run "vmclaude setup NAME" later
 
@@ -173,11 +184,13 @@ Examples:
 EOF
       ;;
     images) cat <<EOF
-vmclaude images [--uri URI]
+vmclaude images [--uri URI] [--json]
 
 Lists the images "vmclaude create --image" can use, and for each one whether it
 is downloaded, whether a base image of it is in the libvirt pool, its size,
-and which VMs use it. Also shows where all of it is stored:
+and which VMs use it (--json: the images, and this computer's RAM, CPUs and
+free space for new VMs, for scripts and "vmclaude ui"). Also shows where all
+of it is stored:
 
   downloads (the original image files):
       ${CACHE_DIR/#$HOME/\~}/images/
@@ -456,13 +469,17 @@ Examples:
 EOF
       ;;
     open) cat <<EOF
-vmclaude open [NAME] PORT... [--no-browser] [--keep]
+vmclaude open [NAME] [PORT...] [--no-browser] [--keep] [--lan]
 
 Makes port PORT of the VM a port of this computer, over SSH, and opens
 http://localhost:PORT in your browser: for the web server or app Claude
 started on the VM. It also works when that server only listens on the VM's
 localhost, and for VMs elsewhere. When PORT is taken here, the next free one
 is used (it says which). LOCAL:PORT picks the port here yourself.
+
+Without PORT: the ports set with "vmclaude ports NAME". --lan makes them
+reachable from other devices on your network too (http://THIS-COMPUTER:PORT);
+without it only from this computer.
 
 It runs until Ctrl-C; then the VM shuts down if nothing else uses it, as
 after connect (--keep: leave it on).
@@ -472,6 +489,52 @@ Examples:
   vmclaude open dev 5173 8080            two ports
   vmclaude open dev 9000:3000            the VM's 3000 as localhost:9000
   vmclaude open 3000 --no-browser        the default VM; only forward
+EOF
+      ;;
+    ports) cat <<EOF
+vmclaude ports NAME [PORT,PORT...|off]
+
+Ports of the VM that become ports of this computer each time you connect
+("vmclaude NAME"), as long as you stay connected: http://localhost:PORT reaches
+the web server or app Claude started on the VM. A port taken here is skipped
+(it says so). Without a list it shows them; "vmclaude open NAME" forwards them
+without connecting. "vmclaude create --ports" sets them for a new VM.
+
+Examples:
+  vmclaude ports dev 3000,5173
+  vmclaude ports dev off
+EOF
+      ;;
+    resize) cat <<EOF
+vmclaude resize NAME [--memory MB] [--cpus N] [--stop]
+
+Changes how much RAM and how many CPUs a libvirt VM has. The VM has to be
+off: --stop shuts it down first (otherwise it says so). The disk keeps its
+size; it grows as it fills, up to the size given to create.
+
+Examples:
+  vmclaude resize dev --memory 8192
+  vmclaude resize dev --cpus 4 --stop
+EOF
+      ;;
+    ui) cat <<EOF
+vmclaude ui
+
+A terminal UI for everything vmclaude does. The list shows your VMs with
+their state, RAM, CPUs, AI assistants and ports; on the right the details of
+the selected one. Keys:
+  Enter  open the VM's AI assistant (the UI steps aside until you quit it)
+  a      open another one: Claude Code, Codex, Gemini CLI, aider
+  n      new VM: name, system, RAM, CPUs, disk, AI assistants, ports, idle
+         shutdown; it shows the same "vmclaude create" command line
+  o      ports: forward them now (and stop again), every time, or to your LAN
+  t      start or stop      s  shell       l  log Claude in
+  p      snapshot           u  undo (back to a snapshot)
+  r      RAM and CPUs       d  delete (asks you to type the name)
+  q      quit (stops port forwards the UI started)
+
+It runs this vmclaude, so all it does works from the command line too. Needs
+Python with Textual 8; with uv installed vmclaude fetches it by itself.
 EOF
       ;;
     clipboard) cat <<EOF
@@ -533,11 +596,14 @@ Examples:
 EOF
       ;;
     list | ls) cat <<EOF
-vmclaude list
+vmclaude list [--json]
 
 Shows all profiles: name, user@host[:port], libvirt VM with its state
 (running, shut off, ...) and system. A * marks
 the default VM, the one plain "vmclaude" opens.
+
+--json: one object per VM with all its settings, and for libvirt VMs state,
+memory_mb, cpus and snapshots (for scripts; "vmclaude ui" uses it).
 EOF
       ;;
     default) cat <<EOF
@@ -564,8 +630,9 @@ vmclaude edit NAME
 Opens ${HOSTS_DIR/#$HOME/\~}/NAME.conf in \$VISUAL or \$EDITOR (default: vi).
 The file has KEY=VALUE lines: HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR
 SESSION OS (see "vmclaude help add" for what they mean), AGENT=claude|codex|
-gemini|aider, AUTOSTOP=on|off, AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle"
-set up), NOTIFY=on|off and CLIPBOARD=on|off.
+gemini|aider, AGENTS (installed ones), PORTS=3000,5173, AUTOSTOP=on|off,
+AUTOSNAP=N, IDLE=MINUTES (what "vmclaude idle" set up), NOTIFY=on|off and
+CLIPBOARD=on|off.
 EOF
       ;;
     forget) cat <<EOF
@@ -658,7 +725,7 @@ Examples:
 Needs python3 on this computer. In Claude Code, /mcp shows the server.
 EOF
       ;;
-    *) usage_error "no help for '$1'; commands: create delete images prune connect shell start stop open autostop undo snapshot snapshots autosnap idle notify clipboard agent doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
+    *) usage_error "no help for '$1'; commands: ui create delete images prune resize connect shell start stop open ports autostop undo snapshot snapshots autosnap idle notify clipboard agent doctor login mcp mount umount add setup autostart list default desktop edit forget rm" ;;
   esac
 }
 
@@ -710,6 +777,16 @@ write_profile() {
 }
 
 HOST_RE='^[]A-Za-z0-9._:%[-]+$' # names, IPv4, IPv6 (optionally [bracketed], %zone)
+agent_list_ok() { # claude,codex
+  local a
+  [[ $1 =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+  for a in ${1//,/ }; do [[ " $AGENTS " == *" $a "* ]] || return 1; done
+}
+port_list_ok() { # 3000,5173
+  local p
+  [[ $1 =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+  for p in ${1//,/ }; do ((10#$p >= 1 && 10#$p <= 65535)) || return 1; done
+}
 check_value() { # KEY VALUE
   local k=$1 v=$2
   [[ $v != *$'\n'* ]] || die "$k must be a single line"
@@ -721,6 +798,8 @@ check_value() { # KEY VALUE
     SESSION) [[ $v =~ ^[A-Za-z0-9_-]*$ ]] || die "invalid tmux session name: $v (letters, digits, _ and - only)" ;;
     OS) [[ $v == linux || $v == windows ]] || die "invalid OS: $v (linux or windows)" ;;
     AGENT) [[ " $AGENTS " == *" $v "* ]] || die "invalid agent: $v (one of: $AGENTS)" ;;
+    AGENTS) agent_list_ok "$v" || die "invalid AGENTS: $v (a comma-separated list of: $AGENTS)" ;;
+    PORTS) port_list_ok "$v" || die "invalid PORTS: $v (a comma-separated list of ports, e.g. 3000,5173)" ;;
     AUTOSTOP | NOTIFY | CLIPBOARD) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
     AUTOSNAP | IDLE) [[ $v =~ ^[0-9]+$ ]] || die "invalid $k: $v (a number)" ;;
   esac
@@ -734,7 +813,7 @@ load() {
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS AGENT AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD; do
+  for k in HOST USER PORT DOMAIN SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -1246,7 +1325,9 @@ INSTALL_SH=$REMOTE_ENV'if command -v cloud-init >/dev/null 2>&1; then
 fi
 need=
 command -v tmux >/dev/null 2>&1 || need="$need tmux"
-command -v claude >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || need="$need curl"
+# $1: "no" leaves Claude Code out (another agent only).
+cl=${1:-yes}
+[ "$cl" = no ] || command -v claude >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || need="$need curl"
 if [ -n "$need" ]; then
   echo "Installing:$need"
   if [ "$(id -u)" = 0 ]; then su_=
@@ -1266,7 +1347,9 @@ if [ -n "$need" ]; then
   else echo "vmclaude: no known package manager; install$need yourself" >&2
   fi || echo "vmclaude: installing$need failed" >&2
 fi
-if command -v claude >/dev/null 2>&1; then
+if [ "$cl" = no ]; then
+  :
+elif command -v claude >/dev/null 2>&1; then
   echo "Claude Code is already installed: $(claude --version 2>/dev/null || echo unknown version)"
 else
   command -v curl >/dev/null 2>&1 || { echo "vmclaude: curl is missing; cannot install Claude Code" >&2; exit 1; }
@@ -1283,7 +1366,7 @@ else
   command -v claude >/dev/null 2>&1 || { echo "vmclaude: Claude Code installation failed" >&2; exit 1; }
   echo "Installed Claude Code: $(claude --version 2>/dev/null || echo unknown version)"
 fi
-command -v tmux >/dev/null 2>&1 || echo "vmclaude: tmux is not available; Claude will stop when the connection drops" >&2
+command -v tmux >/dev/null 2>&1 || echo "vmclaude: tmux is not available; the agent will stop when the connection drops" >&2
 exit 0
 '
 
@@ -1758,7 +1841,59 @@ cmd_add() {
   if ((created)); then say "Added VM '$name'. Next: $PROG setup $name"; else say "Updated VM '$name'."; fi
 }
 
+json_str() {
+  local v=$1
+  v=${v//\\/\\\\} v=${v//\"/\\\"} v=${v//$'\t'/\\t} v=${v//$'\n'/\\n} v=${v//$'\r'/\\r}
+  printf '"%s"' "$v"
+}
+json_list() { # a,b -> ["a", "b"]; NUM: numbers
+  local out='' x
+  for x in ${1//,/ }; do
+    if [[ ${2-} == NUM ]]; then out+="${out:+, }$((10#$x))"; else out+="${out:+, }$(json_str "$x")"; fi
+  done
+  printf '[%s]' "$out"
+}
+json_bool() { [[ $1 == on || $1 == 1 || $1 == true ]] && printf true || printf false; }
+
+# One JSON object per profile, for the UI and scripts.
+list_json() {
+  local names name def sep='' state mem cpus snaps uri info
+  names=$(profile_names)
+  def=$(default_name || true)
+  printf '['
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    read_profile "$name"
+    state=null mem=null cpus=null snaps=null
+    uri=${P[LIBVIRT_URI]:-qemu:///system}
+    if [[ -n ${P[DOMAIN]:-} ]] && command -v virsh >/dev/null; then
+      if info=$(timeout 5 virsh -c "$uri" dominfo "${P[DOMAIN]}" 2>/dev/null); then
+        state=$(json_str "$(awk -F': *' '$1 == "State" { print $2 }' <<<"$info")")
+        mem=$(awk '/^Max memory:/ { printf "%d", $3 / 1024 }' <<<"$info")
+        cpus=$(awk '/^CPU\(s\):/ { print $2 }' <<<"$info")
+        snaps=$(timeout 5 virsh -c "$uri" snapshot-list "${P[DOMAIN]}" --name 2>/dev/null | grep -c .) || snaps=0
+      else
+        state='"missing"'
+      fi
+    fi
+    printf '%s\n {"name": %s, "default": %s, "host": %s, "user": %s, "port": %d, "domain": %s, "uri": %s, ' \
+      "$sep" "$(json_str "$name")" "$([[ $name == "$def" ]] && echo true || echo false)" "$(json_str "${P[HOST]:-}")" \
+      "$(json_str "${P[USER]:-$(id -un)}")" "$((10#${P[PORT]:-22}))" "$(json_str "${P[DOMAIN]:-}")" "$(json_str "$uri")"
+    printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
+      "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
+      "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
+    printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
+      "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
+      "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
+    printf '"state": %s, "memory_mb": %s, "cpus": %s, "snapshots": %s}' "$state" "${mem:-null}" "${cpus:-null}" "$snaps"
+    sep=,
+  done <<<"$names"
+  printf '\n]\n'
+}
+
 cmd_list() {
+  if [[ ${1-} == --json ]]; then list_json; return; fi
+  (($# == 0)) || usage_error "list: unknown argument $1"
   local names name def target state
   names=$(profile_names)
   if [[ -z $names ]]; then say "No VMs yet. Add one: $PROG add NAME --host IP  (or --domain LIBVIRT_DOMAIN)"; return 0; fi
@@ -1828,6 +1963,26 @@ win_hooks() {
   return 0
 }
 
+# The profile's PORTS, forwarded while connected (same port here; taken
+# ones are skipped). Sets FWD.
+FWD=()
+profile_forwards() {
+  local p shown=''
+  FWD=()
+  [[ -n ${P[PORTS]:-} ]] || return 0
+  for p in ${P[PORTS]//,/ }; do
+    p=$((10#$p))
+    if port_free "$p"; then
+      FWD+=(-L "127.0.0.1:$p:localhost:$p")
+      shown+=" http://localhost:$p"
+    else
+      warn "port $p is in use on this computer; not forwarded this time"
+    fi
+  done
+  [[ -n $shown ]] && info "Ports of $NAME here:$shown"
+  return 0
+}
+
 cmd_connect() {
   local name='' notmux=0 keep=0 agent=''
   local -a cargs=()
@@ -1872,12 +2027,15 @@ cmd_connect() {
   # Codex logs in through a page on localhost:1455 that the browser here
   # opens: forward that port to the VM.
   [[ $C_AGENT == codex ]] && port_free 1455 && fwd=(-L 127.0.0.1:1455:localhost:1455)
+  profile_forwards
+  fwd+=("${FWD[@]}")
   [[ $C_AGENT == claude ]] && start_watcher
   start_clip
   run_ssh "${fwd[@]}" "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
   if ((rc == 120)) && [[ $C_AGENT != claude ]]; then
     info "$C_AGENT is not installed on the VM yet; installing it."
     if run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$C_AGENT")"; then
+      note_agent "$C_AGENT"
       rc=0
       run_ssh "${fwd[@]}" "$TTY_FLAG" -- "$TARGET" "$cmd" || rc=$?
     else
@@ -2012,6 +2170,7 @@ cmd_agent() {
     [[ $C_OS == windows ]] && die "only Claude Code runs on Windows VMs for now"
     build_ssh_opts
     run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$2")" || die "installing $2 on the VM failed"
+    note_agent "$2"
   fi
   P[AGENT]=$2
   write_profile "$NAME"
@@ -2033,18 +2192,30 @@ cmd_autostop() {
   fi
 }
 
+# Notes that AGENT is installed on the VM (for list and the UI).
+note_agent() {
+  [[ ,${P[AGENTS]:-}, == *",$1,"* ]] && return 0
+  P[AGENTS]=${P[AGENTS]:+${P[AGENTS]},}$1
+  write_profile "$NAME"
+}
+
 cmd_setup() {
-  local name='' install=1 autostart=1
+  local name='' install=1 autostart=1 agents='' a
   while (($#)); do
     case $1 in
       --no-install) install=0; shift ;;
       --no-autostart) autostart=0; shift ;;
+      --agents)
+        (($# >= 2)) || usage_error "setup: --agents needs a list, e.g. claude,codex"
+        agent_list_ok "$2" || usage_error "setup: --agents takes a comma-separated list of: $AGENTS"
+        agents=$2; shift 2 ;;
       -*) usage_error "setup: unknown option $1" ;;
       *) [[ -z $name ]] || usage_error "setup: more than one name given"; name=$1; shift ;;
     esac
   done
   [[ -n $name ]] || name=$(default_name) || usage_error "setup: missing NAME"
   load "$name"
+  [[ $C_OS == windows && -n $agents && $agents != claude ]] && die "only Claude Code runs on Windows VMs for now"
   command -v ssh >/dev/null || die "ssh not found (install openssh-client)"
   ensure_key
   resolve_target
@@ -2075,9 +2246,21 @@ cmd_setup() {
   if ((install)) && [[ $C_OS == windows ]]; then
     info "[2/3] Git for Windows and Claude Code"
     win_run "$WIN_INSTALL_PS" || die "installing on the VM failed"
+    note_agent claude
   elif ((install)); then
-    info "[2/3] tmux and Claude Code"
-    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$INSTALL_SH")" || die "installing on the VM failed"
+    [[ -n $agents ]] || agents=claude
+    info "[2/3] tmux and ${agents//,/, }"
+    local cl=no
+    [[ ,$agents, == *,claude,* ]] && cl=yes
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$INSTALL_SH" "$cl")" || die "installing on the VM failed"
+    [[ $cl == yes ]] && note_agent claude
+    for a in ${agents//,/ }; do
+      [[ $a == claude ]] && continue
+      run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$a")" </dev/null || die "installing $a on the VM failed"
+      note_agent "$a"
+    done
+    # The first one is what "vmclaude NAME" opens.
+    if [[ ${agents%%,*} != "${P[AGENT]:-claude}" ]]; then P[AGENT]=${agents%%,*}; write_profile "$NAME"; fi
   else
     info "[2/3] skipped installing Claude Code"
   fi
@@ -2090,7 +2273,11 @@ cmd_setup() {
   fi
 
   say ""
-  say "Done. Open Claude on the VM with:  $PROG $NAME"
+  if [[ ${P[AGENT]:-claude} == claude ]]; then
+    say "Done. Open Claude on the VM with:  $PROG $NAME"
+  else
+    say "Done. Open ${P[AGENT]} on the VM with:  $PROG $NAME"
+  fi
   say "Log in to Claude once (in a browser on this computer):  $PROG login $NAME"
   [[ $C_OS == windows ]] && say "Windows has no tmux: closing the connection ends Claude's session."
   say "App-menu launcher:                 $PROG desktop $NAME"
@@ -2239,9 +2426,19 @@ fetch_image() {
     return 0
   fi
   info "Downloading $IMG_URL"
-  local -a progress=(-s)
-  [[ -t 2 ]] && progress=(-#)
-  curl -fL "${progress[@]}" -o "$IMG_FILE.part" "$IMG_URL" || die "download failed"
+  if [[ -t 2 ]]; then
+    curl -fL -# -o "$IMG_FILE.part" "$IMG_URL" || die "download failed"
+  else
+    # No terminal (the UI, a log): a line every 5 seconds instead of a bar.
+    local pid i=0
+    curl -fsL -o "$IMG_FILE.part" "$IMG_URL" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 1
+      ((++i % 5)) || info "  ...$(($(stat -c %s "$IMG_FILE.part" 2>/dev/null || echo 0) / 1048576)) MB downloaded after ${i}s"
+    done
+    wait "$pid" || die "download failed"
+  fi
   got=$("${IMG_ALGO}sum" "$IMG_FILE.part" | cut -d' ' -f1)
   [[ $got == "$IMG_HASH" ]] ||
     { rm -f "$IMG_FILE.part"; die "checksum mismatch for ${IMG_URL##*/} (a mirror may not have synced the latest image yet)"; }
@@ -2274,14 +2471,16 @@ EOF
 
 cmd_create() {
   local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 idle=30 k
+  local agents=claude ports=''
   user=$(id -un)
   while (($#)); do
     case $1 in
-      --image | --memory | --cpus | --disk | --user | --uri | --idle)
+      --image | --memory | --cpus | --disk | --user | --uri | --idle | --agents | --ports)
         (($# >= 2)) || usage_error "create: $1 needs a value"
         case $1 in
           --image) image=$2 ;; --memory) memory=$2 ;; --cpus) cpus=$2 ;;
           --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;; --idle) idle=$2 ;;
+          --agents) agents=${2// /} ;; --ports) ports=${2// /} ;;
         esac
         shift 2 ;;
       --no-setup) install=0; shift ;;
@@ -2295,6 +2494,8 @@ cmd_create() {
   for k in "$memory" "$cpus" "$disk"; do [[ $k =~ ^[1-9][0-9]*$ ]] || die "--memory, --cpus and --disk take whole numbers"; done
   [[ $idle == off ]] && idle=0
   [[ $idle =~ ^[0-9]+$ ]] || die "--idle takes minutes, or off"
+  agent_list_ok "$agents" || die "--agents takes a comma-separated list of: $AGENTS"
+  [[ -z $ports ]] || port_list_ok "$ports" || die "--ports takes a comma-separated list of ports, e.g. 3000,5173"
   check_value USER "$user"
   image_info "$image"
   local tool
@@ -2365,6 +2566,7 @@ cmd_create() {
 
   P=([DOMAIN]=$name [USER]=$user [OS]=linux [CREATED]=1)
   [[ $uri != qemu:///system ]] && P[LIBVIRT_URI]=$uri
+  [[ -n $ports ]] && P[PORTS]=$ports
   write_profile "$name"
   info "Added VM profile '$name'."
   if ((install)); then
@@ -2380,14 +2582,52 @@ cmd_create() {
       ((noted)) || { info "Waiting for cloud-init to create user $C_USER..."; noted=1; }
       sleep 3
     done
-    cmd_setup "$name"
+    cmd_setup "$name" --agents "$agents"
     if ((idle > 0)); then
       info "Idle shutdown"
       if install_idle "$idle"; then P[IDLE]=$idle; write_profile "$NAME"; else warn "idle shutdown not set up (later: $PROG idle $NAME $idle)"; fi
     fi
   else
-    say "Created. Next: $PROG setup $name"
+    say "Created. Next: $PROG setup $name --agents $agents"
   fi
+}
+
+cmd_resize() {
+  local name='' memory='' cpus='' stop=0 out cur
+  while (($#)); do
+    case $1 in
+      --memory | --cpus)
+        (($# >= 2)) || usage_error "resize: $1 needs a value"
+        [[ $2 =~ ^[1-9][0-9]*$ ]] || die "$1 takes a whole number"
+        if [[ $1 == --memory ]]; then memory=$2; else cpus=$2; fi
+        shift 2 ;;
+      --stop) stop=1; shift ;;
+      -*) usage_error "resize: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "resize: more than one name given"; name=$1; shift ;;
+    esac
+  done
+  [[ -n $name ]] || usage_error "resize: missing NAME"
+  [[ -n $memory$cpus ]] || usage_error "resize: give --memory MB and/or --cpus N"
+  load "$name"
+  need_domain resize
+  if [[ $(domstate) != "shut off" ]]; then
+    ((stop)) || die "VM $C_DOMAIN is running; resizing needs it off. Add --stop, or: $PROG stop $NAME"
+    stop_vm 0 || die "VM $C_DOMAIN did not shut down"
+  fi
+  if [[ -n $memory ]]; then
+    out=$(vsh setmaxmem "$C_DOMAIN" "${memory}M" --config 2>&1) || die "libvirt: $out"
+    out=$(vsh setmem "$C_DOMAIN" "${memory}M" --config 2>&1) || die "libvirt: $out"
+  fi
+  if [[ -n $cpus ]]; then
+    # Raising: the maximum first; lowering: the count first.
+    cur=$(vsh vcpucount "$C_DOMAIN" --maximum --config 2>/dev/null) || cur=0
+    if ((cpus > cur)); then
+      out=$(vsh setvcpus "$C_DOMAIN" "$cpus" --config --maximum 2>&1) && out=$(vsh setvcpus "$C_DOMAIN" "$cpus" --config 2>&1)
+    else
+      out=$(vsh setvcpus "$C_DOMAIN" "$cpus" --config 2>&1) && out=$(vsh setvcpus "$C_DOMAIN" "$cpus" --config --maximum 2>&1)
+    fi || die "libvirt: $out"
+  fi
+  say "VM $C_DOMAIN now has${memory:+ $memory MB}${memory:+${cpus:+ and}}${cpus:+ $cpus CPUs}. Start it: $PROG $NAME"
 }
 
 cmd_delete() {
@@ -2430,15 +2670,44 @@ image_desc() {
 
 # Lists the images, what is downloaded, what is in the libvirt pool, and
 # which VMs are built on it.
+# The images and what this computer has for "create", for the UI.
+images_json() {
+  local img sep='' file mt ma cpus lv=false avail=null missing='' t iso=''
+  printf '{"images": ['
+  for img in $IMAGES; do
+    image_info "$img"
+    file=$CACHE_DIR/images/${IMG_URL##*/}
+    printf '%s\n  {"name": %s, "description": %s, "downloaded": %s}' "$sep" "$(json_str "$img")" \
+      "$(json_str "$(image_desc "$img")")" "$([[ -f $file ]] && echo true || echo false)"
+    sep=,
+  done
+  mt=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null) || mt=0
+  ma=$(awk '/^MemAvailable:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null) || ma=0
+  cpus=$(nproc 2>/dev/null) || cpus=1
+  if command -v virsh >/dev/null && vsh pool-info "$CREATE_POOL" >/dev/null 2>&1; then
+    lv=true
+    avail=$(vsh pool-info "$CREATE_POOL" --bytes 2>/dev/null | awk '/^Available:/ { printf "%d", $2 / 1073741824 }')
+    [[ -n $avail ]] || avail=null
+  fi
+  for t in xorriso genisoimage mkisofs; do command -v "$t" >/dev/null && iso=$t; done
+  [[ -n $iso ]] || missing=xorriso
+  for t in virsh virt-install curl; do command -v "$t" >/dev/null || missing+="${missing:+,}$t"; done
+  printf '\n], "host": {"memory_mb": %d, "memory_available_mb": %d, "cpus": %d, "libvirt": %s, ' "${mt:-0}" "${ma:-0}" "$cpus" "$lv"
+  printf '"pool": %s, "pool_available_gb": %s, "missing": %s, "agents": %s}}\n' "$(json_str "$CREATE_POOL")" "$avail" \
+    "$(json_list "$missing")" "$(json_list "${AGENTS// /,}")"
+}
+
 cmd_images() {
-  local uri=qemu:///system
+  local uri=qemu:///system json=0
   while (($#)); do
     case $1 in
       --uri) (($# >= 2)) || usage_error "images: --uri needs a value"; uri=$2; shift 2 ;;
+      --json) json=1; shift ;;
       *) usage_error "images: unknown argument $1" ;;
     esac
   done
   C_URI=$uri
+  if ((json)); then images_json; return; fi
   local lv=0 pool_path='' vols='' v b users img file dl base size row
   local -A used_by=()
   if command -v virsh >/dev/null && vsh pool-info "$CREATE_POOL" >/dev/null 2>&1; then
@@ -2954,11 +3223,25 @@ cmd_snapshot() {
 }
 
 cmd_snapshots() {
+  local json=0
+  [[ ${2-} == --json ]] && { json=1; set -- "$1"; }
   [[ $# = 1 ]] || usage_error "snapshots: give one NAME"
   load "$1"
   need_domain snapshots
-  local rows snap when state desc
+  local rows snap when state desc sep=''
   rows=$(snapshot_rows)
+  if ((json)); then
+    printf '['
+    while IFS=$'\t' read -r snap when state; do
+      [[ -n $snap ]] || continue
+      desc=$(vsh snapshot-dumpxml "$C_DOMAIN" "$snap" 2>/dev/null | sed -n 's:.*<description>\(.*\)</description>.*:\1:p' | head -n 1)
+      printf '%s\n {"name": %s, "time": %s, "state": %s, "description": %s}' "$sep" "$(json_str "$snap")" \
+        "$(json_str "$when")" "$(json_str "$state")" "$(json_str "$desc")"
+      sep=,
+    done <<<"$rows"
+    printf '\n]\n'
+    return 0
+  fi
   if [[ -z $rows ]]; then
     say "No snapshots of $NAME yet. One is taken each time vmclaude starts the VM; or: $PROG snapshot $NAME"
     return 0
@@ -3204,14 +3487,36 @@ open_url() { # URL
   return 1
 }
 
+cmd_ports() {
+  (($# >= 1 && $# <= 2)) || usage_error "ports: give NAME and a list of ports (e.g. 3000,5173) or off"
+  load "$1"
+  if (($# == 1)); then
+    say "${P[PORTS]:-none}"
+    return 0
+  fi
+  local v=${2// /}
+  if [[ $v == off || $v == none ]]; then
+    unset 'P[PORTS]'
+    write_profile "$NAME"
+    say "No ports are forwarded when you connect to $NAME."
+    return 0
+  fi
+  port_list_ok "$v" || usage_error "ports: give ports like 3000,5173 (or off)"
+  P[PORTS]=$v
+  write_profile "$NAME"
+  say "While you are connected to $NAME, these ports of the VM are ports here too: ${v//,/, }"
+  say "Without Claude: $PROG open $NAME"
+}
+
 cmd_open() {
-  local name='' browser=1 keep=0 a l r i pid rc=0
+  local name='' browser=1 keep=0 lan=0 bind=127.0.0.1 a l r i pid rc=0 ip=''
   local -a specs=() locals=() fwd=()
   while (($#)); do
     a=$1; shift
     case $a in
       --no-browser) browser=0 ;;
       --keep) keep=1 ;;
+      --lan) lan=1; bind=0.0.0.0 ;;
       -*) usage_error "open: unknown option $a" ;;
       *)
         if [[ -z $name ]] && profile_exists "$a"; then name=$a
@@ -3221,8 +3526,12 @@ cmd_open() {
         fi ;;
     esac
   done
-  ((${#specs[@]})) || usage_error "open: give the VM's port, e.g. $PROG open NAME 3000"
   [[ -n $name ]] || name=$(default_name) || usage_error "open: several VMs and no default; name one"
+  if ((${#specs[@]} == 0)); then
+    read_profile "$name"
+    [[ -n ${P[PORTS]:-} ]] || usage_error "open: give the VM's port, e.g. $PROG open $name 3000 (or set some: $PROG ports $name 3000)"
+    for a in ${P[PORTS]//,/ }; do specs+=("$a"); done
+  fi
   for a in "${specs[@]}"; do
     r=$((10#${a##*:})) l=''
     [[ $a == *:* ]] && l=$((10#${a%%:*}))
@@ -3238,7 +3547,7 @@ cmd_open() {
       [[ -n $l ]] || die "no free port near $r on this computer"
     fi
     locals+=("$l")
-    fwd+=(-L "127.0.0.1:$l:localhost:$r")
+    fwd+=(-L "$bind:$l:localhost:$r")
   done
   load "$name"
   resolve_target
@@ -3257,11 +3566,15 @@ cmd_open() {
     trap - INT TERM HUP
     die "could not forward the port (SSH exit code $rc). Try: $PROG doctor $NAME"
   fi
+  if ((lan)); then
+    ip=$(hostname -I 2>/dev/null | awk '{ print $1 }') || true
+  fi
   for i in "${!specs[@]}"; do
-    l=${locals[i]} r=${specs[i]##*:}
+    l=${locals[i]} r=$((10#${specs[i]##*:}))
     if [[ $l == "$r" ]]; then say "Port $r of $NAME: http://localhost:$l"
     else say "Port $r of $NAME: http://localhost:$l (port $r is taken here)"
     fi
+    ((lan)) && say "  on your network too: http://${ip:-THIS-COMPUTER}:$l"
     ((browser)) && { open_url "http://localhost:$l" || ((i)) || info "No browser opener (xdg-open) found; open the address yourself."; }
   done
   say "Stop with Ctrl-C."
@@ -3272,6 +3585,845 @@ cmd_open() {
   ((keep)) || autostop
   return 0
 }
+
+# ------------------------------------------------------------------ ui
+
+# The terminal UI: a Textual app (UI_PY below) that runs this script.
+cmd_ui() {
+  (($# == 0)) || usage_error "ui: takes no arguments"
+  local f self
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  mkdir -p "$CACHE_DIR" || die "cannot create $CACHE_DIR"
+  f=$CACHE_DIR/ui-$VERSION.py
+  [[ -f $f && $(<"$f") == "$UI_PY" ]] || printf '%s\n' "$UI_PY" >"$f" || die "cannot write $f"
+  export VMCLAUDE_BIN=$self
+  if python3 -c 'from textual.app import App; App.suspend; import textual.widgets' 2>/dev/null; then
+    exec python3 "$f"
+  elif command -v uv >/dev/null; then
+    exec uv run --quiet --no-project --with 'textual>=8,<9' python "$f"
+  fi
+  die "the UI needs Python with Textual: install uv (https://docs.astral.sh/uv/getting-started/installation/), or: pip install --user 'textual>=8'"
+}
+
+UI_PY=$(cat <<'UI_END'
+"""vmclaude ui: a terminal UI for vmclaude. It only runs the vmclaude command
+(VMCLAUDE_BIN) and reads its JSON (list --json, images --json, snapshots
+--json), so everything it does can also be done by hand."""
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import threading
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Input, Label, OptionList,
+                             RichLog, Select, Static)
+from textual.widgets.option_list import Option
+
+VMCLAUDE = os.environ.get("VMCLAUDE_BIN", "vmclaude")
+AGENTS = [("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("aider", "aider")]
+AGENT_NAMES = dict(AGENTS)
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+PORTS_RE = re.compile(r"^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$")
+MEMORY_MB = [1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536]
+IDLE = [("off", 0), ("15 minutes", 15), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120), ("4 hours", 240)]
+
+
+def cli(*args, timeout=120):
+    """Runs vmclaude; returns (exit code, stdout, stderr)."""
+    try:
+        r = subprocess.run([VMCLAUDE, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, "", str(e)
+
+
+def cli_json(*args, default=None):
+    rc, out, _ = cli(*args)
+    if rc != 0:
+        return default
+    try:
+        return json.loads(out)
+    except ValueError:
+        return default
+
+
+def gb(mb):
+    if mb is None:
+        return "-"
+    return f"{mb / 1024:.1f}".rstrip("0").rstrip(".") + " GB"
+
+
+def state_mark(vm):
+    s = vm.get("state")
+    if s is None:
+        return "[dim]-[/] not libvirt"
+    return {"running": "[green]●[/] running", "shut off": "[dim]○[/] off", "paused": "[yellow]●[/] paused",
+            "missing": "[red]![/] missing"}.get(s, f"[yellow]●[/] {s}")
+
+
+def create_args(v):
+    """The "vmclaude create" arguments for the form values v (a dict)."""
+    a = ["create", v["name"], "--image", v["image"], "--memory", str(v["memory"]), "--cpus", str(v["cpus"]),
+         "--disk", str(v["disk"]), "--agents", ",".join(v["agents"]), "--idle", str(v["idle"] or "off")]
+    if v["ports"]:
+        a += ["--ports", v["ports"]]
+    return a
+
+
+# ------------------------------------------------------------------ dialogs
+
+class Confirm(ModalScreen[bool]):
+    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+
+    def __init__(self, text, yes="Yes", danger=False):
+        super().__init__()
+        self.text, self.yes, self.danger = text, yes, danger
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static(self.text)
+            with Horizontal(classes="buttons"):
+                yield Button(self.yes, id="yes", variant="error" if self.danger else "primary")
+                yield Button("Cancel", id="no")
+
+    @on(Button.Pressed)
+    def pressed(self, e):
+        self.dismiss(e.button.id == "yes")
+
+
+class TypeName(ModalScreen[bool]):
+    """Asks to type the VM's name before something that cannot be undone."""
+    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+
+    def __init__(self, text, name):
+        super().__init__()
+        self.text, self.vm = text, name
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static(self.text)
+            yield Input(placeholder=self.vm, id="typed")
+            with Horizontal(classes="buttons"):
+                yield Button("Delete", id="yes", variant="error", disabled=True)
+                yield Button("Cancel", id="no")
+
+    @on(Input.Changed)
+    def changed(self, e):
+        self.query_one("#yes", Button).disabled = e.value != self.vm
+
+    @on(Input.Submitted)
+    def submitted(self, e):
+        if e.value == self.vm:
+            self.dismiss(True)
+
+    @on(Button.Pressed)
+    def pressed(self, e):
+        self.dismiss(e.button.id == "yes")
+
+
+class Pick(ModalScreen):
+    """Choose one of several options; returns its id or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, title, options):
+        super().__init__()
+        self.title_text, self.options = title, options
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static(self.title_text)
+            yield OptionList(*[Option(label, id=key) for key, label in self.options], id="pick")
+
+    @on(OptionList.OptionSelected)
+    def selected(self, e):
+        self.dismiss(e.option.id)
+
+
+class AskText(ModalScreen):
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, text, value="", placeholder="", check=None, extra=None):
+        super().__init__()
+        self.text, self.value, self.placeholder, self.check, self.extra = text, value, placeholder, check, extra
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static(self.text)
+            yield Input(self.value, placeholder=self.placeholder, id="text")
+            yield Static("", id="error", classes="error")
+            for key, label, value in self.extra or []:
+                yield Checkbox(label, value, id=key)
+            with Horizontal(classes="buttons"):
+                yield Button("OK", id="ok", variant="primary")
+                yield Button("Cancel", id="no")
+
+    def result(self):
+        v = self.query_one("#text", Input).value.strip()
+        if self.check and (err := self.check(v)):
+            self.query_one("#error", Static).update(err)
+            return
+        extras = {key: self.query_one(f"#{key}", Checkbox).value for key, _, _ in self.extra or []}
+        self.dismiss((v, extras) if self.extra else v)
+
+    @on(Input.Submitted)
+    def submitted(self):
+        self.result()
+
+    @on(Button.Pressed)
+    def pressed(self, e):
+        if e.button.id == "ok":
+            self.result()
+        else:
+            self.dismiss(None)
+
+
+class Resize(ModalScreen):
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, vm, host):
+        super().__init__()
+        self.vm, self.host = vm, host
+
+    def compose(self):
+        total = self.host.get("memory_mb") or 65536
+        mem = self.vm.get("memory_mb") or 4096
+        sizes = sorted({m for m in MEMORY_MB if m <= total} | {mem})
+        with Vertical(classes="dialog"):
+            yield Static(f"[b]Resources of {self.vm['name']}[/b]\nThis computer: {gb(total)} RAM, "
+                         f"{self.host.get('cpus', '?')} CPUs. The VM has to be off; it is shut down first.")
+            yield Label("RAM")
+            yield Select([(gb(m), m) for m in sizes], value=mem, allow_blank=False, id="memory")
+            yield Label("CPUs")
+            n = self.host.get("cpus") or 8
+            yield Select([(str(c), c) for c in range(1, n + 1)], value=min(self.vm.get("cpus") or 2, n),
+                         allow_blank=False, id="cpus")
+            with Horizontal(classes="buttons"):
+                yield Button("Apply", id="ok", variant="primary")
+                yield Button("Cancel", id="no")
+
+    @on(Button.Pressed)
+    def pressed(self, e):
+        if e.button.id != "ok":
+            self.dismiss(None)
+            return
+        self.dismiss((self.query_one("#memory", Select).value, self.query_one("#cpus", Select).value))
+
+
+# ------------------------------------------------------------------ new VM
+
+class NewVM(Screen):
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("ctrl+s", "create", "Create")]
+
+    def __init__(self, info, names):
+        super().__init__()
+        self.info, self.names = info or {}, names
+
+    def compose(self):
+        host = self.info.get("host", {})
+        images = self.info.get("images", [])
+        total = host.get("memory_mb") or 8192
+        free = host.get("memory_available_mb")
+        cpus = host.get("cpus") or 2
+        yield Header()
+        with VerticalScroll(id="form"):
+            yield Static("[b]New VM[/b]  A Linux VM from an official cloud image, with the AI assistants you "
+                         "choose, ready to use.", classes="intro")
+            if not host.get("libvirt", False) or host.get("missing"):
+                need = ", ".join(host.get("missing") or []) or "libvirt"
+                yield Static(f"[red]Cannot create VMs here yet: missing {need}.[/]\n"
+                             "Debian/Ubuntu: sudo apt install libvirt-daemon-system virtinst xorriso curl",
+                             classes="error")
+            yield Label("Name")
+            yield Input(placeholder="dev", id="name", compact=True)
+            yield Label("System")
+            yield Select([(f"{i['description']}{'  (downloaded)' if i['downloaded'] else ''}", i["name"])
+                          for i in images] or [("Debian 13", "debian13")],
+                         value=images[0]["name"] if images else "debian13", allow_blank=False, id="image",
+                         compact=True)
+            avail = host.get("pool_available_gb")
+            with Horizontal(classes="row"):
+                with Vertical():
+                    yield Label(f"RAM [dim](here: {gb(total)}, free {gb(free)})[/]")
+                    yield Select([(gb(m), m) for m in MEMORY_MB if m <= max(total - 1024, 1024)],
+                                 value=4096 if total >= 6144 else 2048, allow_blank=False, id="memory", compact=True)
+                with Vertical():
+                    yield Label(f"CPUs [dim](here: {cpus})[/]")
+                    yield Select([(str(c), c) for c in range(1, cpus + 1)], value=min(2, cpus), allow_blank=False,
+                                 id="cpus", compact=True)
+                with Vertical():
+                    yield Label("Disk GB" + (f" [dim]({avail} free)[/]" if avail is not None else ""))
+                    yield Input("20", type="integer", id="disk", compact=True)
+            yield Label("AI assistants [dim](the first one checked opens with \"vmclaude NAME\")[/]")
+            with Horizontal(id="agents"):
+                for key, label in AGENTS:
+                    yield Checkbox(label, key == "claude", id=f"agent-{key}", compact=True)
+            with Horizontal(classes="row"):
+                with Vertical():
+                    yield Label("Ports [dim](reach them here while connected)[/]")
+                    yield Input(placeholder="e.g. 3000,5173", id="ports", compact=True)
+                with Vertical():
+                    yield Label("Shut down when unused for")
+                    yield Select(IDLE, value=30, allow_blank=False, id="idle", compact=True)
+            yield Static("", id="error", classes="error")
+            yield Static("", id="command", classes="command")
+            with Horizontal(classes="buttons"):
+                yield Button("Create  (Ctrl-S)", id="create", variant="primary",
+                             disabled=not host.get("libvirt", False) or bool(host.get("missing")))
+                yield Button("Back", id="back")
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one("#name", Input).focus()
+        self.refresh_command()
+
+    def values(self):
+        def val(i):
+            return self.query_one(f"#{i}")
+        return {
+            "name": val("name").value.strip(),
+            "image": val("image").value,
+            "memory": val("memory").value,
+            "cpus": val("cpus").value,
+            "disk": val("disk").value.strip(),
+            "agents": [k for k, _ in AGENTS if self.query_one(f"#agent-{k}", Checkbox).value],
+            "ports": val("ports").value.replace(" ", ""),
+            "idle": val("idle").value,
+        }
+
+    def problem(self, v):
+        if not v["name"]:
+            return "Give the VM a name."
+        if not NAME_RE.match(v["name"]):
+            return "The name may have letters, digits, . _ and - only."
+        if v["name"] in self.names:
+            return f"There is a VM named {v['name']} already."
+        if not v["disk"].isdigit() or not 5 <= int(v["disk"]) <= 4096:
+            return "Disk: a size in GB, at least 5."
+        avail = self.info.get("host", {}).get("pool_available_gb")
+        if avail is not None and int(v["disk"]) > avail:
+            return f"Disk: the libvirt pool has {avail} GB free (the disk grows as it fills, but not beyond that)."
+        if not v["agents"]:
+            return "Choose at least one AI assistant."
+        if v["ports"] and not re.match(r"^[0-9]+(,[0-9]+)*$", v["ports"]):
+            return "Ports: numbers separated by commas, e.g. 3000,5173."
+        if v["ports"] and any(not 1 <= int(p) <= 65535 for p in v["ports"].split(",")):
+            return "Ports go from 1 to 65535."
+        return ""
+
+    def refresh_command(self):
+        v = self.values()
+        v2 = dict(v, name=v["name"] or "NAME", agents=v["agents"] or ["claude"], disk=v["disk"] or "20")
+        self.query_one("#command", Static).update("[dim]The same from a terminal: vmclaude "
+                                                  + shlex.join(create_args(v2)) + "[/]")
+
+    @on(Input.Changed)
+    @on(Select.Changed)
+    @on(Checkbox.Changed)
+    def changed(self):
+        self.query_one("#error", Static).update("")
+        self.refresh_command()
+
+    @on(Button.Pressed, "#back")
+    def back(self):
+        self.app.pop_screen()
+
+    @on(Button.Pressed, "#create")
+    def action_create(self):
+        if self.query_one("#create", Button).disabled:
+            return
+        v = self.values()
+        if err := self.problem(v):
+            self.query_one("#error", Static).update(err)
+            return
+        self.app.switch_screen(Creating(v))
+
+
+class Creating(Screen):
+    """Runs "vmclaude create" and shows what it prints."""
+    BINDINGS = [Binding("escape", "back", "Back")]
+
+    def __init__(self, v):
+        super().__init__()
+        self.v, self.proc, self.rc = v, None, None
+
+    def compose(self):
+        yield Header()
+        yield Static(f"[b]Creating {self.v['name']}[/b]: downloading the image (once), making the VM, then "
+                     "installing tmux and the AI assistants. This takes a few minutes.", id="status")
+        yield RichLog(id="output", wrap=True, markup=False)
+        with Horizontal(classes="buttons"):
+            agent = self.v["agents"][0]
+            yield Button(f"Open {AGENT_NAMES[agent]}", id="open", variant="success", disabled=True)
+            if "claude" in self.v["agents"]:
+                yield Button("Log Claude in", id="login", disabled=True)
+            yield Button("Cancel", id="cancel", variant="error")
+            yield Button("Back", id="back", disabled=True)
+        yield Footer()
+
+    def on_mount(self):
+        self.run_create()
+
+    @work(thread=True)
+    def run_create(self):
+        log = self.query_one("#output", RichLog)
+        args = create_args(self.v)
+        self.app.call_from_thread(log.write, "$ vmclaude " + shlex.join(args))
+        try:
+            self.proc = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, text=True, bufsize=1, start_new_session=True)
+        except OSError as e:
+            self.app.call_from_thread(log.write, str(e))
+            self.app.call_from_thread(self.finished, 1)
+            return
+        for line in self.proc.stdout:
+            self.app.call_from_thread(log.write, line.rstrip("\n").replace("\r", ""))
+        self.app.call_from_thread(self.finished, self.proc.wait())
+
+    def finished(self, rc):
+        self.rc = rc
+        status = self.query_one("#status", Static)
+        if rc == 0:
+            status.update(f"[green]Done.[/] {self.v['name']} is ready.")
+            self.query_one("#open", Button).disabled = False
+            if "claude" in self.v["agents"]:
+                self.query_one("#login", Button).disabled = False
+        else:
+            status.update(f"[red]Creating {self.v['name']} failed[/] (exit code {rc}); see above. If a half-made "
+                          f"VM is left, delete it in the list (d).")
+        self.query_one("#cancel", Button).disabled = True
+        self.query_one("#back", Button).disabled = False
+        self.app.refresh_vms()
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self):
+        if self.proc and self.proc.poll() is None:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+
+    @on(Button.Pressed, "#open")
+    def open_vm(self):
+        self.app.pop_screen()
+        self.app.connect(self.v["name"])
+
+    @on(Button.Pressed, "#login")
+    def login(self):
+        self.app.interactive(["login", self.v["name"]])
+
+    @on(Button.Pressed, "#back")
+    def action_back(self):
+        if self.rc is not None:
+            self.app.pop_screen()
+
+
+# ------------------------------------------------------------------ the main screen
+
+class VMTable(DataTable):
+    BINDINGS = [Binding("enter", "select_cursor", "Open", show=True)]
+
+
+class VmClaudeUI(App):
+    TITLE = "vmclaude"
+    CSS = """
+    #vms { width: 3fr; }
+    #side { width: 2fr; border-left: solid $primary; padding: 0 1; }
+    #log { height: 8; border-top: solid $primary; }
+    .dialog { width: 72; height: auto; max-height: 90%; border: thick $primary; background: $surface; padding: 1 2; }
+    Confirm, TypeName, Pick, AskText, Resize { align: center middle; }
+    .buttons { height: auto; margin-top: 1; }
+    .buttons Button { margin-right: 2; }
+    .error { color: $error; height: auto; }
+    .command { margin-top: 1; height: auto; }
+    .intro { margin-bottom: 1; }
+    #form { padding: 1 2; }
+    #form Label { margin-top: 1; }
+    #agents { height: auto; }
+    #agents Checkbox { margin-right: 3; }
+    .row { height: auto; }
+    .row > Vertical { height: auto; margin-right: 2; }
+    #output { height: 1fr; border: solid $primary; }
+    #status { padding: 1 2; height: auto; }
+    """
+    BINDINGS = [
+        Binding("enter", "open", "Open", show=False),
+        Binding("n", "new", "New VM"),
+        Binding("a", "agent", "Open with…"),
+        Binding("s", "shell", "Shell"),
+        Binding("o", "ports", "Ports"),
+        Binding("t", "toggle", "Start/stop"),
+        Binding("p", "snapshot", "Snapshot"),
+        Binding("u", "undo", "Undo"),
+        Binding("r", "resize", "Resources"),
+        Binding("l", "login", "Log in", show=False),
+        Binding("d", "delete", "Delete", show=False),
+        Binding("g", "refresh", "Refresh", show=False),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.vms, self.info = [], {}
+        self.forwards = {}  # name -> list of (Popen, description)
+        self.busy = set()
+        self.away = False  # running vmclaude in the terminal
+
+    def compose(self):
+        yield Header()
+        with Horizontal():
+            yield VMTable(id="vms", cursor_type="row", zebra_stripes=True)
+            with VerticalScroll(id="side", can_focus=False):
+                yield Static("", id="details")
+        log = RichLog(id="log", wrap=True, markup=True)
+        log.can_focus = False  # the arrow keys are for the list
+        yield log
+        yield Footer()
+
+    def on_mount(self):
+        t = self.query_one("#vms", DataTable)
+        t.add_columns("Name", "State", "RAM", "CPUs", "AI", "Ports")
+        t.focus()
+        self.log_line("[dim]Enter: open the VM's AI assistant · n: new VM · o: ports · t: start/stop · "
+                      "u: undo · d: delete · q: quit[/]")
+        self.load_info()
+        self.refresh_vms()
+        self.set_interval(5, self.refresh_vms)
+
+    # --- data
+    @work(thread=True, exclusive=True, group="info")
+    def load_info(self):
+        info = cli_json("images", "--json", default={})
+        self.call_from_thread(setattr, self, "info", info or {})
+
+    @work(thread=True, exclusive=True, group="list")
+    def refresh_vms(self):
+        if self.away:
+            return
+        vms = cli_json("list", "--json")
+        if vms is not None:
+            self.call_from_thread(self.show_vms, vms)
+
+    def action_refresh(self):
+        self.refresh_vms()
+
+    @on(DataTable.RowSelected)
+    def row_selected(self):
+        self.action_open()
+
+    def show_vms(self, vms):
+        seen = (vms, sorted(self.busy))
+        if seen == getattr(self, "_seen", None):
+            return
+        self._seen = seen
+        self.vms = vms
+        t = self.query_one("#vms", DataTable)
+        current = self.selected_name()
+        t.clear()
+        for vm in vms:
+            agents = vm.get("agents") or [vm.get("agent", "claude")]
+            name = ("* " if vm.get("default") else "  ") + vm["name"]
+            state = "[cyan]◆[/] working" if vm["name"] in self.busy else state_mark(vm)
+            t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"), ", ".join(agents),
+                      ",".join(map(str, vm.get("ports") or [])) or "-", key=vm["name"])
+        if current and current in [v["name"] for v in vms]:
+            t.move_cursor(row=[v["name"] for v in vms].index(current))
+        self.show_details()
+        self.sub_title = f"{len(vms)} VM{'s' * (len(vms) != 1)}" if vms else "no VMs yet: press n"
+
+    def selected(self):
+        t = self.query_one("#vms", DataTable)
+        if not self.vms or t.cursor_row is None or t.cursor_row >= len(self.vms):
+            return None
+        return self.vms[t.cursor_row]
+
+    def selected_name(self):
+        vm = self.selected()
+        return vm["name"] if vm else None
+
+    @on(DataTable.RowHighlighted)
+    def show_details(self):
+        d = self.query_one("#details", Static)
+        vm = self.selected()
+        if not vm:
+            d.update("[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, "
+                     "the AI assistants and the ports you want.\n\nOr add one you have: vmclaude add NAME --host IP")
+            return
+        n = vm["name"]
+        lines = [f"[b]{n}[/b]  {state_mark(vm)}" + ("  [dim](default)[/]" if vm.get("default") else "")]
+        if vm.get("domain"):
+            lines.append(f"libvirt VM {vm['domain']}" + ("" if vm.get("uri") == "qemu:///system" else f" ({vm['uri']})"))
+        else:
+            lines.append(f"{vm['user']}@{vm['host']}" + (f":{vm['port']}" if vm["port"] != 22 else ""))
+        if vm.get("os") == "windows":
+            lines.append("Windows")
+        if vm.get("memory_mb"):
+            lines.append(f"{gb(vm['memory_mb'])} RAM · {vm['cpus']} CPUs · {vm.get('snapshots', 0)} snapshots")
+        agents = vm.get("agents") or []
+        lines.append("")
+        lines.append(f"Opens: [b]{AGENT_NAMES.get(vm['agent'], vm['agent'])}[/b]"
+                     + (f"   installed: {', '.join(agents)}" if agents else ""))
+        ports = vm.get("ports") or []
+        lines.append("Ports: " + (", ".join(map(str, ports)) + " (while connected)" if ports else "none"))
+        for _, desc in self.forwards.get(n, []):
+            lines.append(f"  [green]→[/] {desc}")
+        lines.append("")
+        lines.append(" · ".join([
+            f"idle shutdown {vm['idle']} min" if vm.get("idle") else "no idle shutdown",
+            "autostop " + ("on" if vm.get("autostop") else "off"),
+            "notifications " + ("on" if vm.get("notify") else "off"),
+            "clipboard " + ("on" if vm.get("clipboard") else "off")]))
+        lines.append("")
+        lines.append(f"[dim]From a terminal: vmclaude {n}" + (f" · vmclaude open {n}" if ports else "") + "[/]")
+        d.update("\n".join(lines))
+
+    def log_line(self, text):
+        self.query_one("#log", RichLog).write(text)
+
+    # --- running vmclaude
+    def interactive(self, args):
+        """Runs vmclaude in this terminal (the UI steps aside until it ends)."""
+        self.away = True
+        try:
+            with self.suspend():
+                subprocess.run([VMCLAUDE, *args])
+        finally:
+            self.away = False
+        self.refresh_vms()
+
+    def connect(self, name, agent=None):
+        self.interactive([name, "--hold"] + ([f"--{agent}"] if agent else []))
+
+    @work(thread=True)
+    def background(self, args, done=None, name=None):
+        """Runs vmclaude without a terminal; its output goes to the log."""
+        if name:
+            self.busy.add(name)
+            self.call_from_thread(self.refresh_vms)
+        self.call_from_thread(self.log_line, "[b]$ vmclaude " + shlex.join(args) + "[/b]")
+        rc, out, err = cli(*args, timeout=3600)
+        for line in (out + err).splitlines():
+            if line.strip():
+                self.call_from_thread(self.log_line, line)
+        if rc != 0:
+            self.call_from_thread(self.notify, f"vmclaude {args[0]} failed (exit code {rc})", severity="error")
+        if name:
+            self.busy.discard(name)
+        if done:
+            self.call_from_thread(done, rc)
+        self.call_from_thread(self.refresh_vms)
+
+    def need_vm(self, libvirt=False):
+        vm = self.selected()
+        if not vm:
+            self.notify("No VM selected. Press n to make one.")
+            return None
+        if vm["name"] in self.busy:
+            self.notify(f"{vm['name']} is busy; wait a moment.")
+            return None
+        if libvirt and not vm.get("domain"):
+            self.notify(f"{vm['name']} is not a libvirt VM: vmclaude cannot start, stop or snapshot it.")
+            return None
+        return vm
+
+    # --- actions
+    def action_open(self):
+        if vm := self.need_vm():
+            self.connect(vm["name"])
+
+    def action_agent(self):
+        if not (vm := self.need_vm()):
+            return
+        if vm.get("os") == "windows":
+            self.notify("Only Claude Code runs on Windows VMs.")
+            return
+        installed = vm.get("agents") or []
+        opts = [(k, label + ("" if k in installed or not installed else "   (installs it first)")) for k, label in AGENTS]
+
+        def chosen(agent):
+            if agent:
+                self.connect(vm["name"], agent)
+        self.push_screen(Pick(f"Open which AI assistant on {vm['name']}?", opts), chosen)
+
+    def action_shell(self):
+        if vm := self.need_vm():
+            self.interactive(["shell", vm["name"]])
+
+    def action_login(self):
+        if vm := self.need_vm():
+            self.interactive(["login", vm["name"]])
+
+    def action_new(self):
+        self.push_screen(NewVM(self.info, [v["name"] for v in self.vms]))
+
+    def action_toggle(self):
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+        if vm.get("state") == "running":
+            self.background(["stop", vm["name"]], name=vm["name"])
+        else:
+            self.background(["start", vm["name"]], name=vm["name"])
+
+    def action_snapshot(self):
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+
+        def note(text):
+            if text is not None:
+                self.background(["snapshot", vm["name"]] + ([text] if text else []), name=vm["name"])
+        self.push_screen(AskText(f"Take a snapshot of {vm['name']} now. A note (optional):",
+                                 placeholder="before the big refactor"), note)
+
+    def action_undo(self):
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+        snaps = cli_json("snapshots", vm["name"], "--json", default=[]) or []
+        if not snaps:
+            self.notify(f"No snapshots of {vm['name']} yet. One is taken each time the VM starts.")
+            return
+        opts = [(s["name"], f"{s['time']}  {s['name']}  {'(VM on)' if s['state'] == 'running' else ''}"
+                 f"{('  ' + s['description']) if s['description'] and not s['name'].startswith('auto-') else ''}")
+                for s in reversed(snaps)]
+
+        def chosen(snap):
+            if not snap:
+                return
+
+            def sure(yes):
+                if yes:
+                    self.background(["undo", vm["name"], snap, "--yes"], name=vm["name"])
+            self.push_screen(Confirm(f"Put {vm['name']} back to [b]{snap}[/b]?\nEverything changed in the VM since "
+                                     "then is lost.", yes="Undo", danger=True), sure)
+        self.push_screen(Pick(f"Back to which snapshot of {vm['name']}? (newest first)", opts), chosen)
+
+    def action_resize(self):
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+        host = (self.info or {}).get("host", {})
+
+        def chosen(r):
+            if not r:
+                return
+            mem, cpus = r
+            if mem == vm.get("memory_mb") and cpus == vm.get("cpus"):
+                return
+            self.background(["resize", vm["name"], "--memory", str(mem), "--cpus", str(cpus), "--stop"],
+                            name=vm["name"])
+        self.push_screen(Resize(vm, host), chosen)
+
+    def action_ports(self):
+        if not (vm := self.need_vm()):
+            return
+        n = vm["name"]
+        if self.forwards.get(n):
+            def stop(yes):
+                if yes:
+                    self.stop_forwards(n)
+            descs = "\n".join(d for _, d in self.forwards[n])
+            self.push_screen(Confirm(f"Forwarding now:\n{descs}\n\nStop it?", yes="Stop"), stop)
+            return
+        current = ",".join(map(str, vm.get("ports") or []))
+
+        def check(v):
+            if v and not PORTS_RE.match(v.replace(" ", "")):
+                return "Ports like 3000,5173 (or HERE:VM, e.g. 9000:3000)."
+            return ""
+
+        def chosen(r):
+            if not r:
+                return
+            v, extra = r
+            v = v.replace(" ", "")
+            if extra.get("save") and ":" not in v:
+                self.background(["ports", n, v or "off"])
+            if v and extra.get("now"):
+                self.start_forward(n, v.split(","), extra.get("lan"), extra.get("browser"))
+        self.push_screen(AskText(
+            f"Ports of {n} to reach from this computer (a web server Claude started, for example):",
+            current, "3000,5173", check,
+            extra=[("now", "Forward them now", True), ("browser", "Open them in the browser", True),
+                   ("lan", "Also reachable from other devices on my network", False),
+                   ("save", "Forward them every time I connect", bool(current))]), chosen)
+
+    def start_forward(self, name, ports, lan, browser):
+        args = ["open", name, *ports, "--keep"] + ([] if browser else ["--no-browser"]) + (["--lan"] if lan else [])
+        self.log_line("[b]$ vmclaude " + shlex.join(args) + "[/b]")
+        try:
+            p = subprocess.Popen([VMCLAUDE, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, text=True, bufsize=1, start_new_session=True)
+        except OSError as e:
+            self.notify(str(e), severity="error")
+            return
+        self.forwards.setdefault(name, [])
+
+        def read():
+            for line in p.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                self.call_from_thread(self.log_line, line)
+                m = re.match(r"Port (\d+) of \S+: (http://\S+)", line)
+                if m:
+                    self.call_from_thread(self.add_forward, name, p, f"port {m.group(1)} at {m.group(2)}")
+            rc = p.wait()
+            self.call_from_thread(self.forward_ended, name, p, rc)
+        threading.Thread(target=read, daemon=True).start()
+
+    def add_forward(self, name, p, desc):
+        self.forwards.setdefault(name, []).append((p, desc))
+        self.show_details()
+
+    def forward_ended(self, name, p, rc):
+        had = [f for f in self.forwards.get(name, []) if f[0] is p]
+        self.forwards[name] = [f for f in self.forwards.get(name, []) if f[0] is not p]
+        if not had and rc not in (0, 130, -2):
+            self.notify(f"Forwarding ports of {name} failed; see the log.", severity="error")
+        self.show_details()
+
+    def stop_forwards(self, name=None):
+        for n in [name] if name else list(self.forwards):
+            for p in {id(p): p for p, _ in self.forwards.get(n, [])}.values():
+                if p.poll() is None:
+                    p.send_signal(signal.SIGINT)
+            self.forwards[n] = []
+        self.show_details()
+
+    def action_delete(self):
+        if not (vm := self.need_vm()):
+            return
+        n = vm["name"]
+        if not vm.get("created"):
+            def rm(yes):
+                if yes:
+                    self.background(["rm", n])
+            self.push_screen(Confirm(f"{n} was not made by vmclaude, so only its profile can be removed "
+                                     "(the VM stays as it is). Remove the profile?", yes="Remove"), rm)
+            return
+
+        def sure(yes):
+            if yes:
+                self.stop_forwards(n)
+                self.background(["delete", n, "--yes"], name=n)
+        self.push_screen(TypeName(f"[b]Delete {n}[/b] with its disk and snapshots? This cannot be undone.\n"
+                                  f"Type its name to confirm:", n), sure)
+
+    def action_quit(self):
+        self.stop_forwards()
+        self.exit()
+
+
+def main():
+    VmClaudeUI().run()
+
+
+if __name__ == "__main__":
+    main()
+UI_END
+)
 
 # ------------------------------------------------------------------ mount
 
@@ -3515,7 +4667,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmclaude $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | agent | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;
@@ -3529,4 +4681,6 @@ main() {
   esac
 }
 
-main "$@"
+# On the same line: when the script is replaced while it runs (an update during
+# a long "create"), bash must not read on in the new file.
+main "$@"; exit

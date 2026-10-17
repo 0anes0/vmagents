@@ -9,7 +9,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck zsh openssh-client desktop-file-utils
-          pip install asyncssh
+          pip install asyncssh 'textual>=8,<9'
       - name: shellcheck
         run: shellcheck vmclaude install.sh
       - name: tests
