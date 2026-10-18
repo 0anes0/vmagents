@@ -772,7 +772,7 @@ MIT
 
 ## Türkçe
 
-**vmagents**, yapay zekâ kodlama asistanlarını (Claude Code, Codex, Gemini
+**vmagents**, yapay zeka kodlama asistanlarını (Claude Code, Codex, Gemini
 CLI, OpenCode, aider) tek komutla bir **sanal makinenin içinde** çalıştırır.
 Gerekirse VM'i başlatır, SSH ile bağlanır ve asistanı orada açar: Linux
 VM'lerde tmux içinde (Claude Code **Windows** VM'lerde de). Asistan böylece
