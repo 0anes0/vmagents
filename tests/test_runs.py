@@ -36,7 +36,11 @@ elif a[:1] == ["kill-session"]:
     except (OSError, ValueError):
         sys.exit(1)
 elif a[:1] in (["list-sessions"], ["ls"]):
-    print("\n".join(n for n in sorted(os.listdir(d)) if alive(n)))
+    names = [n for n in sorted(os.listdir(d)) if alive(n)]
+    if not names:  # like tmux: no server, no sessions
+        print("no server running", file=sys.stderr)
+        sys.exit(1)
+    print("\n".join(names))
 '''
 
 # Claude Code -p --output-format stream-json, as far as the formatter cares.

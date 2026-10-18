@@ -143,6 +143,7 @@ class CreateTests(CreateBase):
         seed = vols["box-seed.iso"]["uploaded"]
         self.assertTrue(seed.startswith("LABEL=cidata\n"), seed)
         self.assertIn("== meta-data\ninstance-id: box-", seed)
+        self.assertIn("path: /etc/systemd/networkd.conf.d/50-vmagents.conf", seed)  # copies get their own address
         user_data = seed.split("== user-data\n")[1].split("== ")[0]
         for a, b in [("--memory", "2048"), ("--vcpus", "3"), ("--osinfo", "debian13"),
                      ("--disk", "vol=default/box.qcow2,bus=virtio")]:

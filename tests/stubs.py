@@ -32,6 +32,11 @@ if "-N" in args:
     while True:
         for s in select.select(socks, [], [])[0]:
             c, _ = s.accept(); c.sendall(b"hello from the VM\n"); c.close()
+# A VM's hostname, for "vmagents try": the name in HostKeyAlias=vmagents-NAME.
+if os.environ.get("STUB_SSH_HOSTNAME_FROM_ALIAS") and "cat /etc/hostname" in args[-1]:
+    alias = next(a.split("=", 1)[1] for a in args if a.startswith("HostKeyAlias="))
+    print(alias[len("vmagents-"):])
+    sys.exit(0)
 if os.environ.get("STUB_SSH_OUTPUT") is not None:
     sys.stdout.write(os.environ["STUB_SSH_OUTPUT"])
     sys.exit(0)

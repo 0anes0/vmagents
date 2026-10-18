@@ -40,6 +40,10 @@ elif a[:1] == ["create"]:
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
 elif a[:1] == ["changes"]:
     show("changes.txt")
+elif a[:1] == ["try"] and "--clean" not in a:
+    print("Made 2 copies of dev: dev-t1 dev-t2", flush=True)
+    print("Run 3 on dev-t1: Claude Code works on it, without asking (in tmux session run-3).", flush=True)
+    print("Run 1 on dev-t2: Codex works on it, without asking (in tmux session run-1).", flush=True)
 elif a[:1] == ["project"]:
     print("Sending main of " + a[2] + " to " + a[1] + "...", flush=True)
     sys.exit(0 if "--discard" in a else int(os.environ.get("FAKE_PROJECT_RC", "0")))
@@ -447,6 +451,50 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.click("#ok")
             await self.wait_for(pilot, lambda: len(self.app.terminals("dev")) == 2)
             self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Task", "3 dev · Task"])
+
+    async def test_try_on_copies(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("x")
+            await pilot.pause(0.3)
+            dialog = self.app.screen
+            self.assertEqual(dialog.query_one("#f-count").value, "2")
+            dialog.query_one("#f-count").value = "3"
+            dialog.query_one("#f-memory").value = "4096"
+            dialog.query_one("#f-task").value = "make it faster"
+            dialog.query_one("#f-count").focus()
+            await pilot.press("enter")  # (the OK button is below the fold at this size)
+            await pilot.pause(0.1)
+            self.assertIn("do not fit: 9000 MB are free", str(dialog.query_one("#error").render()))
+            dialog.query_one("#f-count").value = "2"
+            dialog.query_one("#f-memory").value = "2048"
+            dialog.query_one("#agent-codex").value = True
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            self.assertIsInstance(self.app.screen, self.ui.Confirm)  # dev is running: shut it down first?
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: len(self.app.terminals()) == 2)
+            self.assertEqual(self.calls("try"), [["try", "dev", "2", "--memory", "2048", "--agents", "claude,codex",
+                                                  "--stop", "--", "make it faster"]])
+            self.assertEqual(self.tab_labels()[1:], ["2 dev-t1 · Task", "3 dev-t2 · Task"])
+            term = self.app.terminals("dev-t1")[0]
+            await self.wait_for(pilot, lambda: "session: runs dev-t1 3 -f --hold" in self.screen_text(term))
+        # With copies there, x offers to delete them.
+        self.write(list=[VM, dict(VM, name="dev-t1", default=False, try_="dev")])
+        lst = json.loads((self.d / "list.json").read_text())
+        lst[1]["try"] = lst[1].pop("try_")
+        self.write(list=lst)
+        app = self.ui.VmAgentsUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.wait_for(pilot, lambda: app.vms)
+            await pilot.press("x")
+            await pilot.pause(0.3)
+            self.assertIsInstance(app.screen, self.ui.Confirm)
+            await pilot.press("tab", "enter")  # Delete (Cancel has the focus)
+            await self.wait_for(pilot, lambda: ["try", "dev", "--clean"] in self.calls("try"))
+            await pilot.press("j")
+            await pilot.pause(0.3)
+            self.assertIn("A copy of dev", str(app.main.query_one("#details").render()))
 
     async def test_terminal_keys(self):
         k = self.ui.key_bytes

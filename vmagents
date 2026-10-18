@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.15.0
+VERSION=0.16.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -30,7 +30,7 @@ DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
 BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
 STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO TRY CREATED "
 HOLD=0
 AGENTS="claude codex gemini opencode aider"
 
@@ -120,6 +120,8 @@ COMMANDS
   Tasks (an agent works alone, in the background, without asking):
     run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
     runs NAME [ID]       the tasks and their state; with ID its output (-f follows, --stop, --clean)
+    try NAME N "TASK"    N copies of the VM, each doing the task (--agents claude,codex: they take turns)
+    tries NAME           the copies and what they did; try NAME --clean deletes them
 
   Projects (a git repository of this computer, worked on in the VM):
     project NAME [DIR]   send the repository (default: this folder); again: send new commits
@@ -573,6 +575,42 @@ Examples:
   vmagents runs dev
   vmagents runs dev 3 -f
   vmagents runs dev 3 --stop
+EOF
+      ;;
+    try) cat <<EOF
+vmagents try NAME N [--agents LIST] [--memory MB] [--stop] [--] [TASK...]
+vmagents try NAME --clean
+
+Makes N copies of the VM (NAME-t1, NAME-t2, ...) and gives each the same
+task, so you can pick the best result. The copies take seconds: libvirt
+clones the VM's disk, which shares the downloaded base image, so only what
+changed in the VM is copied (its snapshots are not). Each copy gets a new
+name, UUID and MAC address, its own profile and the project's state.
+
+--agents lets different agents take turns (claude,codex,gemini: one each);
+by default all use the VM's agent. Each copy does the task like "vmagents
+run" (alone, without asking) and shuts down when it is done; a notification
+comes for each. The copies run at the same time: N times the VM's memory has
+to be free here (--memory MB gives each less). The VM itself has to be off,
+so its disk holds still: --stop shuts it down first. Without a task the
+copies are simply yours to use.
+
+Then compare ("vmagents tries NAME", "vmagents changes NAME-t2"), take the
+best as a branch ("vmagents take NAME-t2"), and delete them all with
+"vmagents try NAME --clean" (the branches you took stay). Copies work only
+from VMs made with "vmagents create" (libvirt, no UEFI).
+
+Examples:
+  vmagents try dev 3 "make the start page load faster"
+  vmagents try dev 2 --agents claude,codex --memory 2048 -- "fix issue 42"
+  vmagents try dev --clean
+EOF
+      ;;
+    tries) cat <<EOF
+vmagents tries NAME
+
+Lists the copies "vmagents try" made of NAME: their state, agent and, once
+taken or looked at ("vmagents changes NAME-tN"), how much they changed.
 EOF
       ;;
     yolo) cat <<EOF
@@ -1076,8 +1114,15 @@ stop_vm() { # 0|1 (1: pull the plug)
 # Sets FOUND_IP to the first IPv4 address of the domain (not on lo).
 FOUND_IP=
 find_ip() {
-  local src
+  local src net mac
   FOUND_IP=
+  # A VM whose address changed (a new DHCP identity, as copies made by
+  # "vmagents try" get) can still have its old lease: the newest one wins.
+  while read -r net mac; do
+    FOUND_IP=$(vsh net-dhcp-leases "$net" --mac "$mac" 2>/dev/null |
+      awk '$4 == "ipv4" { sub(/\/.*/, "", $5); print $1 " " $2 "\t" $5 }' | sort -r | head -n 1 | cut -f 2) || true
+    [[ -n $FOUND_IP ]] && return 0
+  done < <(vsh domiflist "$C_DOMAIN" 2>/dev/null | awk '$2 == "network" { print $3, $5 }')
   for src in lease agent arp; do
     FOUND_IP=$(vsh domifaddr "$C_DOMAIN" --source "$src" 2>/dev/null |
       awk '$1 != "-" { iface = $1 } $3 == "ipv4" && iface != "lo" { sub(/\/.*/, "", $4); print $4; exit }') || true
@@ -2097,7 +2142,8 @@ list_json() {
     printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
       "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
       "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
-    printf '"project": %s, "yolo": %s, ' "$(json_str "${P[PROJECT]:-}")" "$(json_bool "${P[YOLO]:-off}")"
+    printf '"project": %s, "yolo": %s, "try": %s, ' "$(json_str "${P[PROJECT]:-}")" "$(json_bool "${P[YOLO]:-off}")" \
+      "$(json_str "${P[TRY]:-}")"
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
@@ -2710,7 +2756,7 @@ osinfo_name() { # NAME -> NAME if virt-install knows it, else a generic Linux
   fi
 }
 
-cloud_user_data() { # HOSTNAME USER PUBKEY
+cloud_user_data() { # HOSTNAME USER PUBKEY [copy]
   cat <<EOF
 #cloud-config
 hostname: $1
@@ -2721,9 +2767,48 @@ users:
     lock_passwd: true
     ssh_authorized_keys:
       - $3
-package_update: true
-packages: [tmux, curl]
 EOF
+  if [[ ${4:-} == copy ]]; then
+    # A copy (vmagents try) has its packages already. It needs a machine-id
+    # of its own, and DHCP to tell it apart from the other copies.
+    printf '%s\n' 'bootcmd:' '  - [cloud-init-per, instance, vmagents-copy, sh, -c, "rm -f /etc/machine-id /var/lib/dbus/machine-id; systemd-machine-id-setup >/dev/null 2>&1; mkdir -p /etc/systemd/networkd.conf.d; printf '"'"'[DHCPv4]\\nDUIDType=link-layer\\n[DHCPv6]\\nDUIDType=link-layer\\n'"'"' >/etc/systemd/networkd.conf.d/50-vmagents.conf; systemctl try-restart systemd-networkd; true"]'
+  else
+    printf 'package_update: true\npackages: [tmux, curl]\n'
+    # DHCP by the card's MAC address, not by machine-id: then copies of this
+    # VM (vmagents try) get addresses of their own from the start.
+    printf '%s\n' 'write_files:' '  - path: /etc/systemd/networkd.conf.d/50-vmagents.conf' '    content: |' \
+      '      [DHCPv4]' '      DUIDType=link-layer' '      [DHCPv6]' '      DUIDType=link-layer'
+  fi
+}
+
+iso_tool() {
+  local t
+  for t in xorriso genisoimage mkisofs; do command -v "$t" >/dev/null && { printf '%s' "$t"; return 0; }; done
+  return 1
+}
+
+# Packs the files in DIR (user-data, meta-data, maybe network-config) into a
+# cloud-init NoCloud seed ISO, uploaded as VOLUME into POOL. On failure it
+# returns 1 with the reason in SEED_ERR.
+SEED_ERR=
+upload_seed() { # POOL VOLUME DIR
+  local tool out
+  local -a files=("$3"/*)
+  tool=$(iso_tool) || { SEED_ERR="xorriso not found (Debian/Ubuntu: sudo apt install xorriso; Arch: sudo pacman -S libisoburn)"; return 1; }
+  if [[ $tool == xorriso ]]; then
+    out=$(xorriso -as mkisofs -V cidata -J -r -o "$3.iso" "${files[@]}" 2>&1)
+  else
+    out=$("$tool" -V cidata -J -r -o "$3.iso" "${files[@]}" 2>&1)
+  fi || { SEED_ERR="creating the cloud-init seed failed: $out"; return 1; }
+  vsh vol-delete --pool "$1" "$2" >/dev/null 2>&1 || true
+  if ! out=$(vsh vol-create-as "$1" "$2" "$(stat -c %s "$3.iso")" --format raw 2>&1) ||
+    ! out=$(vsh vol-upload --pool "$1" "$2" "$3.iso" 2>&1); then
+    rm -f "$3.iso"
+    vsh vol-delete --pool "$1" "$2" >/dev/null 2>&1 || true
+    SEED_ERR="libvirt: $out"
+    return 1
+  fi
+  rm -f "$3.iso"
 }
 
 cmd_create() {
@@ -2760,9 +2845,7 @@ cmd_create() {
   fi
   image_info "$image"
   local tool
-  local iso_tool=''
-  for tool in xorriso genisoimage mkisofs; do command -v "$tool" >/dev/null && { iso_tool=$tool; break; }; done
-  [[ -n $iso_tool ]] || die "xorriso not found (Debian/Ubuntu: sudo apt install xorriso; Arch: sudo pacman -S libisoburn)"
+  iso_tool >/dev/null || die "xorriso not found (Debian/Ubuntu: sudo apt install xorriso; Arch: sudo pacman -S libisoburn)"
   for tool in virsh virt-install curl "${IMG_ALGO}sum"; do
     command -v "$tool" >/dev/null ||
       die "$tool not found (Debian/Ubuntu: sudo apt install libvirt-clients virtinst; Arch: sudo pacman -S libvirt virt-install)"
@@ -2806,19 +2889,13 @@ cmd_create() {
   # and the Debian 12 cloud kernel has no driver for it.
   local tmp seed="$name-seed.iso"
   tmp=$(mktemp -d)
-  cloud_user_data "$name" "$user" "$(<"$C_KEY.pub")" >"$tmp/user-data"
-  printf 'instance-id: %s-%s\nlocal-hostname: %s\n' "$name" "$(date +%s)" "$name" >"$tmp/meta-data"
-  if [[ $iso_tool == xorriso ]]; then
-    out=$(xorriso -as mkisofs -V cidata -J -r -o "$tmp/seed.iso" "$tmp/user-data" "$tmp/meta-data" 2>&1)
-  else
-    out=$("$iso_tool" -V cidata -J -r -o "$tmp/seed.iso" "$tmp/user-data" "$tmp/meta-data" 2>&1)
-  fi || { rm -rf "$tmp"; die "creating the cloud-init seed failed: $out"; }
-  vsh vol-delete --pool "$CREATE_POOL" "$seed" >/dev/null 2>&1 || true
-  if ! out=$(vsh vol-create-as "$CREATE_POOL" "$seed" "$(stat -c %s "$tmp/seed.iso")" --format raw 2>&1) ||
-    ! out=$(vsh vol-upload --pool "$CREATE_POOL" "$seed" "$tmp/seed.iso" 2>&1); then
+  mkdir "$tmp/seed"
+  cloud_user_data "$name" "$user" "$(<"$C_KEY.pub")" >"$tmp/seed/user-data"
+  printf 'instance-id: %s-%s\nlocal-hostname: %s\n' "$name" "$(date +%s)" "$name" >"$tmp/seed/meta-data"
+  if ! upload_seed "$CREATE_POOL" "$seed" "$tmp/seed"; then
     rm -rf "$tmp"
     vsh vol-delete --pool "$CREATE_POOL" "$vol" >/dev/null 2>&1 || true
-    die "libvirt: $out"
+    die "$SEED_ERR"
   fi
   rm -rf "$tmp"
   info "Creating VM $name ($image, ${memory} MB, $cpus CPUs, ${disk} GB)"
@@ -4394,16 +4471,21 @@ cmd_run() {
   if ((rc != 0)) || ! [[ $id =~ ^[0-9]+$ ]]; then project_done; die "could not start the run on $NAME (exit code $rc)"; fi
   [[ $agent == claude ]] || note_agent "$agent"
   say "Run $id on $NAME: $(agent_label "$agent") works on it, without asking (in tmux session run-$id)."
+  ((${RUN_STOP_AFTER:-0})) && WAS_OFF=1
   if ((!wait)); then
-    if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v notify-send >/dev/null; then
+    local notify=0
+    [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v notify-send >/dev/null && notify=1
+    # Waits for the end to notify, and to shut down a VM that the run started.
+    if ((notify || WAS_OFF)); then
       self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
       if command -v setsid >/dev/null; then
         setsid -f "$self" __runwait "$NAME" "$id" "$WAS_OFF" </dev/null >/dev/null 2>&1 || true
       else
         nohup "$self" __runwait "$NAME" "$id" "$WAS_OFF" </dev/null >/dev/null 2>&1 &
       fi
-      say "A notification comes when it ends."
     fi
+    ((notify)) && say "A notification comes when it ends."
+    ((WAS_OFF)) && say "$NAME shuts down when it is done (unless something else uses it)."
     say "Follow it: $PROG runs $NAME $id -f    all runs: $PROG runs $NAME"
     [[ -n ${P[PROJECT]:-} ]] && say "Its changes: $PROG changes $NAME"
     return 0
@@ -4456,6 +4538,7 @@ cmd_runs() {
   while (($#)); do
     case $1 in
       -f | --follow) follow=1 ;;
+      --hold) HOLD=1 ;;
       --stop) stop=1 ;;
       --clean) clean=1 ;;
       --json) json=1 ;;
@@ -4488,6 +4571,10 @@ cmd_runs() {
       return 0
     fi
     show_run_log "$id" "$follow" || die "no run $id on $NAME"
+    if ((HOLD)); then
+      printf 'Press Enter to close.' >&2
+      read -r _ || true
+    fi
     return 0
   fi
   ((stop)) && usage_error "runs: --stop needs the run's ID"
@@ -4520,6 +4607,232 @@ cmd_runs() {
     esac
     printf '%-4s %-12s %-13s %-17s %s\n' "$i" "$(agent_label "$a")" "$s" "$(date -d "@${st:-0}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$t"
   done <<<"$out"
+}
+
+# ------------------------------------------------------------------ try: one task, several clones
+
+# Copies of a libvirt VM, made in seconds: each disk is cloned in the pool
+# (vol-clone keeps the shared base image as backing, so only the VM's own
+# changes are copied; its internal snapshots are not). The copies get a new
+# name (NAME-t1, ...), UUID and MAC address, their own profile (TRY=NAME)
+# and the project's state; then each gets the task, with the agents taking
+# turns. They shut down when their task ends.
+
+try_names() { # NAME: the profiles that are tries of NAME
+  local n
+  while IFS= read -r n; do
+    [[ -n $n ]] || continue
+    [[ $(sed -n 's/^TRY=//p' "$(profile_file "$n")" 2>/dev/null) == "$1" ]] && printf '%s\n' "$n"
+  done < <(profile_names)
+  return 0
+}
+
+clone_domain() { # SOURCE CLONE MEMORY_MB(or empty): defines CLONE as a copy of SOURCE's disks and settings
+  local src=$1 dst=$2 mem=$3 xml tmp target path pool vol newvol newpath out
+  local -a from=() to=()
+  xml=$(vsh dumpxml --inactive "$src") || die "libvirt: cannot read VM $src"
+  [[ $xml != *"<nvram"* ]] || die "$src boots with UEFI; try cannot copy its firmware settings yet"
+  while read -r target path; do
+    [[ -n $path && $path == /* ]] || continue
+    pool=$(vsh vol-pool "$path" 2>/dev/null) || die "the disk $path of $src is not in a libvirt pool; cannot copy it"
+    vol=${path##*/}
+    if [[ $vol == "$src"* ]]; then newvol=$dst${vol#"$src"}; else newvol=$dst-$vol; fi
+    if [[ $vol == "$src-seed.iso" ]]; then
+      # A new cloud-init seed: a new instance with its own name. cloud-init
+      # then writes new network settings for the card the copy has (the old
+      # ones name the old card's MAC address) and new SSH host keys. (Its
+      # own network-config would not do: cloud-init's networkd output
+      # ignores name patterns.)
+      [[ -f $C_KEY.pub ]] || die "no $C_KEY.pub for the copy's cloud-init settings"
+      tmp=$(mktemp -d)
+      mkdir "$tmp/seed"
+      cloud_user_data "$dst" "$C_USER" "$(<"$C_KEY.pub")" copy >"$tmp/seed/user-data"
+      printf 'instance-id: %s-%s\nlocal-hostname: %s\n' "$dst" "$(date +%s)" "$dst" >"$tmp/seed/meta-data"
+      upload_seed "$pool" "$newvol" "$tmp/seed" || { rm -rf "$tmp"; die "$SEED_ERR"; }
+      rm -rf "$tmp"
+    else
+      out=$(vsh vol-clone --pool "$pool" "$vol" "$newvol" 2>&1) || die "libvirt: $out"
+    fi
+    newpath=$(vsh vol-path --pool "$pool" "$newvol") || die "libvirt: no path for $newvol"
+    from+=("$path") to+=("$newpath")
+  done < <(vsh domblklist "$src" --details 2>/dev/null | awk '$2 == "disk" || $2 == "cdrom" { print $3, $4 }')
+  tmp=$(mktemp)
+  FROM=$(printf '%s\n' "${from[@]}") TO=$(printf '%s\n' "${to[@]}") NAME_NEW=$dst SRC=$src KIB=$((${mem:-0} * 1024)) awk '
+    BEGIN { n = split(ENVIRON["FROM"], f, "\n"); split(ENVIRON["TO"], t, "\n") }
+    /^ *<uuid>/ || /<mac address=/ { next }
+    !named && /^ *<name>/ { sub(/<name>.*<\/name>/, "<name>" ENVIRON["NAME_NEW"] "</name>"); named = 1 }
+    /<description>/ { sub(/<description>.*<\/description>/, "<description>created by vmagents (try of " ENVIRON["SRC"] ")</description>") }
+    ENVIRON["KIB"] > 0 && /^ *<(memory|currentMemory)[ >]/ { sub(/>[0-9]+</, ">" ENVIRON["KIB"] "<") }
+    /<source file=/ { for (i = 1; i <= n; i++) if ((k = index($0, f[i])) && f[i] != "") {
+        $0 = substr($0, 1, k - 1) t[i] substr($0, k + length(f[i])); break } }
+    { print }
+  ' <<<"$xml" >"$tmp"
+  out=$(vsh define "$tmp" 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
+  rm -f "$tmp"
+  vsh desc "$dst" --config "created by vmagents (try of $src)" >/dev/null 2>&1 || true
+}
+
+# Starts copy NAME and waits until cloud-init has finished its first start
+# there, connected without keeping the host key (cloud-init replaces it) and
+# checking that the address really is this copy's (its hostname).
+wait_copy() { # NAME
+  load "$1"
+  vsh start "$C_DOMAIN" >/dev/null 2>&1 || true
+  build_ssh_opts
+  local deadline=$((SECONDS + BOOT_TIMEOUT + 120)) out tries=0
+  local -a nokeep=(-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR -o BatchMode=yes
+    -o ConnectTimeout=5)
+  while ((SECONDS < deadline)); do
+    ((tries++)) && sleep 3
+    check_still_running
+    find_ip || continue
+    out=$(ssh "${nokeep[@]}" "${SSH_OPTS[@]}" -T -- "$FOUND_IP" \
+      'cloud-init status --wait >/dev/null 2>&1; cat /etc/hostname' </dev/null 2>/dev/null) || continue
+    [[ ${out//[$'\r\n ']/} == "$NAME" ]] || continue
+    # Its address may have changed with the new DHCP identity: once more.
+    find_ip || continue
+    out=$(ssh "${nokeep[@]}" "${SSH_OPTS[@]}" -T -- "$FOUND_IP" 'cat /etc/hostname' </dev/null 2>/dev/null) || continue
+    [[ ${out//[$'\r\n ']/} == "$NAME" ]] || continue
+    if [[ -f $KNOWN_HOSTS ]]; then
+      ssh-keygen -R "vmagents-$NAME" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+      rm -f "$KNOWN_HOSTS.old"
+    fi
+    return 0
+  done
+  return 1
+}
+
+cmd_try() {
+  local name='' count='' agents='' mem='' stop=0 clean=0 i n k task='' avail need src_mem
+  local -a words=() made=() list=() ags=()
+  while (($#)); do
+    case $1 in
+      --agents | --memory)
+        (($# >= 2)) || usage_error "try: $1 needs a value"
+        case $1 in --agents) agents=${2// /} ;; --memory) mem=$2 ;; esac
+        shift ;;
+      --stop) stop=1 ;;
+      --clean) clean=1 ;;
+      --) shift; words+=("$@"); break ;;
+      -*) usage_error "try: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1
+        elif [[ -z $count && $1 =~ ^[0-9]+$ ]]; then count=$1
+        else words+=("$1")
+        fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "try: missing NAME"
+  load "$name"
+  local src=$NAME a
+  if ((clean)); then
+    mapfile -t list < <(try_names "$src")
+    ((${#list[@]})) || { say "$src has no tries."; return 0; }
+    for n in "${list[@]}"; do
+      ( cmd_delete "$n" --yes ) || warn "could not delete $n"
+      [[ -n ${P[PROJECT]:-} ]] && git -C "${P[PROJECT]}" update-ref -d "refs/vmagents/$n/base" 2>/dev/null
+      [[ -n ${P[PROJECT]:-} ]] && git -C "${P[PROJECT]}" update-ref -d "refs/vmagents/$n/work" 2>/dev/null
+      true
+    done
+    say "Deleted the tries of $src (branches you took from them stay)."
+    return 0
+  fi
+  [[ $count =~ ^[1-9]$ ]] || usage_error "try: how many copies, 1 to 9: $PROG try $src 3 \"the task\""
+  [[ -n ${P[TRY]:-} ]] && die "$src is itself a try of ${P[TRY]}; try from ${P[TRY]}"
+  [[ ${P[CREATED]:-} == 1 && -n $C_DOMAIN ]] || die "try copies VMs made with \"$PROG create\" only"
+  [[ -z $mem || $mem =~ ^[1-9][0-9]*$ ]] || die "--memory takes MB, e.g. 2048"
+  task=${words[*]}
+  if [[ -z $task && ! -t 0 ]]; then task=$(cat); fi
+  if [[ -n $agents ]]; then
+    agent_list_ok "$agents" || die "--agents takes a comma-separated list of: $AGENTS"
+  else
+    agents=$C_AGENT
+  fi
+  IFS=, read -r -a ags <<<"$agents"
+  # Memory: the copies run at the same time.
+  src_mem=$(vsh dominfo "$C_DOMAIN" | awk '/^Max memory:/ { printf "%d", $3 / 1024 }')
+  need=$((count * ${mem:-${src_mem:-2048}}))
+  avail=$(awk '/^MemAvailable:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)
+  if ((avail > 0 && need > avail - 1024)); then
+    die "$count copies need ${need} MB of memory; this computer has ${avail} MB free. Fewer copies, or less each: --memory $(( (avail - 1024) / count / 256 * 256 ))"
+  fi
+  case $(domstate) in
+    "shut off") ;;
+    *)
+      ((stop)) || die "$src is running, and its disk changes while it runs. Leave it first, or add --stop to shut it down"
+      info "Shutting $src down first, so its disk holds still."
+      stop_vm 0 || die "could not shut $src down" ;;
+  esac
+  # The copies' names: NAME-t1, NAME-t2, ... (the first free ones).
+  i=1
+  while ((${#made[@]} < count)); do
+    n=$src-t$i
+    i=$((i + 1))
+    profile_exists "$n" && continue
+    vsh dominfo "$n" >/dev/null 2>&1 && continue
+    valid_name "$n" || die "invalid name: $n"
+    info "Copying $src to $n..."
+    clone_domain "$src" "$n" "$mem"
+    local -A copy=()
+    for k in "${!P[@]}"; do copy[$k]=${P[$k]}; done
+    P=()
+    for k in "${!copy[@]}"; do P[$k]=${copy[$k]}; done
+    # The agents take turns.
+    P[DOMAIN]=$n P[TRY]=$src P[AUTOSNAP]=0 P[CREATED]=1 P[AGENT]=${ags[${#made[@]} % ${#ags[@]}]}
+    unset 'P[HOST]'
+    write_profile "$n"
+    # cloud-init makes the copy new SSH host keys: forget any old ones of that name.
+    if [[ -f $KNOWN_HOSTS ]]; then
+      ssh-keygen -R "vmagents-$n" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+      rm -f "$KNOWN_HOSTS.old"
+    fi
+    [[ -n ${P[PROJECT]:-} ]] && git -C "${P[PROJECT]}" update-ref "refs/vmagents/$n/base" "refs/vmagents/$src/base" 2>/dev/null
+    made+=("$n")
+    load "$src"
+  done
+  # One after the other: each first boot makes a new cloud-init instance
+  # (machine-id, DHCP identity, SSH host keys) before the next one asks for
+  # an address.
+  for n in "${made[@]}"; do
+    info "Starting $n (its first start sets it apart from the others)..."
+    wait_copy "$n" || warn "$n did not finish its first start in time; see: virsh -c $C_URI console $n"
+  done
+  load "$src"
+  say "Made ${#made[@]} copies of $src: ${made[*]}"
+  if [[ -z ${task//[[:space:]]/} ]]; then
+    say "No task given: they are yours to use (vmagents ${made[0]}). Delete them all: $PROG try $src --clean"
+    return 0
+  fi
+  for n in "${made[@]}"; do
+    ( RUN_STOP_AFTER=1 cmd_run "$n" -- "$task" ) || warn "could not start the task on $n"
+  done
+  say ""
+  say "Each copy works on the task and shuts down when it is done (a notification comes for each)."
+  say "Compare: $PROG tries $src    one's changes: $PROG changes ${made[0]}    take the best: $PROG take ${made[0]}"
+  say "Delete them all afterwards: $PROG try $src --clean"
+}
+
+cmd_tries() {
+  local name=${1:-} n state run rest out
+  [[ -n $name ]] || usage_error "tries: missing NAME"
+  load "$name"
+  local src=$NAME
+  local -a list=()
+  mapfile -t list < <(try_names "$src")
+  ((${#list[@]})) || { say "$src has no tries. Make some: $PROG try $src 3 \"the task\""; return 0; }
+  printf '%-14s %-10s %-12s %s\n' COPY VM AGENT TASK
+  for n in "${list[@]}"; do
+    read_profile "$n"
+    C_URI=${P[LIBVIRT_URI]:-qemu:///system}
+    state=$(virsh -c "$C_URI" domstate "${P[DOMAIN]}" 2>/dev/null | head -n 1) || state=missing
+    run=''
+    if [[ -n ${P[PROJECT]:-} ]] && git -C "${P[PROJECT]}" rev-parse -q --verify "refs/vmagents/$n/work" >/dev/null 2>&1; then
+      rest=$(git -C "${P[PROJECT]}" diff --shortstat "refs/vmagents/$n/base" "refs/vmagents/$n/work" 2>/dev/null)
+      run=${rest:+changes:$rest}
+    fi
+    printf '%-14s %-10s %-12s %s\n' "$n" "${state:-?}" "$(agent_label "${P[AGENT]:-claude}")" "${run:-(vmagents runs $n; changes: vmagents changes $n)}"
+  done
 }
 
 # ------------------------------------------------------------------ ui
@@ -4604,10 +4917,10 @@ TEXTS = {"tr": {
     "running": "açık", "off": "kapalı", "paused": "duraklatıldı", "missing": "yok", "not libvirt": "libvirt değil",
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
-    "[dim]Enter or l: open · j/k: move · n: new VM · a: task · p: project · c: changes · o: ports · "
-    "t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · "
-    "n: yeni VM · a: görev · p: proje · c: değişiklikler · o: portlar · t: başlat/durdur · u: anlık görüntüler · "
-    "Y: sormadan · L: dil · q: çık[/]",
+    "[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · c: changes · "
+    "o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da l: aç · "
+    "j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · c: değişiklikler · o: portlar · "
+    "t: başlat/durdur · u: anlık görüntüler · Y: sormadan · L: dil · q: çık[/]",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
         "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zeka "
@@ -4687,6 +5000,26 @@ TEXTS = {"tr": {
     "değiştirirler. Bu VM'de kalır ve \"geri al\" (u) onu geri alır. Zaten çalışan bir asistan, yeniden "
     "başlatılana kadar eski modunda kalır.",
     "Yes, yolo": "Evet, sormadan",
+    "Try": "Dene",
+    "A copy of {src} (vmagents try)  [dim](x on {src}: try --clean deletes all)[/]":
+        "{src} kopyası (vmagents try)  [dim]({src} üzerinde x: hepsini siler)[/]",
+    "{n} is a copy; make copies of {src}.": "{n} bir kopya; kopyaları {src} üzerinden al.",
+    "Copies can be made of VMs made with vmagents only.": "Yalnızca vmagents ile kurulmuş VM'lerin kopyası alınır.",
+    "Delete the copies of {n} ({list}) with their disks? Branches you took from them stay.":
+        "{n} kopyaları ({list}) diskleriyle silinsin mi? Onlardan aldığın dallar kalır.",
+    "Copies: 1 to 9.": "Kopya: 1 ile 9 arası.", "Memory: MB for each copy, at least 512.":
+        "Bellek: her kopya için MB, en az 512.",
+    "{c} copies of {m} MB do not fit: {free} MB are free here.": "{m} MB'lık {c} kopya sığmaz: burada {free} MB boş.",
+    "{n} is running; its disk has to hold still while it is copied. Shut it down first?":
+        "{n} açık; kopyalanırken diskinin değişmemesi gerekir. Önce kapatılsın mı?",
+    "Shut down": "Kapat",
+    "[b]Try a task on copies of {n}[/b]\nEach copy does the same task alone, without asking; the agents you check "
+    "take turns. Then compare them (c on each) and take the best (t). They shut down when done.":
+        "[b]{n} kopyalarında bir görev dene[/b]\nHer kopya aynı görevi tek başına, sormadan yapar; işaretlediğin "
+        "asistanlar sırayla görev alır. Sonra karşılaştır (her birinde c) ve en iyisini al (t). İşleri bitince "
+        "kapanırlar.",
+    "Copies": "Kopya", "Memory per copy, MB [dim]({free} MB free here)[/]": "Kopya başına bellek, MB [dim](burada "
+    "{free} MB boş)[/]", "e.g. make the start page load faster": "ör. ana sayfayı hızlandır",
     "Task": "Görev", "Tasks work with Linux VMs only.": "Görevler yalnızca Linux VM'lerinde çalışır.",
     "[b]Which agent[/b] does the task on {n}?": "{n} üzerindeki görevi [b]hangi asistan[/b] yapsın?",
     "[b]Task for {agent} on {n}[/b]\nIt works alone, in {dir}, without asking (it is a VM: undo takes it back). "
@@ -5806,7 +6139,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes", "yolo", "task"}
+                "refresh", "project", "changes", "yolo", "task", "try"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -5870,7 +6203,7 @@ class VmAgentsUI(App):
             more = len(self.pane_ids()) > 1
             return [Binding("enter", "open", T("Open"), show=False),
                     Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell"), show=False),
-                    Binding("a", "task", T("Task")),
+                    Binding("a", "task", T("Task")), Binding("x", "try", T("Try"), show=False),
                     Binding("p", "project", T("Project")), Binding("c", "changes", T("Changes")),
                     Binding("o", "ports", T("Ports")), Binding("t", "toggle", T("Start/stop")),
                     Binding("u", "snapshots", T("Snapshots")), Binding("r", "resize", T("Resources")),
@@ -5931,8 +6264,8 @@ class VmAgentsUI(App):
         t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
         t.focus()
         self._seen = None
-        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · p: project · c: changes · "
-                        "o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]"))
+        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
+                        "c: changes · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -6075,6 +6408,8 @@ class VmAgentsUI(App):
 
     @on(Tabs.TabActivated)
     def tab_activated(self, event):
+        if not self.screen_stack:  # closing
+            return
         if event.tab is not None and self.current_pane() != event.tab.id[4:]:
             self.show(event.tab.id[4:])
 
@@ -6188,6 +6523,8 @@ class VmAgentsUI(App):
                      else T("Ports: none"))
         for _, desc in self.forwards.get(n, []):
             lines.append(f"  [green]→[/] {desc}")
+        if vm.get("try"):
+            lines.append(T("A copy of {src} (vmagents try)  [dim](x on {src}: try --clean deletes all)[/]", src=vm["try"]))
         project = vm.get("project")
         lines.append(T("Project: {p} → {d} on the VM  [dim](c: changes)[/]", p=home_short(project), d=vm.get("dir"))
                      if project else T("Project: none  [dim](p: send a git repository of this computer)[/]"))
@@ -6408,6 +6745,85 @@ class VmAgentsUI(App):
                                  [("task", T("Task"), "", T("e.g. make the failing tests pass"))],
                                  lambda v: "" if v["task"].strip() else T("Write the task.")), chosen_task)
         self.push_screen(Pick(T("[b]Which agent[/b] does the task on {n}?", n=n), options), chosen_agent)
+
+    def action_try(self):
+        """N copies of the VM, each doing the same task (vmagents try)."""
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+        n = vm["name"]
+        if vm.get("try"):
+            self.notify(T("{n} is a copy; make copies of {src}.", n=n, src=vm["try"]))
+            return
+        if not vm.get("created"):
+            self.notify(T("Copies can be made of VMs made with vmagents only."))
+            return
+        copies = [v["name"] for v in self.vms if v.get("try") == n]
+        if copies:
+            def clean(yes):
+                if yes:
+                    self.background(["try", n, "--clean"], name=n)
+            self.push_screen(Confirm(T("Delete the copies of {n} ({list}) with their disks? Branches you took from "
+                                       "them stay.", n=n, list=", ".join(copies)), yes=T("Delete"), danger=True), clean)
+            return
+        host = (self.info or {}).get("host", {})
+        free = host.get("memory_available_mb") or 0
+        mem = vm.get("memory_mb") or 2048
+
+        def check(v):
+            if not v["count"].isdigit() or not 1 <= int(v["count"]) <= 9:
+                return T("Copies: 1 to 9.")
+            if not v["memory"].isdigit() or int(v["memory"]) < 512:
+                return T("Memory: MB for each copy, at least 512.")
+            if free and int(v["count"]) * int(v["memory"]) > free - 1024:
+                return T("{c} copies of {m} MB do not fit: {free} MB are free here.", c=v["count"], m=v["memory"],
+                         free=free)
+            if not v["task"].strip():
+                return T("Write the task.")
+            return ""
+
+        def chosen(r):
+            if not r:
+                return
+            agents = [k for k, _ in AGENTS if r.get(f"agent-{k}")] or [vm.get("agent", "claude")]
+            args = ["try", n, r["count"], "--memory", r["memory"], "--agents", ",".join(agents)]
+
+            def go(stop):
+                if stop is False:
+                    return
+                self.run_try(n, args + (["--stop"] if stop else []) + ["--", r["task"].strip()])
+            if vm.get("state") == "running":
+                self.push_screen(Confirm(T("{n} is running; its disk has to hold still while it is copied. Shut it "
+                                           "down first?", n=n), yes=T("Shut down")), go)
+            else:
+                go(None)
+        default = vm.get("agent", "claude")
+        self.push_screen(Ask(T("[b]Try a task on copies of {n}[/b]\nEach copy does the same task alone, without "
+                               "asking; the agents you check take turns. Then compare them (c on each) and take the "
+                               "best (t). They shut down when done.", n=n),
+                             [("count", T("Copies"), "2", "2"),
+                              ("memory", T("Memory per copy, MB [dim]({free} MB free here)[/]", free=free),
+                               str(min(mem, max(1024, (free - 1024) // 2 // 256 * 256))) if free else str(mem), ""),
+                              ("task", T("Task"), "", T("e.g. make the start page load faster"))], check,
+                             extra=[(f"agent-{k}", label, k == default) for k, label in AGENTS]), chosen)
+
+    @work(thread=True)
+    def run_try(self, name, args):
+        self.busy.add(name)
+        self.call_from_thread(self.refresh_vms)
+        self.call_from_thread(self.log_line, "[b]$ vmagents " + shlex.join(args) + "[/b]")
+        rc, out, err = cli(*args, timeout=3600)
+        for line in (err + out).splitlines():
+            if line.strip() and not line.startswith("Warning: Permanently added"):
+                self.call_from_thread(self.log_line, line)
+        self.busy.discard(name)
+        self.call_from_thread(self.refresh_vms)
+        if rc != 0:
+            self.call_from_thread(self.notify, T("vmagents {cmd} failed (exit code {rc})", cmd="try", rc=rc),
+                                  severity="error")
+        # Follow each copy's task in a tab.
+        for run_id, copy in re.findall(r"^Run (\d+) on (\S+?):", out, re.M):
+            self.call_from_thread(self.open_session, copy, "run",
+                                  [VMAGENTS, "runs", copy, run_id, "-f", "--hold"])
 
     def action_yolo(self):
         if not (vm := self.need_vm()):
@@ -6849,7 +7265,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

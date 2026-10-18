@@ -50,6 +50,7 @@ arayüzünden** yap: `vmagents ui`
 | **Tek komut** | `vmagents` (ya da `vmagents AD`) VM'i başlatır, bağlanır ve asistanı açar. |
 | **Terminal arayüzü** | `vmagents ui`: VM oluştur (sistem, RAM, işlemci, disk, asistanlar, portlar), kabukları ve asistanları sekmelerde aç; anlık görüntüler, portlar, projeler. |
 | **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
+| **Bir görev, birkaç deneme** | `vmagents try dev 3 "görev"`: VM'in saniyeler içinde üç kopyası, her biri görevi yapar (istersen farklı asistanlarla); en iyisini alırsın. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
 | **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
@@ -172,6 +173,7 @@ dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 | `n` | yeni VM |
 | `a` | bir asistana tek başına yapacağı bir görev; sekmede izlenir, bitince işaretlenir |
 | `Y` | sormadan çalışma: asistanlar önce sormadan çalışır (bir kez onay ister), ya da yine sorsunlar |
+| `x` | görevi VM'in kopyalarında dene (her biri bir sekmede izlenir); kopyalar varsa onları sil |
 | `p` / `c` | proje (git deposu) gönder / değişiklikleri sekmede (orada `t`: dal olarak al, `P`: pull request) |
 | `u` | anlık görüntüler: birine dön, ad ve etiketle yenisini al, etiketini değiştir, sil |
 | `o` | portlar: şimdi yönlendir (`o` tekrar: durdur), her bağlantıda, ya da ağındaki cihazlara da |
@@ -229,6 +231,26 @@ olmadığı için görevler her zaman sormadan çalışır. Kapalı bir VM başl
 iş bitince yine kapatılır; görev sürerken otomatik kapanma ve boşta kapanma VM'i
 açık bırakır. Bir [projeyle](#projeler) birlikte `vmagents changes` ve `take`
 sonucu dal olarak geri getirir. Arayüzde `a` görev verir ve onu bir sekmede izler.
+
+## Bir görevi birkaç kez dene
+
+```sh
+vmagents try dev 3 "ana sayfayı hızlandır"                   # 3 kopya, her biri görevi yapar
+vmagents try dev 2 --agents claude,codex -- "42 numaralı hatayı düzelt"   # birinde Claude Code, ötekinde Codex
+vmagents tries dev                     # kopyalar ve neyi değiştirdikleri
+vmagents changes dev-t2                # birine bak
+vmagents take dev-t2                   # en iyisi, projende bir dal olarak
+vmagents try dev --clean               # kopyaları sil (aldığın dallar kalır)
+```
+
+Kopyalar (`dev-t1`, `dev-t2`, ...) saniyeler sürer: libvirt VM'in diskini
+kopyalar; disk indirilen taban imajı paylaştığı için yalnızca VM'de değişenler
+kopyalanır. Her kopya bir kez yeni bir cloud-init örneği olarak açılır; böylece
+kendi adını, makine kimliğini, ağ adresini ve SSH anahtarlarını alır, sonra
+görevi [`vmagents run`](#görevler-ve-sormadan-çalışma) gibi yapar ve bitince
+kapanır. Aynı anda çalıştıkları için bellekleri burada boş olmalı (`--memory MB`
+her birine daha az verir). Kopyalanırken VM'in kendisi kapalı olmalı (`--stop`
+önce kapatır). Kopyalar yalnızca `vmagents create` ile kurulmuş VM'lerden alınır.
 
 ## Projeler
 
@@ -527,6 +549,8 @@ vmagents start AD | stop AD [--force]
 vmagents run AD [--ASİSTAN] [--wait] GÖREV   bir asistana arka planda tek başına yapacağı görev
 vmagents runs AD [NO] [-f|--stop] [--clean] [--json]   görevler; birinin çıktısı
 vmagents yolo AD on|off          asistanlar önce sormadan çalışır (bir seferlik: vmagents AD --yolo)
+vmagents try AD N [--agents LİSTE] [--memory MB] [--stop] GÖREV   N kopya, her biri görevi yapar
+vmagents tries AD | try AD --clean   kopyalar / onları sil
 
 vmagents project AD [KLASÖR]     buradaki bir git deposunu VM'e gönder (--discard, --off)
 vmagents changes AD [--stat]     asistanların orada neyi değiştirdiği

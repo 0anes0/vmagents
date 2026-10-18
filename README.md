@@ -50,6 +50,7 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **One command** | `vmagents` (or `vmagents NAME`) starts the VM, connects and opens the agent. |
 | **Terminal UI** | `vmagents ui`: make VMs (system, RAM, CPUs, disk, agents, ports), open shells and agents in tabs, snapshots, ports, projects. |
 | **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
+| **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
 | **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
@@ -169,6 +170,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `n` | new VM |
 | `a` | a task for an agent, done alone; followed in a tab, marked when it ends |
 | `Y` | yolo: agents act without asking first (asks you once), or ask again |
+| `x` | try a task on copies of the VM (each followed in a tab); with copies there, delete them |
 | `p` / `c` | send a project (a git repository) / its changes, in a tab (`t` there: take as a branch, `P`: pull request) |
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
@@ -227,6 +229,26 @@ that was off is started and shut down again afterwards; while a task runs,
 autostop and the idle shutdown leave the VM on. With a [project](#projects),
 `vmagents changes` and `take` then bring the result back as a branch. In the
 UI, `a` gives a task and follows it in a tab.
+
+## Try a task several times
+
+```sh
+vmagents try dev 3 "make the start page load faster"        # 3 copies, each does the task
+vmagents try dev 2 --agents claude,codex -- "fix issue 42"   # Claude Code in one, Codex in the other
+vmagents tries dev                     # the copies and what they changed
+vmagents changes dev-t2                # look at one
+vmagents take dev-t2                   # the best one, as a branch of your project
+vmagents try dev --clean               # delete the copies (branches you took stay)
+```
+
+The copies (`dev-t1`, `dev-t2`, ...) take seconds: libvirt clones the VM's
+disk, which shares the downloaded base image, so only what changed in the
+VM is copied. Each starts once as a new cloud-init instance, so it gets its
+own name, machine ID, network address and SSH host keys, then does the task
+like [`vmagents run`](#tasks-and-yolo-mode) and shuts down when done. They
+run at the same time, so their memory has to be free here (`--memory MB`
+gives each less). The VM itself has to be off while it is copied (`--stop`
+shuts it down first). Copies work from VMs made with `vmagents create`.
 
 ## Projects
 
@@ -524,6 +546,8 @@ vmagents start NAME | stop NAME [--force]
 vmagents run NAME [--AGENT] [--wait] TASK   a task for an agent, done alone in the background
 vmagents runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
 vmagents yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
+vmagents try NAME N [--agents LIST] [--memory MB] [--stop] TASK   N copies, each doing the task
+vmagents tries NAME | try NAME --clean   the copies / delete them
 
 vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
 vmagents changes NAME [--stat]   what the agents changed in it there
