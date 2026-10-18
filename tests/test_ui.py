@@ -282,9 +282,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         async with self.start() as pilot:
             await self.ready(pilot)
             await pilot.press("s")  # a shell on dev
-            await pilot.pause(0.3)
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
             await pilot.press("f2")  # and Claude Code, shown
-            await pilot.pause(0.3)
+            await self.wait_for(pilot, lambda: len(self.app.terminals("dev")) == 2)
             shell, claude = self.app.terminals("dev")
             import time
             now = time.monotonic()
@@ -320,7 +320,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         async with self.start() as pilot:
             await self.ready(pilot)
             await pilot.press("s")
-            await pilot.pause(0.3)
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
             term = self.app.terminals("dev")[0]
             await self.wait_for(pilot, lambda: "session:" in self.screen_text(term))
             await pilot.pause(0.6)

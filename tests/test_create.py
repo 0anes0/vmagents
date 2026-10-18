@@ -184,9 +184,18 @@ class CreateTests(CreateBase):
 
     def test_turkish_locale(self):
         # In tr_TR "I" is not in [A-Z]: the profile line DOMAIN=... must still parse.
-        if subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.lower().find("tr_tr.utf") < 0:
-            self.skipTest("no tr_TR locale here")
         env = {"LC_ALL": "tr_TR.UTF-8"}
+        if "tr_tr.utf" not in subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.lower():
+            # Not installed: build it here (glibc's localedef needs no root for that).
+            loc = self.sb.tmp / "locale"
+            loc.mkdir()
+            r = subprocess.run(["localedef", "-i", "tr_TR", "-f", "UTF-8", str(loc / "tr_TR.UTF-8")],
+                               capture_output=True, text=True)
+            if r.returncode not in (0, 1) or not (loc / "tr_TR.UTF-8").is_dir():
+                self.skipTest("no tr_TR locale here")
+            env["LOCPATH"] = str(loc)
+        check = subprocess.run(["bash", "-c", "[[ I =~ ^[A-Z]$ ]]"], env=dict(os.environ, **env))
+        self.assertNotEqual(check.returncode, 0, "this locale has I in [A-Z]: the test would prove nothing")
         r = self.create("a", env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
         r = self.sb.run("list", env=env, check=0)
