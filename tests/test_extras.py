@@ -227,6 +227,28 @@ class AgentTests(Base):
         self.assertEqual(run("codex"), "codex k1 go\n")
 
 
+class YoloTests(Base):
+    connect_args = AgentTests.connect_args
+
+    def test_yolo(self):
+        self.assertEqual(self.sb.run("yolo", "vm", check=0).stdout, "off\n")
+        self.assertTrue(self.connect_args()[0]["argv"][-1].endswith(" 'claude' 'vm' 'claude'"))
+        cmd = self.connect_args("--yolo", "--continue")[0]["argv"][-1]  # once
+        self.assertTrue(cmd.endswith(" 'claude' 'vm' 'claude' '--dangerously-skip-permissions' '--continue'"), cmd[-90:])
+        self.assertIn("act without asking first", self.sb.run("yolo", "vm", "on", check=0).stdout)
+        self.assertIn("YOLO=on\n", self.profile())
+        self.assertTrue(json.loads(self.sb.run("list", "--json", check=0).stdout)[0]["yolo"])
+        for agent, flag in (("codex", " '--dangerously-bypass-approvals-and-sandbox'"), ("gemini", " '--yolo'"),
+                            ("aider", " '--yes-always'"), ("opencode", " '--auto'")):
+            cmd = self.connect_args(f"--{agent}")[0]["argv"][-1]
+            self.assertTrue(cmd.endswith(f" '{agent}' 'vm' '{agent}'{flag}"), (agent, cmd[-90:]))
+        self.assertTrue(self.connect_args("--ask")[0]["argv"][-1].endswith(" 'claude' 'vm' 'claude'"))
+        self.sb.run("yolo", "vm", "off", check=0)
+        self.assertIn("YOLO=off\n", self.profile())
+        self.assertEqual(self.sb.run("yolo", "vm", "maybe").returncode, 2)
+        self.assertIn("vmagents yolo NAME", self.sb.run("help", "yolo", check=0).stdout)
+
+
 class WindowsNotifyTests(Base):
     def setUp(self):
         super().setUp()

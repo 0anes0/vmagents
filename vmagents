@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.14.1
+VERSION=0.15.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -30,7 +30,7 @@ DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
 BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
 STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO CREATED "
 HOLD=0
 AGENTS="claude codex gemini opencode aider"
 
@@ -87,6 +87,8 @@ GET STARTED
     vmagents dev --continue                  arguments after the name go to Claude
     vmagents open dev 3000                   a web server on the VM, in your browser here
     vmagents dev --codex                     Codex instead of Claude (also --gemini, --opencode, --aider)
+    vmagents yolo dev on                     agents act without asking first (it is a VM: undo takes it back)
+    vmagents run dev "fix the failing tests" give an agent a task and go; a notification comes when it ends
 
   Work on a project of this computer (a git repository) in the VM:
     vmagents project dev ~/code/app          send it; agents start in it ("vmagents dev")
@@ -115,6 +117,10 @@ COMMANDS
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
     mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
 
+  Tasks (an agent works alone, in the background, without asking):
+    run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
+    runs NAME [ID]       the tasks and their state; with ID its output (-f follows, --stop, --clean)
+
   Projects (a git repository of this computer, worked on in the VM):
     project NAME [DIR]   send the repository (default: this folder); again: send new commits
     changes NAME         what the agents changed since (commits, and what is not committed)
@@ -136,6 +142,7 @@ COMMANDS
     notify NAME on|off      desktop notifications when Claude needs you (default: on)
     clipboard NAME on|off   what you copy in tmux on the VM lands here (default: on)
     agent NAME [AGENT]      what "vmagents NAME" opens: claude, codex, gemini, opencode, aider
+    yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
     desktop NAME         add "Claude Code (NAME)" to your app menu
     edit NAME            open the profile file in your editor
     forget NAME          forget the VM's SSH host key (after reinstalling the VM)
@@ -248,7 +255,7 @@ Example:
 EOF
       ;;
     connect) cat <<EOF
-vmagents connect [--keep] [--hold] [--no-tmux] [--codex|--gemini|--aider|--claude] [NAME] [-- ARGS...]
+vmagents connect [--keep] [--hold] [--no-tmux] [--yolo|--ask] [--codex|--gemini|--opencode|--aider|--claude] [NAME] [-- ARGS...]
 vmagents NAME [CLAUDE_ARGS...]
 vmagents
 
@@ -277,6 +284,8 @@ Options:
                 open that agent instead of Claude, in its own tmux session; it
                 is installed on the VM the first time (see "vmagents help agent")
   --claude      Claude, when "vmagents agent" chose another one
+  --yolo        this time the agent acts without asking first; --ask: it asks
+                (the default comes from "vmagents yolo NAME on|off")
   --no-tmux     run Claude directly, without tmux
   --hold        keep the terminal open after an error (used by app-menu launchers)
   -- ARGS       everything after -- goes to Claude
@@ -524,6 +533,65 @@ Examples:
   vmagents open dev 5173 8080            two ports
   vmagents open dev 9000:3000            the VM's 3000 as localhost:9000
   vmagents open 3000 --no-browser        the default VM; only forward
+EOF
+      ;;
+    run) cat <<EOF
+vmagents run NAME [--claude|--codex|--gemini|--opencode|--aider] [--wait] [--] TASK...
+
+Gives an agent a task on the VM and comes back: the agent works alone, in a
+tmux session of its own (run-ID), so it goes on when this computer
+disconnects or sleeps. Nobody is there to answer its questions, so it acts
+without asking (as with "vmagents yolo"); what it does stays in the VM, and
+"vmagents undo NAME" takes it back. It starts in the VM's folder (DIR, or the
+project's: "vmagents help project"). The task can also come on stdin.
+
+When it ends a desktop notification appears here; with --wait you follow
+its output here instead. A libvirt VM that was off is started, and shut down
+again after the task (unless something else uses it). While a task runs the
+VM counts as used: autostop and the idle shutdown leave it on (for the idle
+shutdown of an older VM, run "vmagents idle NAME MINUTES" again once).
+
+Claude Code runs with -p (its steps are shown one per line), Codex with exec,
+Gemini CLI with -p, OpenCode with run --auto, aider with --message.
+
+Examples:
+  vmagents run dev "fix the failing tests"
+  vmagents run dev --codex --wait -- "add a --verbose flag"
+  vmagents run dev < task.md
+  vmagents changes dev                      what it changed in the project
+EOF
+      ;;
+    runs) cat <<EOF
+vmagents runs NAME [ID] [-f | --stop] [--clean] [--json]
+
+Lists the tasks given with "vmagents run": ID, agent, state (running, done,
+failed, stopped, interrupted), when, and the task. With an ID it shows that
+task's output; -f follows it until it ends. --stop ends a task, --clean
+deletes the ones that ended. The VM has to be running.
+
+Examples:
+  vmagents runs dev
+  vmagents runs dev 3 -f
+  vmagents runs dev 3 --stop
+EOF
+      ;;
+    yolo) cat <<EOF
+vmagents yolo NAME [on|off]
+
+With yolo on, the agents on the VM do what they think is needed without
+asking you first: Claude Code with --dangerously-skip-permissions, Codex with
+--dangerously-bypass-approvals-and-sandbox, Gemini CLI with --yolo, OpenCode
+with --auto, aider with --yes-always. On your own computer that is
+risky; in a VM it is what the VM is for: what they break stays there, and
+"vmagents undo NAME" puts the VM back to the snapshot taken at its start.
+
+Once, without changing the profile: vmagents NAME --yolo (or --ask).
+An agent already running in tmux keeps its mode until it is started again.
+Claude Code asks once, the first time, whether you accept this mode.
+
+Examples:
+  vmagents yolo dev on
+  vmagents dev --yolo --codex
 EOF
       ;;
     project) cat <<EOF
@@ -891,7 +959,7 @@ check_value() { # KEY VALUE
     AGENT) [[ " $AGENTS " == *" $v "* ]] || die "invalid agent: $v (one of: $AGENTS)" ;;
     AGENTS) agent_list_ok "$v" || die "invalid AGENTS: $v (a comma-separated list of: $AGENTS)" ;;
     PORTS) port_list_ok "$v" || die "invalid PORTS: $v (a comma-separated list of ports, e.g. 3000,5173)" ;;
-    AUTOSTOP | NOTIFY | CLIPBOARD) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
+    AUTOSTOP | NOTIFY | CLIPBOARD | YOLO) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
     AUTOSNAP | IDLE) [[ $v =~ ^[0-9]+$ ]] || die "invalid $k: $v (a number)" ;;
   esac
 }
@@ -904,7 +972,7 @@ load() {
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD; do
+  for k in HOST USER PORT DOMAIN SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD YOLO; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -1241,6 +1309,9 @@ in_use() {
     # "busy" left by an interrupted answer (no Stop hook then) expires
     [ -f "$f" ] && [ -z "$(find "$f" -mmin -120 2>/dev/null)" ] && continue
     echo "Claude Code working"; return 0
+  done
+  for f in $(getent passwd | cut -d: -f6 | sort -u | sed 's|$|/.config/vmagents/runs/*/pid|'); do
+    [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null && { echo "vmagents run"; return 0; }
   done
   awk '{ exit !($2 >= 1) }' /proc/loadavg && { echo "load"; return 0; }
   return 1
@@ -2026,7 +2097,7 @@ list_json() {
     printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
       "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
       "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
-    printf '"project": %s, ' "$(json_str "${P[PROJECT]:-}")"
+    printf '"project": %s, "yolo": %s, ' "$(json_str "${P[PROJECT]:-}")" "$(json_bool "${P[YOLO]:-off}")"
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
@@ -2133,12 +2204,26 @@ profile_forwards() {
   return 0
 }
 
+# The options with which an agent acts without asking first: fine in a VM,
+# which snapshots and "vmagents undo" take back.
+yolo_args() { # AGENT
+  case $1 in
+    claude) printf '%s\n' --dangerously-skip-permissions ;;
+    codex) printf '%s\n' --dangerously-bypass-approvals-and-sandbox ;;
+    gemini) printf '%s\n' --yolo ;;
+    opencode) printf '%s\n' --auto ;;
+    aider) printf '%s\n' --yes-always ;;
+  esac
+}
+
 cmd_connect() {
-  local name='' notmux=0 keep=0 agent=''
+  local name='' notmux=0 keep=0 agent='' yolo=''
   local -a cargs=()
   while (($#)); do
     case $1 in
       --hold) HOLD=1; shift ;;
+      --yolo) yolo=on; shift ;;
+      --ask) yolo=off; shift ;;
       --no-tmux) notmux=1; shift ;;
       --keep) keep=1; shift ;;
       # Not --agent: that is Claude's own option.
@@ -2156,6 +2241,11 @@ cmd_connect() {
   load "$name"
   [[ -n $agent ]] && C_AGENT=$agent
   ((notmux)) && C_SESSION=
+  if [[ ${yolo:-${P[YOLO]:-off}} == on ]]; then
+    local -a y=()
+    mapfile -t y < <(yolo_args "$C_AGENT")
+    cargs=("${y[@]}" "${cargs[@]}")
+  fi
   # Each agent has its own tmux session; Claude's keeps its name.
   if [[ $C_AGENT != claude && -n $C_SESSION ]]; then
     if [[ $C_SESSION == claude ]]; then C_SESSION=$C_AGENT; else C_SESSION=$C_SESSION-$C_AGENT; fi
@@ -2304,6 +2394,23 @@ cmd_stop() {
   load "$name"
   [[ -n $C_DOMAIN ]] || die "'$NAME' is not a libvirt VM (no --domain); shut it down yourself, e.g.: $PROG shell $NAME 'sudo poweroff'"
   stop_vm "$force"
+}
+
+cmd_yolo() {
+  (($# >= 1 && $# <= 2)) || usage_error "yolo: give NAME and on or off"
+  load "$1"
+  if (($# == 1)); then say "${P[YOLO]:-off}"; return 0; fi
+  [[ $2 == on || $2 == off ]] || usage_error "yolo: on or off"
+  P[YOLO]=$2
+  write_profile "$NAME"
+  if [[ $2 == on ]]; then
+    say "Agents on $NAME act without asking first (Claude Code --dangerously-skip-permissions, Codex"
+    say "--dangerously-bypass-approvals-and-sandbox, Gemini CLI --yolo, OpenCode --auto, aider --yes-always)."
+    say "What they break stays in the VM: $PROG undo $NAME takes it back."
+    say "An agent already running in tmux keeps its mode until it is started again (quit it first)."
+  else
+    say "Agents on $NAME ask before they act again."
+  fi
 }
 
 cmd_agent() {
@@ -4067,6 +4174,354 @@ cmd_take() {
   fi
 }
 
+# ------------------------------------------------------------------ runs: tasks without you
+
+# A task for an agent, run on the VM without a terminal: in a tmux session
+# of its own (run-ID), so it goes on when this computer disconnects, and
+# with the options that let it act without asking (yolo_args: nobody is
+# there to answer). Its files on the VM, in ~/.config/vmagents/runs/ID/:
+# task, agent, dir, started, log, pid (while it runs), rc and ended.
+
+# Runs in the tmux session. $1 the run's folder, $2 the launcher
+# (CLAUDE_ENV_SH), then what the launcher takes.
+# shellcheck disable=SC2016
+RUNNER_SH='d=$1; e=$2; shift 2
+echo $$ >"$d/pid"
+sh -c "$e" vmagents "$@" >"$d/log" 2>&1 </dev/null
+echo $? >"$d/rc"
+date +%s >"$d/ended"
+rm -f "$d/pid"
+'
+
+# Starts a run; the task comes on stdin. $1 folder, $2 agent, then its
+# options (the task is added last). Prints the run's ID. Exit 120: the agent
+# is not installed; 3: no tmux.
+# shellcheck disable=SC2016
+RUN_START_SH=$REMOTE_ENV"CLAUDE_ENV_SH=$(sq "$CLAUDE_ENV_SH")
+RUNNER_SH=$(sq "$RUNNER_SH")
+VMAGENTS_HOOK=$(sq "$HOOK_SH")
+VMAGENTS_SETTINGS=$(sq "$CLAUDE_SETTINGS")"'
+h=$HOME/.config/vmagents
+if mkdir -p "$h" 2>/dev/null; then
+  [ "$(cat "$h/hook.sh" 2>/dev/null)" = "$VMAGENTS_HOOK" ] || printf "%s\n" "$VMAGENTS_HOOK" >"$h/hook.sh"
+  [ "$(cat "$h/claude-settings.json" 2>/dev/null)" = "$VMAGENTS_SETTINGS" ] || printf "%s\n" "$VMAGENTS_SETTINGS" >"$h/claude-settings.json"
+fi
+d=$1; a=$2; shift 2
+cd_dir "$d" || { echo "vmagents: cannot use directory $d on the VM" >&2; exit 1; }
+c=$(command -v "$a") || exit 120
+command -v tmux >/dev/null 2>&1 || { echo "vmagents: runs need tmux on the VM (vmagents setup installs it)" >&2; exit 3; }
+r=$h/runs
+mkdir -p "$r" || exit 1
+i=1
+while ! mkdir "$r/$i" 2>/dev/null; do i=$((i + 1)); [ "$i" -lt 100000 ] || exit 1; done
+cat >"$r/$i/task"
+printf "%s\n" "$a" >"$r/$i/agent"; date +%s >"$r/$i/started"; pwd >"$r/$i/dir"
+tmux new-session -d -s "run-$i" -c "$PWD" sh -c "$RUNNER_SH" vmagents "$r/$i" "$CLAUDE_ENV_SH" \
+  "$h/$a-env" "$c" "$@" "$(cat "$r/$i/task")" || exit 1
+echo "$i"
+'
+
+# One line per run: ID, agent, state (running, lost or the exit code),
+# started, ended (epoch seconds), the task's first line; separated by \037
+# (not tabs: bash's read would merge empty fields).
+# shellcheck disable=SC2016
+RUN_LIST_SH='r=$HOME/.config/vmagents/runs
+[ -d "$r" ] || exit 0
+for d in "$r"/*; do
+  i=${d##*/}
+  case $i in "" | *[!0-9]*) continue ;; esac
+  if [ -f "$d/rc" ]; then s=$(cat "$d/rc")
+  elif [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then s=running
+  else s=lost
+  fi
+  printf "%s\037%s\037%s\037%s\037%s\037%s\n" "$i" "$(cat "$d/agent" 2>/dev/null)" "$s" "$(cat "$d/started" 2>/dev/null)" \
+    "$(cat "$d/ended" 2>/dev/null)" "$(head -n 1 "$d/task" 2>/dev/null | cut -c1-200)"
+done | sort -n
+'
+
+# $1 ID, $2 1: follow until it ends. The agent first, then the log.
+# shellcheck disable=SC2016
+RUN_LOG_SH='d=$HOME/.config/vmagents/runs/$1
+[ -d "$d" ] || exit 4
+cat "$d/agent" 2>/dev/null || echo unknown
+running() { [ ! -f "$d/rc" ] && [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; }
+if [ "$2" = 1 ] && running; then
+  tail -n +1 -F "$d/log" 2>/dev/null &
+  t=$!
+  while running; do sleep 1; done
+  sleep 1
+  kill "$t" 2>/dev/null
+else
+  cat "$d/log" 2>/dev/null
+fi
+if [ -f "$d/rc" ]; then echo "-- vmagents: the run ended, exit code $(cat "$d/rc")"
+elif ! running; then echo "-- vmagents: the run was interrupted (the VM restarted?)"
+fi
+'
+
+# $1 ID: running, done RC, lost or none.
+# shellcheck disable=SC2016
+RUN_STATE_SH='d=$HOME/.config/vmagents/runs/$1
+if [ ! -d "$d" ]; then echo none
+elif [ -f "$d/rc" ]; then echo "done $(cat "$d/rc")"
+elif [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then echo running
+else echo lost
+fi
+'
+
+# $1 ID: stops a run.
+# shellcheck disable=SC2016
+RUN_STOP_SH='d=$HOME/.config/vmagents/runs/$1
+[ -d "$d" ] || exit 4
+tmux kill-session -t "run-$1" 2>/dev/null
+[ -f "$d/pid" ] && kill "$(cat "$d/pid")" 2>/dev/null
+[ -f "$d/rc" ] || { echo 143 >"$d/rc"; date +%s >"$d/ended"; }
+rm -f "$d/pid"
+'
+
+# Deletes the runs that ended.
+# shellcheck disable=SC2016
+RUN_CLEAN_SH='r=$HOME/.config/vmagents/runs
+n=0
+for d in "$r"/*; do
+  [ -f "$d/rc" ] || continue
+  rm -rf "$d" && n=$((n + 1))
+done
+echo "$n"
+'
+
+# Claude Code's stream-json, readable: its text, and a line per tool it uses.
+RUN_FORMAT_PY='import json, sys
+def short(v, n=110):
+    v = " ".join(str(v).split())
+    return v if len(v) <= n else v[:n - 1] + "…"
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    try:
+        e = json.loads(line)
+    except ValueError:
+        print(line, flush=True)
+        continue
+    if not isinstance(e, dict):
+        continue
+    t = e.get("type")
+    if t == "assistant":
+        for c in (e.get("message") or {}).get("content") or []:
+            if c.get("type") == "text" and c.get("text", "").strip():
+                print(c["text"].strip() + "\n", flush=True)
+            elif c.get("type") == "tool_use":
+                i = c.get("input") or {}
+                arg = i.get("command") or i.get("file_path") or i.get("pattern") or i.get("url") or \
+                    i.get("description") or ""
+                print("* %s(%s)" % (c.get("name"), short(arg)), flush=True)
+    elif t == "result":
+        cost = e.get("total_cost_usd")
+        print("-- %s: %s turns, %ss%s" % ("failed" if e.get("is_error") else "finished", e.get("num_turns", "?"),
+              (e.get("duration_ms") or 0) // 1000, ", $%.2f" % cost if cost else ""), flush=True)
+'
+
+# The agent's options for a run (its task comes last).
+run_args() { # AGENT
+  case $1 in
+    claude) printf '%s\n' -p --output-format stream-json --verbose --dangerously-skip-permissions ;;
+    codex) printf '%s\n' exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox ;;
+    gemini) printf '%s\n' --yolo -p ;;
+    opencode) printf '%s\n' run --auto ;;
+    aider) printf '%s\n' --yes-always --no-pretty --message ;;
+  esac
+}
+
+agent_label() { # AGENT
+  case $1 in
+    claude) printf 'Claude Code' ;; codex) printf 'Codex' ;; gemini) printf 'Gemini CLI' ;;
+    opencode) printf 'OpenCode' ;; *) printf '%s' "$1" ;;
+  esac
+}
+
+notify_here() { # TITLE BODY
+  [[ ${P[NOTIFY]:-on} == on ]] || return 0
+  notify-send -a vmagents "$1" "$2" 2>/dev/null || true
+}
+
+show_run_log() { # ID FOLLOW(0|1)
+  local cmd
+  cmd=$(remote_cmd "$RUN_LOG_SH" "$1" "$2")
+  run_ssh -T -- "$TARGET" "$cmd" </dev/null | {
+    local agent
+    IFS= read -r agent || exit 4
+    if [[ $agent == claude ]] && command -v python3 >/dev/null; then python3 -u -c "$RUN_FORMAT_PY"; else cat; fi
+  }
+}
+
+run_state() { # ID: running, done RC, lost, none (or empty when the VM cannot be asked)
+  run_ssh -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$RUN_STATE_SH" "$1")" </dev/null 2>/dev/null || true
+}
+
+cmd_run() {
+  local name='' agent='' wait=0 rc=0 id state self task=''
+  local -a words=() args=()
+  while (($#)); do
+    case $1 in
+      --claude | --codex | --gemini | --opencode | --aider) agent=${1#--} ;;
+      --wait) wait=1 ;;
+      --hold) HOLD=1 ;;
+      --) shift; words+=("$@"); break ;;
+      -*) usage_error "run: unknown option $1 (the task after --, e.g. $PROG run dev -- \"$1 ...\")" ;;
+      *) if [[ -z $name ]]; then name=$1; else words+=("$1"); fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "run: missing NAME"
+  task=${words[*]}
+  if [[ -z $task && ! -t 0 ]]; then task=$(cat); fi
+  [[ -n ${task//[[:space:]]/} ]] || usage_error "run: give the task, e.g. $PROG run $name \"fix the failing tests\""
+  load "$name"
+  agent=${agent:-$C_AGENT}
+  [[ -n $C_SESSION ]] || die "runs need tmux on the VM; $NAME has no tmux session set (SESSION=)"
+  mapfile -t args < <(run_args "$agent")
+  project_connect
+  local cmd
+  cmd=$(remote_cmd "$RUN_START_SH" "$C_DIR" "$agent" "${args[@]}")
+  id=$(printf '%s\n' "$task" | run_ssh -T -- "$TARGET" "$cmd") || rc=$?
+  if ((rc == 120)); then
+    info "$agent is not installed on the VM yet; installing it."
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$agent")" </dev/null ||
+      { project_done; die "installing $agent on the VM failed"; }
+    note_agent "$agent"
+    rc=0
+    id=$(printf '%s\n' "$task" | run_ssh -T -- "$TARGET" "$cmd") || rc=$?
+  fi
+  if ((rc != 0)) || ! [[ $id =~ ^[0-9]+$ ]]; then project_done; die "could not start the run on $NAME (exit code $rc)"; fi
+  [[ $agent == claude ]] || note_agent "$agent"
+  say "Run $id on $NAME: $(agent_label "$agent") works on it, without asking (in tmux session run-$id)."
+  if ((!wait)); then
+    if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v notify-send >/dev/null; then
+      self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+      if command -v setsid >/dev/null; then
+        setsid -f "$self" __runwait "$NAME" "$id" "$WAS_OFF" </dev/null >/dev/null 2>&1 || true
+      else
+        nohup "$self" __runwait "$NAME" "$id" "$WAS_OFF" </dev/null >/dev/null 2>&1 &
+      fi
+      say "A notification comes when it ends."
+    fi
+    say "Follow it: $PROG runs $NAME $id -f    all runs: $PROG runs $NAME"
+    [[ -n ${P[PROJECT]:-} ]] && say "Its changes: $PROG changes $NAME"
+    return 0
+  fi
+  show_run_log "$id" 1 || true
+  state=$(run_state "$id")
+  if [[ $state == "done 0" ]]; then
+    notify_here "vmagents: $NAME" "Run $id finished: $task"
+  else
+    notify_here "vmagents: $NAME" "Run $id ended (${state:-unknown}): $task"
+  fi
+  [[ -n ${P[PROJECT]:-} ]] && say "Its changes: $PROG changes $NAME    as a branch here: $PROG take $NAME"
+  project_done
+  if ((HOLD)); then
+    printf 'Press Enter to close.' >&2
+    read -r _ || true
+  fi
+  [[ $state == "done 0" ]]
+}
+
+# Waits in the background for run $2 on $1 to end, then notifies; shuts
+# the VM down again when the run had to start it ($3 = 1) and nothing else
+# uses it.
+cmd___runwait() {
+  load "$1"
+  local id=$2 state fails=0 task
+  resolve_target >/dev/null 2>&1 || return 0
+  build_ssh_opts
+  while :; do
+    sleep "${VMAGENTS_WATCH_INTERVAL:-15}"
+    if [[ -n $C_DOMAIN && $(domstate) != running ]]; then return 0; fi
+    state=$(run_state "$id")
+    case $state in
+      running) fails=0; continue ;;
+      "") ((++fails < 20)) || return 0; continue ;;
+    esac
+    break
+  done
+  task=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "head -n 1 .config/vmagents/runs/$id/task" </dev/null 2>/dev/null) || task=''
+  if [[ $state == "done 0" ]]; then
+    notify_here "vmagents: $NAME" "Run $id finished: $task"
+  else
+    notify_here "vmagents: $NAME" "Run $id ended (${state#done }): $task"
+  fi
+  if [[ ${3:-0} == 1 ]]; then autostop >/dev/null 2>&1 || true; fi
+}
+
+cmd_runs() {
+  local name='' id='' follow=0 stop=0 clean=0 json=0 line i a s st en t sep=''
+  while (($#)); do
+    case $1 in
+      -f | --follow) follow=1 ;;
+      --stop) stop=1 ;;
+      --clean) clean=1 ;;
+      --json) json=1 ;;
+      -*) usage_error "runs: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1
+        elif [[ -z $id ]]; then [[ $1 =~ ^[0-9]+$ ]] || usage_error "runs: not a run ID: $1"; id=$1
+        else usage_error "runs: too many arguments"
+        fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "runs: missing NAME"
+  load "$name"
+  if [[ -n $C_DOMAIN && $(domstate 2>/dev/null) != running ]]; then
+    ((json)) && { echo '[]'; return 0; }
+    die "$NAME is off; its runs are on the VM (start it: $PROG start $NAME)"
+  fi
+  resolve_target
+  build_ssh_opts
+  [[ $C_OS != windows ]] || die "runs work with Linux VMs only"
+  if ((clean)); then
+    say "Deleted $(run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_CLEAN_SH")" </dev/null) run(s) that ended."
+    return 0
+  fi
+  if [[ -n $id ]]; then
+    if ((stop)); then
+      run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_STOP_SH" "$id")" </dev/null || die "no run $id on $NAME"
+      say "Run $id on $NAME stopped."
+      return 0
+    fi
+    show_run_log "$id" "$follow" || die "no run $id on $NAME"
+    return 0
+  fi
+  ((stop)) && usage_error "runs: --stop needs the run's ID"
+  local out
+  out=$(run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_LIST_SH")" </dev/null) || die "could not list the runs of $NAME"
+  if ((json)); then
+    printf '['
+    while IFS=$'\037' read -r i a s st en t; do
+      [[ $i =~ ^[0-9]+$ ]] || continue
+      printf '%s\n {"id": %d, "agent": %s, "state": %s, "started": %s, "ended": %s, "task": %s}' "$sep" "$i" \
+        "$(json_str "$a")" "$(json_str "$s")" "${st:-null}" "${en:-null}" "$(json_str "$t")"
+      sep=,
+    done <<<"$out"
+    printf '\n]\n'
+    return 0
+  fi
+  if [[ -z $out ]]; then
+    say "No runs on $NAME yet. Start one: $PROG run $NAME \"the task\""
+    return 0
+  fi
+  printf '%-4s %-12s %-13s %-17s %s\n' ID AGENT STATE STARTED TASK
+  while IFS=$'\037' read -r i a s st en t; do
+    [[ $i =~ ^[0-9]+$ ]] || continue
+    case $s in
+      running) s="running" ;;
+      lost) s="interrupted" ;;
+      0) s="done" ;;
+      143) s="stopped" ;;
+      *) s="failed ($s)" ;;
+    esac
+    printf '%-4s %-12s %-13s %-17s %s\n' "$i" "$(agent_label "$a")" "$s" "$(date -d "@${st:-0}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$t"
+  done <<<"$out"
+}
+
 # ------------------------------------------------------------------ ui
 
 # The terminal UI: a Textual app (UI_PY below) that runs this script.
@@ -4149,12 +4604,13 @@ TEXTS = {"tr": {
     "running": "açık", "off": "kapalı", "paused": "duraklatıldı", "missing": "yok", "not libvirt": "libvirt değil",
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
-    "[dim]Enter or l: open · j/k: move · n: new VM · p: project · c: changes · o: ports · t: start/stop · "
-    "u: snapshots · L: language · q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · p: proje · "
-    "c: değişiklikler · o: portlar · t: başlat/durdur · u: anlık görüntüler · L: dil · q: çık[/]",
+    "[dim]Enter or l: open · j/k: move · n: new VM · a: task · p: project · c: changes · o: ports · "
+    "t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · "
+    "n: yeni VM · a: görev · p: proje · c: değişiklikler · o: portlar · t: başlat/durdur · u: anlık görüntüler · "
+    "Y: sormadan · L: dil · q: çık[/]",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
-        "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zekâ "
+        "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zeka "
         "yardımcılarını ve portları seç.\n\nYa da var olan birini ekle: vmagents add AD --host IP",
     "libvirt VM {d}": "libvirt VM'i {d}", "{ram} RAM · {cpus} CPUs · {snaps} snapshots":
         "{ram} RAM · {cpus} CPU · {snaps} anlık görüntü",
@@ -4220,6 +4676,24 @@ TEXTS = {"tr": {
     "Project [dim](a git repository of this computer, to work on in the VM; optional)[/]":
         "Proje [dim](bu bilgisayardaki, VM'de üzerinde çalışılacak bir git deposu; isteğe bağlı)[/]",
     "Project: {p} is not a git repository.": "Proje: {p} bir git deposu değil.",
+    "Yolo": "Sormadan",
+    "Agents: [b #ffaf00]act without asking[/] (yolo)  [dim](Y: ask first)[/]":
+        "Asistanlar: [b #ffaf00]sormadan çalışır[/] (yolo)  [dim](Y: önce sorsunlar)[/]",
+    "Agents: ask before acting  [dim](Y: let them act without asking)[/]":
+        "Asistanlar: yapmadan önce sorar  [dim](Y: sormadan çalışsınlar)[/]",
+    "Let the agents on {n} act without asking first? They run commands and change files on the VM freely. That "
+    "stays in the VM, and \"undo\" (u) takes it back. An agent already running keeps its mode until it is started "
+    "again.": "{n} üzerindeki asistanlar sormadan çalışsın mı? VM'de komut çalıştırır, dosyaları serbestçe "
+    "değiştirirler. Bu VM'de kalır ve \"geri al\" (u) onu geri alır. Zaten çalışan bir asistan, yeniden "
+    "başlatılana kadar eski modunda kalır.",
+    "Yes, yolo": "Evet, sormadan",
+    "Task": "Görev", "Tasks work with Linux VMs only.": "Görevler yalnızca Linux VM'lerinde çalışır.",
+    "[b]Which agent[/b] does the task on {n}?": "{n} üzerindeki görevi [b]hangi asistan[/b] yapsın?",
+    "[b]Task for {agent} on {n}[/b]\nIt works alone, in {dir}, without asking (it is a VM: undo takes it back). "
+    "Follow it in a tab; a dot marks the tab when it ends.": "[b]{n} üzerinde {agent} için görev[/b]\n{dir} içinde "
+    "tek başına, sormadan çalışır (bu bir VM: geri al onu geri alır). Bir sekmede izlersin; bitince sekmede bir "
+    "nokta çıkar.",
+    "e.g. make the failing tests pass": "ör. başarısız testleri düzelt", "Write the task.": "Görevi yaz.",
     "Only Claude Code runs on Windows VMs.": "Windows VM'lerinde yalnızca Claude Code çalışır.",
     "{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the VM).":
         "{count} terminal açık. Çıkınca kapanırlar (tmux içindeki yardımcılar VM'de çalışmaya devam eder).",
@@ -4266,7 +4740,7 @@ TEXTS = {"tr": {
     # new VM
     "Create": "Oluştur", "Create  (Ctrl-S)": "Oluştur  (Ctrl-S)",
     "[b]New VM[/b]  A Linux VM from an official cloud image, with the AI assistants you choose, ready to use.":
-        "[b]Yeni VM[/b]  Resmî bir bulut imajından, seçtiğin yapay zekâ yardımcılarıyla kullanıma hazır bir Linux VM.",
+        "[b]Yeni VM[/b]  Resmî bir bulut imajından, seçtiğin yapay zeka yardımcılarıyla kullanıma hazır bir Linux VM.",
     "[red]Cannot create VMs here yet: missing {need}.[/]\nDebian/Ubuntu: sudo apt install libvirt-daemon-system "
     "virtinst xorriso curl\nArch: sudo pacman -S libvirt virt-install libisoburn dnsmasq qemu-desktop curl":
         "[red]Burada henüz VM oluşturulamıyor: {need} eksik.[/]\nDebian/Ubuntu: sudo apt "
@@ -4276,7 +4750,7 @@ TEXTS = {"tr": {
         "RAM [dim](burada: {total}, boş {free})[/]", "CPUs [dim](here: {n})[/]": "CPU [dim](burada: {n})[/]",
     "Disk GB": "Disk GB", " [dim]({n} free)[/]": " [dim]({n} boş)[/]",
     "AI assistants [dim](the first one checked opens with \"vmagents NAME\")[/]":
-        "Yapay zekâ yardımcıları [dim](işaretli ilki \"vmagents AD\" ile açılır)[/]",
+        "Yapay zeka yardımcıları [dim](işaretli ilki \"vmagents AD\" ile açılır)[/]",
     "Ports [dim](reach them here while connected)[/]": "Portlar [dim](bağlıyken buradan erişilir)[/]",
     "e.g. 3000,5173": "ör. 3000,5173", "Shut down when unused for": "Kullanılmazsa kapanma süresi",
     "15 minutes": "15 dakika", "30 minutes": "30 dakika", "1 hour": "1 saat", "2 hours": "2 saat",
@@ -4287,13 +4761,13 @@ TEXTS = {"tr": {
     "Disk: a size in GB, at least 5.": "Disk: GB cinsinden, en az 5.",
     "Disk: the libvirt pool has {n} GB free (the disk grows as it fills, but not beyond that).":
         "Disk: libvirt havuzunda {n} GB boş yer var (disk doldukça büyür ama bundan öteye geçemez).",
-    "Choose at least one AI assistant.": "En az bir yapay zekâ yardımcısı seç.",
+    "Choose at least one AI assistant.": "En az bir yapay zeka yardımcısı seç.",
     "Ports: numbers separated by commas, e.g. 3000,5173.": "Portlar: virgülle ayrılmış sayılar, ör. 3000,5173.",
     "Ports go from 1 to 65535.": "Portlar 1 ile 65535 arasında olur.",
     "[dim]The same from a terminal: vmagents {cmd}[/]": "[dim]Terminalden aynısı: vmagents {cmd}[/]",
     "[b]Creating {n}[/b]: downloading the image (once), making the VM, then installing tmux and the AI "
     "assistants. This takes a few minutes.": "[b]{n} oluşturuluyor[/b]: imaj indiriliyor (bir kez), VM "
-    "oluşturuluyor, sonra tmux ve yapay zekâ yardımcıları kuruluyor. Birkaç dakika sürer.",
+    "oluşturuluyor, sonra tmux ve yapay zeka yardımcıları kuruluyor. Birkaç dakika sürer.",
     "Open {agent}": "{agent} aç", "[green]Done.[/] {n} is ready.": "[green]Tamam.[/] {n} hazır.",
     "[red]Creating {n} failed[/] (exit code {rc}); see above. If a half-made VM is left, delete it in the list (d).":
         "[red]{n} oluşturulamadı[/] (çıkış kodu {rc}); yukarıya bak. Yarım kalmış bir VM varsa listeden sil (d).",
@@ -5269,6 +5743,8 @@ def kind_label(kind):
         return T("Shell")
     if kind == "login":
         return T("Log in")
+    if kind == "run":
+        return T("Task")
     return AGENT_NAMES.get(kind, kind)
 
 
@@ -5330,7 +5806,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes"}
+                "refresh", "project", "changes", "yolo", "task"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -5394,12 +5870,14 @@ class VmAgentsUI(App):
             more = len(self.pane_ids()) > 1
             return [Binding("enter", "open", T("Open"), show=False),
                     Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell"), show=False),
+                    Binding("a", "task", T("Task")),
                     Binding("p", "project", T("Project")), Binding("c", "changes", T("Changes")),
                     Binding("o", "ports", T("Ports")), Binding("t", "toggle", T("Start/stop")),
                     Binding("u", "snapshots", T("Snapshots")), Binding("r", "resize", T("Resources")),
                     Binding("d", "delete", T("Delete")),
                     Binding("ctrl+right_square_bracket", "back_to_tab", T("Tabs"), key_display="^]",
                             show=more, priority=True),
+                    Binding("Y", "yolo", T("Yolo"), show=False),
                     Binding("L", "language", other), Binding("q", "quit", T("Quit")),
                     Binding("g", "refresh", show=False)] + [
                 Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
@@ -5453,8 +5931,8 @@ class VmAgentsUI(App):
         t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
         t.focus()
         self._seen = None
-        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · p: project · c: changes · o: ports · "
-                        "t: start/stop · u: snapshots · L: language · q: quit[/]"))
+        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · p: project · c: changes · "
+                        "o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -5720,6 +6198,8 @@ class VmAgentsUI(App):
             lines.append("")
             lines.append(T("Open here: {list}  [dim](Enter to go back)[/]",
                            list=", ".join(kind_label(t.kind) + state(t) for t in terms)))
+        lines.append(T("Agents: [b #ffaf00]act without asking[/] (yolo)  [dim](Y: ask first)[/]") if vm.get("yolo")
+                     else T("Agents: ask before acting  [dim](Y: let them act without asking)[/]"))
         lines.append("")
         lines.append(" · ".join([
             T("idle shutdown {m} min", m=vm["idle"]) if vm.get("idle") else T("no idle shutdown"),
@@ -5741,9 +6221,10 @@ class VmAgentsUI(App):
     def creating(self):
         return list(self.main.query(Creating))
 
-    def open_session(self, name, kind):
+    def open_session(self, name, kind, argv=None):
         """Shows the tab of KIND (shell, login or an AI assistant) on the VM
-        NAME, opening it if needed; with no KIND, the VM's last tab."""
+        NAME, opening it if needed; with no KIND, the VM's last tab. With
+        ARGV, a new tab running that (a task: kind "run")."""
         vm = next((v for v in self.vms if v["name"] == name), {"name": name, "agent": "claude"})
         terms = self.terminals(name)
         if kind is None:
@@ -5755,11 +6236,11 @@ class VmAgentsUI(App):
             self.notify(T("Only Claude Code runs on Windows VMs."))
             return
         for t in terms:
-            if t.kind == kind and t.rc is None:
+            if t.kind == kind and t.rc is None and argv is None:
                 self.show(t.id)
                 return
         self.count += 1
-        t = Terminal(kind_command(name, kind), kind_label(kind), id=f"term-{self.count}")
+        t = Terminal(argv or kind_command(name, kind), kind_label(kind), id=f"term-{self.count}")
         t.vm_name, t.kind = name, kind
         self.add_pane(t, f"{name} · {kind_label(kind)}")
         self._seen = None
@@ -5898,6 +6379,51 @@ class VmAgentsUI(App):
                 return
         self.count += 1
         self.add_pane(Changes(vm, id=f"changes-{self.count}"), f"{vm['name']} · {T('Changes')}")
+
+    def action_task(self):
+        """A task for an agent, done alone on the VM (vmagents run), followed in a tab."""
+        if not (vm := self.need_vm(busy_ok=True)):
+            return
+        if vm.get("os") == "windows":
+            self.notify(T("Tasks work with Linux VMs only."))
+            return
+        n = vm["name"]
+        installed = vm.get("agents") or []
+        default = vm.get("agent", "claude")
+        options = [(k, label + ("   [dim](" + T("installs it first") + ")[/]" if installed and k not in installed else ""))
+                   for k, label in sorted(AGENTS, key=lambda a: a[0] != default)]
+
+        def chosen_agent(agent):
+            if not agent:
+                return
+
+            def chosen_task(r):
+                if r and r["task"].strip():
+                    self.open_session(n, "run", [VMAGENTS, "run", n, "--wait", "--hold", f"--{agent}", "--",
+                                                 r["task"].strip()])
+            where = vm.get("dir") or "~"
+            self.push_screen(Ask(T("[b]Task for {agent} on {n}[/b]\nIt works alone, in {dir}, without asking (it is a "
+                                   "VM: undo takes it back). Follow it in a tab; a dot marks the tab when it ends.",
+                                   agent=AGENT_NAMES[agent], n=n, dir=where),
+                                 [("task", T("Task"), "", T("e.g. make the failing tests pass"))],
+                                 lambda v: "" if v["task"].strip() else T("Write the task.")), chosen_task)
+        self.push_screen(Pick(T("[b]Which agent[/b] does the task on {n}?", n=n), options), chosen_agent)
+
+    def action_yolo(self):
+        if not (vm := self.need_vm()):
+            return
+        n = vm["name"]
+        if vm.get("yolo"):
+            self.background(["yolo", n, "off"])
+            return
+
+        def sure(yes):
+            if yes:
+                self.background(["yolo", n, "on"])
+        self.push_screen(Confirm(T("Let the agents on {n} act without asking first? They run commands and change "
+                                   "files on the VM freely. That stays in the VM, and \"undo\" (u) takes it back. "
+                                   "An agent already running keeps its mode until it is started again.", n=n),
+                                 yes=T("Yes, yolo")), sure)
 
     def action_new(self):
         self.push_screen(NewVM(self.info, [v["name"] for v in self.vms]))
@@ -6322,14 +6848,14 @@ main() {
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
-    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait) shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;
     ls) shift; cmd_list "$@" ;;
     remove) shift; cmd_rm "$@" ;;
-    --hold | --no-tmux | --keep | --claude | --codex | --gemini | --opencode | --aider) cmd_connect "$@" ;;
+    --hold | --no-tmux | --keep | --yolo | --ask | --claude | --codex | --gemini | --opencode | --aider) cmd_connect "$@" ;;
     -*) usage_error "unknown option $cmd" ;;
     *)
       profile_exists "$cmd" || usage_error "unknown command or VM: $cmd"

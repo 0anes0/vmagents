@@ -12,7 +12,7 @@
   ![Diller](https://img.shields.io/badge/aray%C3%BCz-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Projeler](#projeler) · [Komutlar](#komutlar)
+  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Projeler](#projeler) · [Komutlar](#komutlar)
 </div>
 
 ---
@@ -49,6 +49,8 @@ arayüzünden** yap: `vmagents ui`
 |---|---|
 | **Tek komut** | `vmagents` (ya da `vmagents AD`) VM'i başlatır, bağlanır ve asistanı açar. |
 | **Terminal arayüzü** | `vmagents ui`: VM oluştur (sistem, RAM, işlemci, disk, asistanlar, portlar), kabukları ve asistanları sekmelerde aç; anlık görüntüler, portlar, projeler. |
+| **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
+| **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
 | **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
 | **Geri alma** | Her başlatmadan önce anlık görüntü alınır; `vmagents undo` VM'i oturumdan önceki hâline döndürür. |
@@ -168,6 +170,8 @@ dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 | `Enter`, `l` | aç: kabuk ya da bir asistan, terminal sekmesinde |
 | `s` | VM'de hemen bir kabuk |
 | `n` | yeni VM |
+| `a` | bir asistana tek başına yapacağı bir görev; sekmede izlenir, bitince işaretlenir |
+| `Y` | sormadan çalışma: asistanlar önce sormadan çalışır (bir kez onay ister), ya da yine sorsunlar |
 | `p` / `c` | proje (git deposu) gönder / değişiklikleri sekmede (orada `t`: dal olarak al, `P`: pull request) |
 | `u` | anlık görüntüler: birine dön, ad ve etiketle yenisini al, etiketini değiştir, sil |
 | `o` | portlar: şimdi yönlendir (`o` tekrar: durdur), her bağlantıda, ya da ağındaki cihazlara da |
@@ -193,6 +197,38 @@ her şey komut satırından da yapılabilir. Aynı betiğin içindeki bir
 [Textual](https://textual.textualize.io/) uygulamasıdır, terminal olarak
 [pyte](https://github.com/selectel/pyte) kullanır (uv yoksa:
 `pip install --user 'textual>=8' pyte`).
+
+## Görevler ve sormadan çalışma
+
+Asistanlar bir komut çalıştırmadan ya da dosya değiştirmeden önce sorar; çünkü
+kendi bilgisayarında yanlış bir adım zarar verebilir. VM'de veremez: yaptıkları
+orada kalır ve `vmagents undo` VM'i başlarken alınan anlık görüntüye döndürür.
+O zaman bırak çalışsınlar:
+
+```sh
+vmagents yolo dev on                    # bundan sonra dev'deki asistanlar önce sormadan çalışır
+vmagents dev --yolo                     # ya da yalnızca bu sefer (--ask: tersi)
+
+vmagents run dev "başarısız testleri düzelt"     # bir görev: asistan arka planda tek başına çalışır
+vmagents run dev --codex --wait -- "bir --verbose seçeneği ekle"   # başka asistan; burada izle
+vmagents runs dev                       # görevler: çalışıyor, bitti, başarısız
+vmagents runs dev 3 -f                  # bir görevin çıktısı, bitene kadar izlenir
+```
+
+| Asistan | Sormadan çalışma seçeneği | Görev şöyle çalışır |
+|---|---|---|
+| Claude Code | `--dangerously-skip-permissions` | `claude -p` (adımları satır satır gösterilir) |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` | `codex exec` |
+| Gemini CLI | `--yolo` | `gemini -p` |
+| OpenCode | `--auto` | `opencode run --auto` |
+| aider | `--yes-always` | `aider --message` |
+
+Görev VM'de kendi tmux oturumunda çalışır; bilgisayarın bağlantıyı kesse ya da
+uyusa da sürer, bitince masaüstü bildirimi gelir. Soruları cevaplayacak kimse
+olmadığı için görevler her zaman sormadan çalışır. Kapalı bir VM başlatılır ve
+iş bitince yine kapatılır; görev sürerken otomatik kapanma ve boşta kapanma VM'i
+açık bırakır. Bir [projeyle](#projeler) birlikte `vmagents changes` ve `take`
+sonucu dal olarak geri getirir. Arayüzde `a` görev verir ve onu bir sekmede izler.
 
 ## Projeler
 
@@ -488,6 +524,10 @@ vmagents connect [--keep] [--hold] [--no-tmux] [AD] [-- CLAUDE_ARGÜMANLARI]
 vmagents shell [--keep] AD [KOMUT]   VM'de düz kabuk ya da komut
 vmagents start AD | stop AD [--force]
 
+vmagents run AD [--ASİSTAN] [--wait] GÖREV   bir asistana arka planda tek başına yapacağı görev
+vmagents runs AD [NO] [-f|--stop] [--clean] [--json]   görevler; birinin çıktısı
+vmagents yolo AD on|off          asistanlar önce sormadan çalışır (bir seferlik: vmagents AD --yolo)
+
 vmagents project AD [KLASÖR]     buradaki bir git deposunu VM'e gönder (--discard, --off)
 vmagents changes AD [--stat]     asistanların orada neyi değiştirdiği
 vmagents take AD [--branch DAL] [--pr]   o iş burada dal olarak (ya da pull request)
@@ -531,6 +571,7 @@ AGENT=claude            # ya da codex, gemini, opencode, aider
 AGENTS=claude,codex     # VM'de kurulu olanlar
 PORTS=3000,5173         # bağlıyken bu bilgisayara yönlendirilir
 PROJECT=~/code/app      # "vmagents project" ile gönderilen git deposu
+YOLO=off                # on: asistanlar önce sormadan çalışır
 AUTOSTOP=on             # off: çıktıktan sonra VM açık kalır
 AUTOSNAP=3              # saklanacak otomatik görüntü; 0 = hiç
 IDLE=30                 # "vmagents idle"ın VM'de kurduğu (0 = kapalı)

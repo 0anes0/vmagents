@@ -12,7 +12,7 @@
   ![Languages](https://img.shields.io/badge/UI-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Projects](#projects) · [Commands](#commands)
+  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Projects](#projects) · [Commands](#commands)
 </div>
 
 ---
@@ -49,6 +49,8 @@ without a single password prompt. Or do everything from the **terminal UI**,
 |---|---|
 | **One command** | `vmagents` (or `vmagents NAME`) starts the VM, connects and opens the agent. |
 | **Terminal UI** | `vmagents ui`: make VMs (system, RAM, CPUs, disk, agents, ports), open shells and agents in tabs, snapshots, ports, projects. |
+| **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
+| **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
 | **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
 | **Undo** | Every start takes a snapshot first; `vmagents undo` puts the VM back to before the session. |
@@ -165,6 +167,8 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `Enter`, `l` | open: a shell or an agent, in a terminal tab |
 | `s` | a shell on the VM, straight away |
 | `n` | new VM |
+| `a` | a task for an agent, done alone; followed in a tab, marked when it ends |
+| `Y` | yolo: agents act without asking first (asks you once), or ask again |
 | `p` / `c` | send a project (a git repository) / its changes, in a tab (`t` there: take as a branch, `P`: pull request) |
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
@@ -190,6 +194,39 @@ does works from the command line too. It is a
 [Textual](https://textual.textualize.io/) app inside the same script, with
 [pyte](https://github.com/selectel/pyte) as its terminal (or
 `pip install --user 'textual>=8' pyte` without uv).
+
+## Tasks and yolo mode
+
+Agents ask before they run a command or change a file, because on your own
+computer a wrong step can hurt. In a VM it cannot: what they do stays there,
+and `vmagents undo` puts the VM back to the snapshot taken at its start. So
+let them work:
+
+```sh
+vmagents yolo dev on                    # from now on, agents on dev act without asking first
+vmagents dev --yolo                     # or just this once (--ask: the other way round)
+
+vmagents run dev "fix the failing tests"         # a task: the agent works alone, in the background
+vmagents run dev --codex --wait -- "add a --verbose flag"   # another agent; follow it here
+vmagents runs dev                       # the tasks: running, done, failed
+vmagents runs dev 3 -f                  # one task's output, followed until it ends
+```
+
+| Agent | Yolo option | A task runs as |
+|---|---|---|
+| Claude Code | `--dangerously-skip-permissions` | `claude -p` (its steps shown one per line) |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` | `codex exec` |
+| Gemini CLI | `--yolo` | `gemini -p` |
+| OpenCode | `--auto` | `opencode run --auto` |
+| aider | `--yes-always` | `aider --message` |
+
+A task runs in a tmux session of its own on the VM, so it goes on when your
+computer disconnects or sleeps; a desktop notification comes when it ends.
+Nobody is there to answer questions, so tasks always run in yolo mode. A VM
+that was off is started and shut down again afterwards; while a task runs,
+autostop and the idle shutdown leave the VM on. With a [project](#projects),
+`vmagents changes` and `take` then bring the result back as a branch. In the
+UI, `a` gives a task and follows it in a tab.
 
 ## Projects
 
@@ -484,6 +521,10 @@ vmagents connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmagents shell [--keep] NAME [CMD...]   plain shell or command on the VM
 vmagents start NAME | stop NAME [--force]
 
+vmagents run NAME [--AGENT] [--wait] TASK   a task for an agent, done alone in the background
+vmagents runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
+vmagents yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
+
 vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
 vmagents changes NAME [--stat]   what the agents changed in it there
 vmagents take NAME [--branch B] [--pr]   that work as a branch here (or a pull request)
@@ -527,6 +568,7 @@ AGENT=claude            # or codex, gemini, opencode, aider
 AGENTS=claude,codex     # installed on the VM
 PORTS=3000,5173         # forwarded to this computer while connected
 PROJECT=~/code/app      # the git repository sent with "vmagents project"
+YOLO=off                # on: agents act without asking first
 AUTOSTOP=on             # off: the VM keeps running after you leave
 AUTOSNAP=3              # automatic snapshots to keep; 0 = none
 IDLE=30                 # what "vmagents idle" set up on the VM (0 = off)

@@ -403,6 +403,51 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.3)
             self.assertEqual(self.calls("take"), [["take", "dev"], ["take", "dev", "--pr"]])  # nothing to take
 
+    async def test_yolo(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            self.assertIn("Agents: ask before acting", self.text("#details"))
+            await pilot.press("Y")  # asks first
+            await pilot.pause(0.2)
+            self.assertIsInstance(self.app.screen, self.ui.Confirm)
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: self.calls("yolo"))
+            self.assertEqual(self.calls("yolo"), [["yolo", "dev", "on"]])
+        self.write(list=[dict(VM, yolo=True)])
+        app = self.ui.VmAgentsUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.wait_for(pilot, lambda: app.vms)
+            self.assertIn("act without asking", str(app.main.query_one("#details").render()))
+            await pilot.press("Y")  # off: no question
+            await self.wait_for(pilot, lambda: len(self.calls("yolo")) == 2)
+            self.assertEqual(self.calls("yolo")[-1], ["yolo", "dev", "off"])
+
+    async def test_task(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("a")  # which agent? the VM's own first
+            await pilot.pause(0.3)
+            self.assertIsInstance(self.app.screen, self.ui.Pick)
+            await pilot.press("j", "enter")  # Codex
+            await pilot.pause(0.3)
+            dialog = self.app.screen
+            await pilot.click("#ok")
+            await pilot.pause(0.1)
+            self.assertIn("Write the task", str(dialog.query_one("#error").render()))
+            dialog.query_one("#f-task").value = "make the tests pass"
+            await pilot.click("#ok")
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
+            term = self.app.terminals("dev")[0]
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Task"])
+            await self.wait_for(pilot, lambda: "session: run dev --wait --hold --codex -- make the tests pass"
+                                in self.screen_text(term))
+            await pilot.press("ctrl+right_square_bracket", "a", "enter")  # a second task: a tab of its own
+            await pilot.pause(0.3)
+            self.app.screen.query_one("#f-task").value = "and the docs"
+            await pilot.click("#ok")
+            await self.wait_for(pilot, lambda: len(self.app.terminals("dev")) == 2)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Task", "3 dev · Task"])
+
     async def test_terminal_keys(self):
         k = self.ui.key_bytes
         self.assertEqual(k("ctrl+c", None), b"\x03")
