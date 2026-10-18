@@ -22,6 +22,8 @@ class JsonTests(Base):
         self.assertEqual((vm["state"], vm["memory_mb"], vm["cpus"], vm["snapshots"]), ("running", 4096, 2, 1))
         self.assertEqual((vm["ports"], vm["agent"], vm["agents"], vm["idle"]), ([3000, 5173], "codex", ["claude", "codex"], 30))
         self.assertEqual((vm["autostop"], vm["notify"], vm["clipboard"], vm["created"]), (True, True, True, False))
+        self.assertEqual((vm["cpu_ns"], vm["rss_mb"]), (7000000000, 2150))  # running: how busy
+        self.assertEqual((h["cpu_ns"], h["rss_mb"]), (None, None))
         self.assertEqual((h["state"], h["memory_mb"], h["host"], h["port"], h["dir"]), (None, None, "192.0.2.7", 2222, 'my "dir"'))
         self.assertEqual(json.loads(self.sb.run("list", "--json", env={"HOME": str(self.sb.tmp / "empty")}, check=0).stdout), [])
 

@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.18.0
+VERSION=0.19.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -73,6 +73,7 @@ GET STARTED
     vmagents create dev                      new Debian 13 VM with Claude Code, no password
     vmagents create box --image arch         the same with Arch Linux
     vmagents create web --memory 8192 --cpus 4 --agents claude,codex --ports 3000
+    vmagents create api --template node      Node.js, npm and build tools in it (vmagents templates)
     vmagents login dev                       log Claude in (browser opens on this computer)
     vmagents dev                             open Claude Code in it
 
@@ -101,6 +102,7 @@ COMMANDS
     create NAME          new Linux VM from an official cloud image, ready for Claude
     delete NAME          delete a VM made with create, with its disks
     images               list the images: which exist, which are downloaded, where
+    templates            what "create --template" offers (node, python, ml, go, rust, your own)
     prune                delete downloaded images that no VM uses any more
     resize NAME          change RAM and CPUs (--memory MB --cpus N)
     ui                   all of this in a terminal UI
@@ -120,6 +122,7 @@ COMMANDS
   Tasks (an agent works alone, in the background, without asking):
     run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
     runs NAME [ID]       the tasks and their state; with ID its output (-f follows, --stop, --clean)
+    history NAME [N]     Claude Code's sessions on the VM; with N one, readable (then --resume it)
     try NAME N "TASK"    N copies of the VM, each doing the task (--agents claude,codex: they take turns)
     tries NAME           the copies and what they did; try NAME --clean deletes them
     net NAME restricted  the VM reaches only the hosts on its list (net NAME allow HOST; open: all again)
@@ -194,6 +197,8 @@ Options:
   --idle MINUTES   the VM shuts itself down after MINUTES unused (default 30; off)
   --project DIR    send this computer's git repository DIR to the VM ("vmagents
                    help project"); the agents start in it
+  --template NAME  start from a template: system, RAM, CPUs, disk, agents, ports,
+                   and packages installed at the end ("vmagents templates")
   --no-setup       only make the VM; run "vmagents setup NAME" later
 
 Examples:
@@ -634,6 +639,44 @@ Examples:
   vmagents try dev 3 "make the start page load faster"
   vmagents try dev 2 --agents claude,codex --memory 2048 -- "fix issue 42"
   vmagents try dev --clean
+EOF
+      ;;
+    history) cat <<EOF
+vmagents history NAME [N | ID] [--json]
+
+Lists Claude Code's conversations on the VM, newest first: when, how many
+messages, in which folder, and what you asked first. With N (from the
+list) or a session ID it shows that one, readable: what you asked, what
+Claude answered, and a line per tool it used. Go on with it in Claude:
+"vmagents NAME --resume ID". Claude Code keeps them on the VM, in
+~/.claude/projects; reading them needs python3 there (cloud images have it).
+A libvirt VM that is off is started, and shut down again.
+
+Examples:
+  vmagents history dev
+  vmagents history dev 1 | less
+EOF
+      ;;
+    templates) cat <<EOF
+vmagents templates [--json]
+
+Lists the templates for "vmagents create NAME --template TEMPLATE": built in
+are node, python, ml, go and rust. A template sets the system, RAM, CPUs,
+disk, agents and ports (options given to create change them), and installs
+packages at the end: node, python, go, rust and build (compilers and make)
+are turned into the distribution's own package names; other names are passed
+as they are. SETUP is a command run on the VM after that.
+
+Your own templates: ${CONF_DIR/#$HOME/\~}/templates/NAME.conf, e.g.
+  DESCRIPTION=Our web stack
+  IMAGE=debian13
+  MEMORY=8192
+  CPUS=4
+  DISK=40
+  AGENTS=claude,codex
+  PORTS=3000
+  PACKAGES=node build postgresql
+  SETUP=npm install -g pnpm
 EOF
       ;;
     tries) cat <<EOF
@@ -2159,14 +2202,14 @@ json_bool() { [[ $1 == on || $1 == 1 || $1 == true ]] && printf true || printf f
 
 # One JSON object per profile, for the UI and scripts.
 list_json() {
-  local names name def sep='' state mem cpus snaps uri info
+  local names name def sep='' state mem cpus snaps uri info stats cpu_ns rss
   names=$(profile_names)
   def=$(default_name || true)
   printf '['
   while IFS= read -r name; do
     [[ -n $name ]] || continue
     read_profile "$name"
-    state=null mem=null cpus=null snaps=null
+    state=null mem=null cpus=null snaps=null cpu_ns=null rss=null
     uri=${P[LIBVIRT_URI]:-qemu:///system}
     if [[ -n ${P[DOMAIN]:-} ]] && command -v virsh >/dev/null; then
       if info=$(timeout 5 virsh -c "$uri" dominfo "${P[DOMAIN]}" 2>/dev/null); then
@@ -2174,6 +2217,13 @@ list_json() {
         mem=$(awk '/^Max memory:/ { printf "%d", $3 / 1024 }' <<<"$info")
         cpus=$(awk '/^CPU\(s\):/ { print $2 }' <<<"$info")
         snaps=$(timeout 5 virsh -c "$uri" snapshot-list "${P[DOMAIN]}" --name 2>/dev/null | grep -c .) || snaps=0
+        # How busy it is: CPU time used so far (the UI makes a percentage
+        # of two readings) and the memory it takes on this computer.
+        if [[ $state == '"running"' ]] &&
+          stats=$(timeout 5 virsh -c "$uri" domstats --cpu-total --balloon "${P[DOMAIN]}" 2>/dev/null); then
+          cpu_ns=$(sed -n 's/^ *cpu\.time=\([0-9]*\)$/\1/p' <<<"$stats")
+          rss=$(awk -F= '/^ *balloon\.rss=/ { printf "%d", $2 / 1024 }' <<<"$stats")
+        fi
       else
         state='"missing"'
       fi
@@ -2189,7 +2239,8 @@ list_json() {
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
-    printf '"state": %s, "memory_mb": %s, "cpus": %s, "snapshots": %s}' "$state" "${mem:-null}" "${cpus:-null}" "$snaps"
+    printf '"state": %s, "memory_mb": %s, "cpus": %s, "snapshots": %s, "cpu_ns": %s, "rss_mb": %s}' "$state" \
+      "${mem:-null}" "${cpus:-null}" "$snaps" "${cpu_ns:-null}" "${rss:-null}"
     sep=,
   done <<<"$names"
   printf '\n]\n'
@@ -2855,16 +2906,25 @@ upload_seed() { # POOL VOLUME DIR
 
 cmd_create() {
   local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 idle=30 k
-  local agents=claude ports='' project=''
+  local agents=claude ports='' project='' template='' a
   user=$(id -un)
+  # A template first: the other options change what it sets.
+  for ((a = 1; a < $#; a++)); do
+    [[ ${!a} == --template ]] || continue
+    local b=$((a + 1))
+    template=${!b}
+    load_template "$template"
+    image=${T[IMAGE]:-$image} memory=${T[MEMORY]:-$memory} cpus=${T[CPUS]:-$cpus} disk=${T[DISK]:-$disk}
+    agents=${T[AGENTS]:-$agents} ports=${T[PORTS]:-$ports}
+  done
   while (($#)); do
     case $1 in
-      --image | --memory | --cpus | --disk | --user | --uri | --idle | --agents | --ports | --project)
+      --image | --memory | --cpus | --disk | --user | --uri | --idle | --agents | --ports | --project | --template)
         (($# >= 2)) || usage_error "create: $1 needs a value"
         case $1 in
           --image) image=$2 ;; --memory) memory=$2 ;; --cpus) cpus=$2 ;;
           --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;; --idle) idle=$2 ;;
-          --agents) agents=${2// /} ;; --ports) ports=${2// /} ;; --project) project=$2 ;;
+          --agents) agents=${2// /} ;; --ports) ports=${2// /} ;; --project) project=$2 ;; --template) ;;
         esac
         shift 2 ;;
       --no-setup) install=0; shift ;;
@@ -2973,6 +3033,15 @@ cmd_create() {
     if ((idle > 0)); then
       info "Idle shutdown"
       if install_idle "$idle"; then P[IDLE]=$idle; write_profile "$NAME"; else warn "idle shutdown not set up (later: $PROG idle $NAME $idle)"; fi
+    fi
+    if [[ -n $template && -n ${T[PACKAGES]:-}${T[SETUP]:-} ]]; then
+      info "Template $template"
+      load "$name"
+      resolve_target
+      build_ssh_opts
+      # shellcheck disable=SC2086 # package names
+      run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$TEMPLATE_SH" "${T[SETUP]:-}" ${T[PACKAGES]:-})" </dev/null ||
+        warn "the template's packages or setup failed; the VM is there (try again by hand: $PROG shell $name)"
     fi
     if [[ -n $project ]]; then
       info "Project"
@@ -3100,8 +3169,9 @@ images_json() {
   [[ -n $iso ]] || missing=xorriso
   for t in virsh virt-install curl; do command -v "$t" >/dev/null || missing+="${missing:+,}$t"; done
   printf '\n], "host": {"memory_mb": %d, "memory_available_mb": %d, "cpus": %d, "libvirt": %s, ' "${mt:-0}" "${ma:-0}" "$cpus" "$lv"
-  printf '"pool": %s, "pool_available_gb": %s, "missing": %s, "agents": %s}}\n' "$(json_str "$CREATE_POOL")" "$avail" \
+  printf '"pool": %s, "pool_available_gb": %s, "missing": %s, "agents": %s}, ' "$(json_str "$CREATE_POOL")" "$avail" \
     "$(json_list "$missing")" "$(json_list "${AGENTS// /,}")"
+  printf '"templates": %s}\n' "$(cmd_templates --json)"
 }
 
 cmd_images() {
@@ -5292,6 +5362,257 @@ cmd_net() {
   fi
 }
 
+# ------------------------------------------------------------------ templates
+
+# A template is what a new VM gets: system, RAM, CPUs, disk, agents, ports,
+# packages (node, python, go, rust, build, or the distribution's own names)
+# and a command run on it at the end (SETUP). Built in below; your own in
+# ~/.config/vmagents/templates/NAME.conf (KEY=VALUE, the same keys).
+TEMPLATE_KEYS=" DESCRIPTION IMAGE MEMORY CPUS DISK AGENTS PORTS PACKAGES SETUP "
+TEMPLATES_BUILTIN='node|Node.js web app: Node, npm, build tools|debian13|4096|2|20|claude|3000,5173|node build|
+python|Python: venv, pip, build tools|debian13|4096|2|20|claude|8000|python build|
+ml|Python for data and ML: more RAM, CPUs and disk, Jupyter port|debian13|16384|8|60|claude|8888|python build|
+go|Go: the go toolchain|debian13|4096|2|20|claude|8080|go build|
+rust|Rust: rustup with stable Rust, build tools|debian13|4096|4|30|claude|8080|rust build|'
+
+template_names() {
+  local f
+  cut -d'|' -f1 <<<"$TEMPLATES_BUILTIN"
+  for f in "$CONF_DIR"/templates/*.conf; do [[ -f $f ]] && { f=${f##*/}; printf '%s\n' "${f%.conf}"; }; done
+  return 0
+}
+
+# Loads template NAME into T[...] (DESCRIPTION IMAGE MEMORY CPUS DISK AGENTS PORTS PACKAGES SETUP).
+declare -A T=()
+load_template() { # NAME
+  local name=$1 line k v f n=0
+  T=()
+  f=$CONF_DIR/templates/$name.conf
+  if valid_name "$name" && [[ -f $f ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      n=$((n + 1))
+      [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+      [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "$f:$n: expected KEY=VALUE"
+      k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
+      [[ $TEMPLATE_KEYS == *" $k "* ]] || die "$f:$n: unknown key $k (keys:$TEMPLATE_KEYS)"
+      T[$k]=$v
+    done <"$f"
+    return 0
+  fi
+  local d i m c dk ag po pk se
+  while IFS='|' read -r k d i m c dk ag po pk se; do
+    [[ $k == "$name" ]] || continue
+    T=([DESCRIPTION]=$d [IMAGE]=$i [MEMORY]=$m [CPUS]=$c [DISK]=$dk [AGENTS]=$ag [PORTS]=$po [PACKAGES]=$pk [SETUP]=$se)
+    return 0
+  done <<<"$TEMPLATES_BUILTIN"
+  T=()
+  die "no template named '$name' (see: $PROG templates)"
+}
+
+# On the VM, after setup: the template's packages, then its SETUP command.
+# $1 the SETUP command (or empty), then package names.
+# shellcheck disable=SC2016
+TEMPLATE_SH=$REMOTE_ENV$PKG_SH'setup=$1; shift
+list= rust=
+if command -v apt-get >/dev/null 2>&1; then m=apt
+elif command -v pacman >/dev/null 2>&1; then m=pacman
+else m=other
+fi
+for p in "$@"; do
+  case $m:$p in
+    *:node) list="$list nodejs npm" ;;
+    apt:python) list="$list python3 python3-venv python3-pip" ;;
+    pacman:python) list="$list python python-pip" ;;
+    *:python) list="$list python3 python3-pip" ;;
+    apt:build) list="$list build-essential" ;;
+    pacman:build) list="$list base-devel" ;;
+    *:build) list="$list gcc gcc-c++ make" ;;
+    apt:go) list="$list golang" ;;
+    pacman:go) list="$list go" ;;
+    *:go) list="$list golang" ;;
+    *:rust) rust=1 ;;
+    *) list="$list $p" ;;
+  esac
+done
+if [ -n "$list" ]; then
+  # shellcheck disable=SC2086
+  pkg $list || exit 1
+fi
+if [ -n "$rust" ] && ! command -v cargo >/dev/null 2>&1 && ! [ -x "$HOME/.cargo/bin/cargo" ]; then
+  echo "Installing Rust (rustup, stable)..."
+  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null || exit 1
+  echo "Installed $("$HOME/.cargo/bin/rustc" --version)"
+fi
+if [ -n "$setup" ]; then
+  echo "Running the template'"'"'s setup: $setup"
+  [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+  sh -c "$setup" || exit 1
+fi
+exit 0
+'
+
+cmd_templates() {
+  local json=0 n sep=''
+  [[ ${1-} == --json ]] && json=1
+  if ((json)); then
+    printf '['
+    while IFS= read -r n; do
+      [[ -n $n ]] || continue
+      load_template "$n"
+      printf '%s\n {"name": %s, "description": %s, "image": %s, "memory": %s, "cpus": %s, "disk": %s, "agents": %s, "ports": %s, "packages": %s, "setup": %s}' \
+        "$sep" "$(json_str "$n")" "$(json_str "${T[DESCRIPTION]:-}")" "$(json_str "${T[IMAGE]:-debian13}")" \
+        "${T[MEMORY]:-4096}" "${T[CPUS]:-2}" "${T[DISK]:-20}" "$(json_list "${T[AGENTS]:-claude}")" \
+        "$(json_list "${T[PORTS]:-}" NUM)" "$(json_list "${T[PACKAGES]// /,}")" "$(json_str "${T[SETUP]:-}")"
+      sep=,
+    done < <(template_names)
+    printf '\n]\n'
+    return 0
+  fi
+  printf '%-10s %-12s %-6s %-5s %-6s %-14s %s\n' TEMPLATE SYSTEM RAM CPUS DISK PORTS WHAT
+  while IFS= read -r n; do
+    [[ -n $n ]] || continue
+    load_template "$n"
+    printf '%-10s %-12s %-6s %-5s %-6s %-14s %s\n' "$n" "${T[IMAGE]:-debian13}" "$(( ${T[MEMORY]:-4096} / 1024 )) GB" \
+      "${T[CPUS]:-2}" "${T[DISK]:-20} GB" "${T[PORTS]:--}" "${T[DESCRIPTION]:-}"
+  done < <(template_names)
+  say ""
+  say "Use one: $PROG create NAME --template node   (other options change it, e.g. --memory 8192)"
+  say "Your own: ${CONF_DIR/#$HOME/\~}/templates/NAME.conf with lines like IMAGE=arch, MEMORY=8192,"
+  say "PACKAGES=node build htop, SETUP=npm install -g pnpm"
+}
+
+# ------------------------------------------------------------------ history: Claude's sessions on the VM
+
+# Claude Code keeps each conversation in ~/.claude/projects/DIR/ID.jsonl on
+# the VM. "list": a JSON line per session, newest first; "show ID": one,
+# readable (what you asked, what it answered, a line per tool it used).
+HISTORY_PY='import glob, json, os, sys
+root = os.path.expanduser("~/.claude/projects")
+files = sorted(glob.glob(os.path.join(root, "*", "*.jsonl")), key=os.path.getmtime, reverse=True)
+
+def entries(f):
+    with open(f, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict):
+                yield e
+
+def text(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text")
+
+def asked(e):
+    """What you typed, or None (tool results, commands, notes)."""
+    if e.get("type") != "user" or e.get("isMeta"):
+        return None
+    t = text((e.get("message") or {}).get("content")).strip()
+    return t if t and not t.startswith("<") else None
+
+def short(v, n=110):
+    v = " ".join(str(v).split())
+    return v if len(v) <= n else v[:n - 1] + "…"
+
+if sys.argv[1] == "list":
+    for f in files:
+        first, cwd, start, n = "", "", "", 0
+        for e in entries(f):
+            cwd = cwd or e.get("cwd") or ""
+            start = start or e.get("timestamp") or ""
+            if e.get("type") == "assistant":
+                n += 1
+            q = asked(e)
+            if q is not None:
+                n += 1
+                first = first or short(q, 200)
+        if n:
+            print(json.dumps({"id": os.path.basename(f)[:-6], "time": int(os.path.getmtime(f)), "start": start,
+                              "dir": cwd, "messages": n, "first": first}))
+else:
+    f = next((f for f in files if os.path.basename(f)[:-6] == sys.argv[2]), None)
+    if f is None:
+        sys.exit(4)
+    for e in entries(f):
+        q = asked(e)
+        if q is not None:
+            print("> " + q.replace("\n", "\n  ") + "\n")
+        elif e.get("type") == "assistant":
+            for c in (e.get("message") or {}).get("content") or []:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "text" and c.get("text", "").strip():
+                    print(c["text"].strip() + "\n")
+                elif c.get("type") == "tool_use":
+                    i = c.get("input") or {}
+                    arg = i.get("command") or i.get("file_path") or i.get("pattern") or i.get("url") or \
+                        i.get("description") or ""
+                    print("* %s(%s)" % (c.get("name"), short(arg)))
+'
+
+# shellcheck disable=SC2016
+HISTORY_SH=$REMOTE_ENV'command -v python3 >/dev/null 2>&1 || { echo "vmagents: history needs python3 on the VM" >&2; exit 3; }
+exec python3 -c "$1" "$2" "${3-}"
+'
+
+history_list() { # prints the sessions' JSON lines
+  run_ssh -T -- "$TARGET" "$(remote_cmd "$HISTORY_SH" "$HISTORY_PY" list)" </dev/null
+}
+
+cmd_history() {
+  local name='' which='' json=0 out line id rc=0 i=0 sep=''
+  while (($#)); do
+    case $1 in
+      --json) json=1 ;;
+      -*) usage_error "history: unknown option $1" ;;
+      *) if [[ -z $name ]]; then name=$1; elif [[ -z $which ]]; then which=$1; else usage_error "history: too many arguments"; fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "history: missing NAME"
+  load "$name"
+  project_connect
+  out=$(history_list) || rc=$?
+  ((rc == 0)) || { project_done; die "could not read the sessions on $NAME (exit code $rc)"; }
+  if [[ -n $which ]]; then
+    # A number from the list, or a session ID.
+    if [[ $which =~ ^[0-9]+$ ]]; then
+      id=$(sed -n "${which}p" <<<"$out" | sed -n 's/^{"id": "\([^"]*\)".*/\1/p')
+      [[ -n $id ]] || { project_done; die "no session $which on $NAME (see: $PROG history $NAME)"; }
+    else
+      id=$which
+    fi
+    run_ssh -T -- "$TARGET" "$(remote_cmd "$HISTORY_SH" "$HISTORY_PY" show "$id")" </dev/null || rc=$?
+    project_done
+    ((rc == 0)) || die "no session $which on $NAME"
+    say ""
+    say "Go on with it: $PROG $NAME --resume $id"
+    return 0
+  fi
+  project_done
+  if ((json)); then
+    printf '['
+    while IFS= read -r line; do [[ $line == "{"* ]] && { printf '%s\n %s' "$sep" "$line"; sep=,; }; done <<<"$out"
+    printf '\n]\n'
+    return 0
+  fi
+  [[ -n $out ]] || { say "No Claude Code sessions on $NAME yet."; return 0; }
+  printf '%-3s %-17s %-5s %-22s %s\n' N WHEN MSGS FOLDER "FIRST ASKED"
+  while IFS= read -r line; do
+    [[ $line == "{"* ]] || continue
+    i=$((i + 1))
+    python3 -c 'import json, sys, time
+e = json.loads(sys.argv[1])
+d = e["dir"].replace(sys.argv[3], "~", 1) if sys.argv[3] and e["dir"].startswith(sys.argv[3]) else e["dir"]
+print("%-3s %-17s %-5s %-22s %s" % (sys.argv[2], time.strftime("%Y-%m-%d %H:%M", time.localtime(e["time"])),
+      e["messages"], d[-22:], e["first"][:70]))' "$line" "$i" "/home/$C_USER" 2>/dev/null || printf '%s\n' "$line"
+  done <<<"$out"
+  say ""
+  say "Read one: $PROG history $NAME N    go on with one: $PROG $NAME --resume ID ($PROG history $NAME N shows it)"
+}
+
 # ------------------------------------------------------------------ ui
 
 # The terminal UI: a Textual app (UI_PY below) that runs this script.
@@ -5457,6 +5778,9 @@ TEXTS = {"tr": {
     "değiştirirler. Bu VM'de kalır ve \"geri al\" (u) onu geri alır. Zaten çalışan bir asistan, yeniden "
     "başlatılana kadar eski modunda kalır.",
     "Yes, yolo": "Evet, sormadan",
+    "Template [dim](fills in the rest, and installs its packages)[/]":
+        "Şablon [dim](gerisini doldurur ve paketlerini kurar)[/]", "None": "Yok",
+    "Load": "Yük", "Now: CPU {cpu} · takes {mem} of memory here": "Şu an: işlemci {cpu} · burada {mem} bellek kullanıyor",
     "Network": "Ağ",
     "Network: [b]restricted[/] to its list  [dim](i: allow a host, open)[/]":
         "Ağ: listesiyle [b]kısıtlı[/]  [dim](i: adrese izin ver, aç)[/]",
@@ -5663,6 +5987,8 @@ def create_args(v):
         a += ["--ports", v["ports"]]
     if v.get("project"):
         a += ["--project", v["project"]]
+    if v.get("template"):
+        a += ["--template", v["template"]]
     return a
 
 
@@ -5889,6 +6215,12 @@ class NewVM(Screen):
                 yield Static(T("[red]Cannot create VMs here yet: missing {need}.[/]\nDebian/Ubuntu: sudo apt "
                                "install libvirt-daemon-system virtinst xorriso curl\nArch: sudo pacman -S libvirt "
                                "virt-install libisoburn dnsmasq qemu-desktop curl", need=need), classes="error")
+            templates = self.info.get("templates") or []
+            if templates:
+                yield Label(T("Template [dim](fills in the rest, and installs its packages)[/]"))
+                yield Select([(T("None"), "")] + [(f"{t['name']}  [dim]{t['description']}[/]", t["name"])
+                                                  for t in templates], value="", allow_blank=False, id="template",
+                             compact=True)
             yield Label(T("Name"))
             yield Input(placeholder="dev", id="name", compact=True)
             yield Label(T("System"))
@@ -5948,6 +6280,7 @@ class NewVM(Screen):
             "ports": val("ports").value.replace(" ", ""),
             "idle": val("idle").value,
             "project": os.path.expanduser(val("project").value.strip()),
+            "template": self.query_one("#template", Select).value if self.query("#template") else "",
         }
 
     def problem(self, v):
@@ -5978,6 +6311,26 @@ class NewVM(Screen):
         v2 = dict(v, name=v["name"] or "NAME", agents=v["agents"] or ["claude"], disk=v["disk"] or "20")
         self.query_one("#command", Static).update(T("[dim]The same from a terminal: vmagents {cmd}[/]",
                                                     cmd=shlex.join(create_args(v2))))
+
+    @on(Select.Changed, "#template")
+    def template_chosen(self, e):
+        t = next((t for t in self.info.get("templates") or [] if t["name"] == e.value), None)
+        if not t:
+            return
+        images = {i["name"] for i in self.info.get("images", [])}
+        if t["image"] in images:
+            self.query_one("#image", Select).value = t["image"]
+        for key, value in (("#memory", t["memory"]), ("#cpus", t["cpus"])):
+            select = self.query_one(key, Select)
+            options = [v for _, v in select._options]
+            # The nearest there is here (less RAM or fewer CPUs than it asks for).
+            fits = [v for v in options if isinstance(v, int) and v <= value]
+            if fits:
+                select.value = max(fits)
+        self.query_one("#disk", Input).value = str(t["disk"])
+        for key, _ in AGENTS:
+            self.query_one(f"#agent-{key}", Checkbox).value = key in t["agents"]
+        self.query_one("#ports", Input).value = ",".join(map(str, t["ports"]))
 
     @on(Input.Changed)
     @on(Select.Changed)
@@ -6676,6 +7029,7 @@ class VmAgentsUI(App):
         self.vms, self.info = [], {}
         self.forwards = {}  # name -> list of (Popen, description)
         self.busy = set()
+        self.samples, self.load = {}, {}  # name -> (time, CPU ns) / CPU percent
         self.count = 0
         self.last = None  # the tab Ctrl+] goes back to from the list
         self._bindings = BindingsMap(self.make_bindings())
@@ -6751,7 +7105,7 @@ class VmAgentsUI(App):
     def setup_list(self):
         t = self.main.query_one("#vms", DataTable)
         t.clear(columns=True)
-        t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
+        t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("Load"), T("AI"), T("Ports"))
         t.focus()
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
@@ -6940,6 +7294,7 @@ class VmAgentsUI(App):
     def refresh_vms(self):
         vms = cli_json("list", "--json")
         if vms is not None:
+            self.call_from_thread(self.measure, vms)
             self.call_from_thread(self.show_vms, vms)
 
     def action_refresh(self):
@@ -6950,6 +7305,21 @@ class VmAgentsUI(App):
         self.action_open()
 
     @while_open
+    def measure(self, vms):
+        """CPU percent of each running VM, from its CPU time now and before."""
+        now = time.monotonic()
+        for vm in vms:
+            ns, n = vm.get("cpu_ns"), vm["name"]
+            if ns is None:
+                self.samples.pop(n, None)
+                self.load.pop(n, None)
+                continue
+            if n in self.samples:
+                t0, ns0 = self.samples[n]
+                if now > t0 and ns >= ns0:
+                    self.load[n] = min(100.0, (ns - ns0) / ((now - t0) * 1e9 * (vm.get("cpus") or 1)) * 100)
+            self.samples[n] = (now, ns)
+
     def show_vms(self, vms):
         open_here = sorted({t.vm_name for t in self.terminals()})
         waiting = sorted({t.vm_name for t in self.terminals() if t.attention})
@@ -6965,7 +7335,9 @@ class VmAgentsUI(App):
             agents = vm.get("agents") or [vm.get("agent", "claude")]
             name = ("* " if vm.get("default") else "  ") + vm["name"] + (" [b #ffaf00]●[/]" if vm["name"] in waiting else " ▸" if vm["name"] in open_here else "")
             state = "[cyan]◆[/] " + T("working") if vm["name"] in self.busy else state_mark(vm)
-            t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"), ", ".join(agents),
+            load = self.load.get(vm["name"]) if vm.get("state") == "running" else None
+            t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"),
+                      "-" if load is None else f"{load:.0f}%", ", ".join(agents),
                       ",".join(map(str, vm.get("ports") or [])) or "-", key=vm["name"])
         if current and current in [v["name"] for v in vms]:
             t.move_cursor(row=[v["name"] for v in vms].index(current))
@@ -7005,6 +7377,10 @@ class VmAgentsUI(App):
         if vm.get("memory_mb"):
             lines.append(T("{ram} RAM · {cpus} CPUs · {snaps} snapshots", ram=gb(vm["memory_mb"]), cpus=vm["cpus"],
                            snaps=vm.get("snapshots", 0)))
+        if vm.get("state") == "running" and vm.get("rss_mb"):
+            load = self.load.get(n)
+            lines.append(T("Now: CPU {cpu} · takes {mem} of memory here", mem=gb(vm["rss_mb"]),
+                           cpu="-" if load is None else f"{load:.0f}%"))
         agents = vm.get("agents") or []
         lines.append("")
         lines.append(T("Opens: [b]{agent}[/b]", agent=AGENT_NAMES.get(vm["agent"], vm["agent"]))
@@ -7798,7 +8174,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | templates | history | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

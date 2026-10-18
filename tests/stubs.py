@@ -62,7 +62,7 @@ polls = int(polls)
 if "-c" in args:
     i = args.index("-c"); args = args[:i] + args[i + 2:]
 cmd = args[0]
-if args[1:2] and args[1] != os.environ.get("STUB_VIRSH_DOMAIN", "testvm") and cmd != "list":
+if args[1:2] and args[1] != os.environ.get("STUB_VIRSH_DOMAIN", "testvm") and cmd not in ("list", "domstats"):
     print(f"error: failed to get domain '{args[1]}'", file=sys.stderr); sys.exit(1)
 if cmd == "domstate":
     # "in shutdown" lasts <polls> more reads, then the VM is off.
@@ -105,6 +105,9 @@ if cmd == "list":
 # Memory (MB) and CPUs, in <state file>.config: {"memory": .., "cpus": ..}
 config_path = path + ".config"
 config = json.load(open(config_path)) if os.path.exists(config_path) else {"memory": 4096, "cpus": 2}
+if cmd == "domstats":
+    print(f"Domain: '{args[-1]}'\n  cpu.time=7000000000\n  balloon.current=4194304\n  balloon.rss=2202009\n")
+    sys.exit(0)
 if cmd == "dominfo":
     print(f"Name:           {args[1]}\nState:          {state}\nCPU(s):         {config['cpus']}\n"
           f"Max memory:     {config['memory'] * 1024} KiB\nUsed memory:    {config['memory'] * 1024} KiB\n")

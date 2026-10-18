@@ -71,6 +71,12 @@ VM = {"name": "dev", "default": True, "host": "", "user": "me", "port": 22, "dom
       "state": "running", "memory_mb": 4096, "cpus": 2, "snapshots": 2}
 IMAGES = {"images": [{"name": "debian13", "description": "Debian 13", "downloaded": True},
                      {"name": "arch", "description": "Arch Linux", "downloaded": False}],
+          "templates": [{"name": "node", "description": "Node.js web app", "image": "debian13", "memory": 4096,
+                         "cpus": 2, "disk": 20, "agents": ["claude"], "ports": [3000, 5173],
+                         "packages": ["node", "build"], "setup": ""},
+                        {"name": "ml", "description": "Python for ML", "image": "arch", "memory": 65536, "cpus": 8,
+                         "disk": 60, "agents": ["claude", "aider"], "ports": [8888], "packages": ["python"],
+                         "setup": ""}],
           "host": {"memory_mb": 16384, "memory_available_mb": 9000, "cpus": 8, "libvirt": True, "pool": "default",
                    "pool_available_gb": 100, "missing": [],
                    "agents": ["claude", "codex", "gemini", "opencode", "aider"]}}
@@ -535,6 +541,23 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await self.wait_for(pilot, lambda: len(self.calls("net")) == 3)
             self.assertEqual(self.calls("net")[-1], ["net", "dev", "open"])
 
+    async def test_load(self):
+        self.write(list=[dict(VM, cpu_ns=1_000_000_000, rss_mb=2150)])
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            import time as clock
+            vm = dict(VM, cpu_ns=6_000_000_000, rss_mb=2150)  # 5 s of CPU since, on 2 CPUs
+            self.app.samples["dev"] = (clock.monotonic() - 5, 1_000_000_000)
+            self.app.measure([vm])
+            self.app._seen = None
+            self.app.show_vms([vm])
+            await pilot.pause(0.2)
+            self.assertAlmostEqual(self.app.load["dev"], 50, delta=2)
+            self.assertIn("%", str(self.app.main.query_one("#vms").get_row_at(0)[4]))
+            self.assertIn("Now: CPU 50% · takes 2.1 GB of memory here", self.text("#details"))
+            self.app.measure([dict(VM, state="shut off", cpu_ns=None)])  # off: no reading
+            self.assertNotIn("dev", self.app.load)
+
     async def test_terminal_keys(self):
         k = self.ui.key_bytes
         self.assertEqual(k("ctrl+c", None), b"\x03")
@@ -627,6 +650,24 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.3)
             self.assertEqual(self.tab_labels(), ["1 VMs"])
             self.assertEqual(self.app.current_pane(), "home")
+
+    async def test_new_vm_from_a_template(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("n")
+            await pilot.pause(0.3)
+            form = self.app.screen
+            form.query_one("#template").value = "ml"
+            await pilot.pause(0.2)
+            self.assertEqual(form.query_one("#image").value, "arch")
+            self.assertEqual(form.query_one("#memory").value, 12288)  # the most that fits here (16 GB)
+            self.assertEqual(form.query_one("#cpus").value, 8)
+            self.assertEqual(form.query_one("#disk").value, "60")
+            self.assertTrue(form.query_one("#agent-aider").value)
+            self.assertEqual(form.query_one("#ports").value, "8888")
+            form.query_one("#name").value = "lab"
+            await pilot.pause(0.2)
+            self.assertIn("--ports 8888 --template ml", self.text("#command"))
 
     async def test_new_vm_checks(self):
         async with self.start() as pilot:
