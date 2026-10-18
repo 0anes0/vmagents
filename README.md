@@ -51,6 +51,7 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **Terminal UI** | `vmagents ui`: make VMs (system, RAM, CPUs, disk, agents, ports), open shells and agents in tabs, snapshots, ports, projects. |
 | **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
 | **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
+| **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
 | **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
@@ -171,6 +172,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `a` | a task for an agent, done alone; followed in a tab, marked when it ends |
 | `Y` | yolo: agents act without asking first (asks you once), or ask again |
 | `x` | try a task on copies of the VM (each followed in a tab); with copies there, delete them |
+| `i` | network: restrict it to a list of hosts; when restricted, allow a host (the last one refused is offered) or open it again |
 | `p` / `c` | send a project (a git repository) / its changes, in a tab (`t` there: take as a branch, `P`: pull request) |
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
@@ -249,6 +251,32 @@ like [`vmagents run`](#tasks-and-yolo-mode) and shuts down when done. They
 run at the same time, so their memory has to be free here (`--memory MB`
 gives each less). The VM itself has to be off while it is copied (`--stop`
 shuts it down first). Copies work from VMs made with `vmagents create`.
+
+## Restricted network
+
+An agent that acts without asking can also send things where it should not,
+or fetch what it should not. Restrict the VM's network, and it reaches only
+the hosts on its list:
+
+```sh
+vmagents net dev restricted          # only the hosts on the list, from now on
+vmagents net dev                     # the list, and what was refused lately
+vmagents net dev allow api.example.com *.internal.test   # more (HOST:PORT for other ports)
+vmagents net dev deny github.com     # fewer
+vmagents net dev open                # everything again
+```
+
+The list starts with the agents' services and installers, the package
+registries (npm, PyPI, crates.io, Go, Debian, Ubuntu, Arch) and GitHub; it
+is a file too, `~/.config/vmagents/net/NAME.allow`. It is enforced on your
+computer, where nothing in the VM can change it: a libvirt network filter on
+the VM's card lets through only SSH, DHCP, DNS and a small proxy that
+vmagents runs on this computer for the VM, and the proxy lets HTTP and HTTPS
+through to the hosts on the list. On the VM, proxy settings make the
+agents, git, npm, pip and apt or pacman use it. The VM's libvirt network and
+your other VMs are not changed. It needs python3 here; with a firewall such
+as ufw, allow the VM network to reach this computer on the proxy's port
+(18080 and up). In the UI, `i` restricts it, allows a host or opens it.
 
 ## Projects
 
@@ -548,6 +576,7 @@ vmagents runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
 vmagents yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
 vmagents try NAME N [--agents LIST] [--memory MB] [--stop] TASK   N copies, each doing the task
 vmagents tries NAME | try NAME --clean   the copies / delete them
+vmagents net NAME [restricted|open|allow HOST...|deny HOST...|blocked]   the VM's network
 
 vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
 vmagents changes NAME [--stat]   what the agents changed in it there
@@ -593,6 +622,7 @@ AGENTS=claude,codex     # installed on the VM
 PORTS=3000,5173         # forwarded to this computer while connected
 PROJECT=~/code/app      # the git repository sent with "vmagents project"
 YOLO=off                # on: agents act without asking first
+NET=open                # restricted: only the hosts on its list (vmagents net); NETPORT: its proxy's port
 AUTOSTOP=on             # off: the VM keeps running after you leave
 AUTOSNAP=3              # automatic snapshots to keep; 0 = none
 IDLE=30                 # what "vmagents idle" set up on the VM (0 = off)
@@ -703,7 +733,8 @@ home directory. CI runs them on every push, with shellcheck.
   open, clipboard, notifications, idle shutdown; start them yourself.
 - Windows VMs have no tmux, so sessions end with the connection; skipping
   autostart with `LC_VMAGENTS=off` works on Linux VMs only.
-- The clipboard, other agents and projects need a Linux VM.
+- The clipboard, other agents, projects, tasks and the restricted network need a Linux VM. Copies
+  (`try`) need a VM made by vmagents; the restricted network a libvirt VM on a libvirt network.
 - A plain `ssh` login never shuts the VM down (vmagents is not running then;
   the idle shutdown does, later). The idle shutdown cannot see long jobs that
   use little CPU (a download, a `sleep`).

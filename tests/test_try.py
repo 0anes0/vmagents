@@ -62,6 +62,10 @@ if cmd == "domiflist":
     sys.exit(0)
 if cmd == "net-dhcp-leases":
     print(" Expiry Time   MAC address   Protocol   IP address   Hostname   Client ID or DUID\n" + "-" * 60)
+    st["lease_asks"] = st.get("lease_asks", 0) + 1
+    if st.get("later_leases") and st["lease_asks"] > 2:  # its new address comes a little later
+        st["leases"] = st.pop("later_leases")
+    save()
     for l in st.get("leases", []):
         if l[1] == opt("--mac"):
             print(f" {l[0]}   {l[1]}   ipv4   {l[2]}/24   -   01:02")
@@ -156,6 +160,17 @@ class TryTests(CreateBase):
         self.lv.write_text(json.dumps(st))
         r = self.sb.run("shell", "src", "true", env={"VMAGENTS_BOOT_TIMEOUT": "1"})
         self.assertIn("on 192.0.2.25:", r.stderr)  # not the old .46
+
+    def test_a_new_address_while_it_boots(self):
+        st = self.state()
+        st["domains"]["src"].update(state="running", mac="52:54:00:00:00:09")
+        st["leases"] = [["2026-10-18 18:00:07", "52:54:00:00:00:09", "192.0.2.46"]]  # old: nobody answers there
+        st["later_leases"] = [["2026-10-18 18:09:00", "52:54:00:00:00:09", "127.0.0.1"]]
+        self.lv.write_text(json.dumps(st))
+        r = self.sb.run("start", "src", env={"VMAGENTS_BOOT_TIMEOUT": "40"}, check=0)
+        self.assertIn("Waiting for SSH on 192.0.2.46:", r.stderr)
+        self.assertIn("Its address is 127.0.0.1 now.", r.stderr)
+        self.assertIn("VM src is running: ", r.stdout)
 
     def test_memory_and_checks(self):
         self.sb.run("try", "src", "1", "--memory", "1024", check=0)

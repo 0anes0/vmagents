@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.16.0
+VERSION=0.17.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -30,7 +30,7 @@ DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
 BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
 STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO TRY CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO TRY NET NETPORT CREATED "
 HOLD=0
 AGENTS="claude codex gemini opencode aider"
 
@@ -122,6 +122,7 @@ COMMANDS
     runs NAME [ID]       the tasks and their state; with ID its output (-f follows, --stop, --clean)
     try NAME N "TASK"    N copies of the VM, each doing the task (--agents claude,codex: they take turns)
     tries NAME           the copies and what they did; try NAME --clean deletes them
+    net NAME restricted  the VM reaches only the hosts on its list (net NAME allow HOST; open: all again)
 
   Projects (a git repository of this computer, worked on in the VM):
     project NAME [DIR]   send the repository (default: this folder); again: send new commits
@@ -577,6 +578,35 @@ Examples:
   vmagents runs dev 3 --stop
 EOF
       ;;
+    net) cat <<EOF
+vmagents net NAME [restricted | open | allow HOST... | deny HOST... | blocked]
+
+With a restricted network the VM reaches only the hosts on its list: the
+agents' services, package registries and GitHub at first. Then an agent
+that acts without asking (yolo, "vmagents run") cannot send your code or
+keys anywhere else, or fetch from anywhere else.
+
+It is enforced on this computer, where the VM cannot change it: a libvirt
+network filter (nwfilter "$NET_FILTER") on the VM's card lets only SSH,
+DHCP, DNS and a proxy on this computer through, and the proxy lets HTTP and
+HTTPS through to the hosts on the list (other ports: HOST:PORT). On the VM,
+proxy settings make the agents, git, npm, pip and apt/pacman use it (the
+system-wide ones need sudo there). Agents already running keep their old
+settings until they are started again. The VM's libvirt network and other
+VMs are not changed. The proxy needs python3 here, and runs while the VM does.
+
+Without arguments it shows the mode, the list and what was refused lately
+(blocked: more). The list is a file you can edit too:
+${CONF_DIR/#$HOME/\~}/net/NAME.allow (a host, *.domain, HOST:PORT per line).
+Libvirt VMs on a libvirt network only, Linux.
+
+Examples:
+  vmagents net dev restricted
+  vmagents net dev allow api.example.com *.internal.test
+  vmagents net dev                          what was refused: allow it if it was needed
+  vmagents net dev open
+EOF
+      ;;
     try) cat <<EOF
 vmagents try NAME N [--agents LIST] [--memory MB] [--stop] [--] [TASK...]
 vmagents try NAME --clean
@@ -998,6 +1028,8 @@ check_value() { # KEY VALUE
     AGENTS) agent_list_ok "$v" || die "invalid AGENTS: $v (a comma-separated list of: $AGENTS)" ;;
     PORTS) port_list_ok "$v" || die "invalid PORTS: $v (a comma-separated list of ports, e.g. 3000,5173)" ;;
     AUTOSTOP | NOTIFY | CLIPBOARD | YOLO) [[ $v == on || $v == off ]] || die "invalid $k: $v (on or off)" ;;
+    NET) [[ $v == open || $v == restricted ]] || die "invalid NET: $v (open or restricted)" ;;
+    NETPORT) if ! [[ $v =~ ^[0-9]+$ ]] || ((v < 1024 || v > 65535)); then die "invalid NETPORT: $v"; fi ;;
     AUTOSNAP | IDLE) [[ $v =~ ^[0-9]+$ ]] || die "invalid $k: $v (a number)" ;;
   esac
 }
@@ -1010,7 +1042,7 @@ load() {
   profile_exists "$NAME" || die "no VM profile named '$NAME' (see: $PROG list)"
   read_profile "$NAME"
   local k
-  for k in HOST USER PORT DOMAIN SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD YOLO; do
+  for k in HOST USER PORT DOMAIN SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD YOLO NET NETPORT; do
     [[ -v P[$k] && -n ${P[$k]} ]] && check_value "$k" "${P[$k]}"
   done
   C_HOST=${P[HOST]:-}
@@ -1197,11 +1229,20 @@ detect_os() {
 }
 
 wait_for_port() {
-  local host=$1 port=$2 deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0
+  local host=$1 port=$2 deadline=$((SECONDS + BOOT_TIMEOUT)) noted=0 next=$((SECONDS + 10))
   until ssh_ready "$host" "$port"; do
     [[ -n $C_DOMAIN ]] && check_still_running
     ((SECONDS < deadline)) || die "no SSH server answers on $host:$port after ${BOOT_TIMEOUT}s (is sshd installed and running on the VM?)"
     ((noted)) || { info "Waiting for SSH on $host:$port..."; noted=1; }
+    # A booting VM can have found an old lease first, then get a new
+    # address: ask libvirt again now and then (TARGET follows).
+    if [[ -n $C_DOMAIN && -z $C_HOST && $host == "${TARGET:-}" ]] && ((SECONDS >= next)); then
+      next=$((SECONDS + 10))
+      if find_ip && [[ $FOUND_IP != "$host" ]]; then
+        info "Its address is $FOUND_IP now."
+        host=$FOUND_IP TARGET=$FOUND_IP
+      fi
+    fi
     sleep 2
   done
 }
@@ -1218,6 +1259,7 @@ resolve_target() {
       TARGET=$FOUND_IP
     fi
     wait_for_port "$TARGET" "$C_PORT"
+    start_proxy
   else
     TARGET=$C_HOST
   fi
@@ -1286,7 +1328,7 @@ cd_dir() {
 # vmagents's hooks (claude-settings.json in the same folder). A wrapper, not
 # tmux -e: tokens stay out of command lines.
 # shellcheck disable=SC2016
-CLAUDE_ENV_SH='[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"'
+CLAUDE_ENV_SH='p=${1%/*}/proxy-env; [ -r "$p" ] && { set -a; . "$p"; set +a; }; [ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"'
 
 # ------------------------------------------------------------------ hooks, idle shutdown, notifications
 # Claude Code on the VM runs hook.sh from its hooks (loaded with --settings
@@ -2142,8 +2184,8 @@ list_json() {
     printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
       "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
       "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
-    printf '"project": %s, "yolo": %s, "try": %s, ' "$(json_str "${P[PROJECT]:-}")" "$(json_bool "${P[YOLO]:-off}")" \
-      "$(json_str "${P[TRY]:-}")"
+    printf '"project": %s, "yolo": %s, "try": %s, "net": %s, ' "$(json_str "${P[PROJECT]:-}")" \
+      "$(json_bool "${P[YOLO]:-off}")" "$(json_str "${P[TRY]:-}")" "$(json_str "${P[NET]:-open}")"
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
@@ -4835,6 +4877,421 @@ cmd_tries() {
   done
 }
 
+# ------------------------------------------------------------------ restricted network
+
+# "vmagents net NAME restricted": the VM reaches only the hosts on its
+# allow list. Enforced on this computer, where the VM cannot change it: a
+# libvirt nwfilter on the VM's network card lets through SSH, DHCP, DNS to
+# the network's gateway and this computer's proxy for the VM, nothing else.
+# The proxy (PROXY_PY, one per VM) lets HTTP and HTTPS through to the hosts
+# on the list (~/.config/vmagents/net/NAME.allow) and notes the others
+# (~/.cache/vmagents/net-NAME.log). On the VM, proxy settings tell the agents,
+# git, npm, pip and the package manager to use it. The default network and
+# other VMs are not touched.
+
+NET_FILTER=vmagents-restricted
+NET_FILTER_XML="<filter name='$NET_FILTER' chain='root'>
+  <rule action='accept' direction='inout' priority='100'><arp/></rule>
+  <rule action='accept' direction='out' priority='110'><udp srcportstart='68' dstportstart='67'/></rule>
+  <rule action='accept' direction='in' priority='110'><udp srcportstart='67' dstportstart='68'/></rule>
+  <rule action='accept' direction='out' priority='120'><udp dstipaddr='\$GATEWAY' dstportstart='53'/></rule>
+  <rule action='accept' direction='in' priority='120'><udp srcipaddr='\$GATEWAY' srcportstart='53'/></rule>
+  <rule action='accept' direction='out' priority='121'><tcp dstipaddr='\$GATEWAY' dstportstart='53'/></rule>
+  <rule action='accept' direction='in' priority='121'><tcp srcipaddr='\$GATEWAY' srcportstart='53'/></rule>
+  <rule action='accept' direction='out' priority='130'><tcp dstipaddr='\$GATEWAY' dstportstart='\$PROXY_PORT'/></rule>
+  <rule action='accept' direction='in' priority='130'><tcp srcipaddr='\$GATEWAY' srcportstart='\$PROXY_PORT'/></rule>
+  <rule action='accept' direction='in' priority='140'><tcp dstportstart='22'/></rule>
+  <rule action='accept' direction='out' priority='140'><tcp srcportstart='22'/></rule>
+  <rule action='drop' direction='inout' priority='500'><all/></rule>
+  <rule action='drop' direction='inout' priority='500'><all-ipv6/></rule>
+</filter>"
+
+# What a restricted VM may reach at first: the agents' services and
+# installers, package registries and mirrors, GitHub.
+NET_ALLOW_DEFAULT='# Hosts this VM may reach (vmagents net NAME allow HOST / deny HOST).
+# One per line: a name, *.domain for it and its subdomains, HOST:PORT for
+# another port than 80 and 443.
+# Claude Code
+*.anthropic.com
+claude.ai
+*.claude.ai
+storage.googleapis.com
+# Codex
+*.openai.com
+chatgpt.com
+*.chatgpt.com
+# Gemini CLI
+generativelanguage.googleapis.com
+cloudcode-pa.googleapis.com
+oauth2.googleapis.com
+accounts.google.com
+# OpenCode, aider
+opencode.ai
+*.opencode.ai
+models.dev
+aider.chat
+astral.sh
+*.astral.sh
+# Code and packages
+github.com
+*.github.com
+*.githubusercontent.com
+registry.npmjs.org
+pypi.org
+files.pythonhosted.org
+crates.io
+*.crates.io
+proxy.golang.org
+sum.golang.org
+# System packages
+deb.debian.org
+security.debian.org
+archive.ubuntu.com
+security.ubuntu.com
+*.archive.ubuntu.com
+*.archlinux.org
+*.mirror.pkgbuild.com
+'
+
+# The proxy: python3 -c "$PROXY_PY" ALLOW_FILE LOG_FILE BIND PORT URI DOMAIN.
+# It ends when the VM is no longer running.
+PROXY_PY='import asyncio, os, subprocess, sys, time
+allow_file, log_file, bind, port, uri, domain = sys.argv[1:7]
+patterns, mtime = [], None
+
+def load():
+    global patterns, mtime
+    try:
+        m = os.stat(allow_file).st_mtime
+    except OSError:
+        patterns, mtime = [], None
+        return
+    if m != mtime:
+        mtime = m
+        patterns = [l.split("#", 1)[0].strip().lower() for l in open(allow_file, encoding="utf-8")]
+        patterns = [p for p in patterns if p]
+
+def allowed(host, port):
+    load()
+    host = host.lower().rstrip(".")
+    for p in patterns:
+        hp, _, pp = p.partition(":")
+        if (pp and pp != str(port)) or (not pp and port not in (80, 443)):
+            continue
+        if hp == host or (hp.startswith("*.") and (host == hp[2:] or host.endswith(hp[1:]))):
+            return True
+    return False
+
+def note(host, port):
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write("%d %s:%d\n" % (time.time(), host, port))
+    except OSError:
+        pass
+
+async def pipe(r, w):
+    try:
+        while True:
+            data = await r.read(65536)
+            if not data:
+                break
+            w.write(data)
+            await w.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            w.close()
+        except Exception:
+            pass
+
+async def refuse(writer, status, text):
+    writer.write(("HTTP/1.1 %s\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%s\n" % (status, text)).encode())
+    try:
+        await writer.drain()
+    finally:
+        writer.close()
+
+async def handle(reader, writer):
+    try:
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 30)
+        method, target, version = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ", 2)
+    except Exception:
+        writer.close()
+        return
+    connect = method.upper() == "CONNECT"
+    try:
+        if connect:
+            host, _, p = target.rpartition(":")
+            host, p, first = host.strip("[]"), int(p), b""
+        elif target.lower().startswith("http://"):
+            hostport, _, path = target[7:].partition("/")
+            host, _, p = hostport.partition(":")
+            p = int(p or 80)
+            lines = [l for l in head.split(b"\r\n") if not l.lower().startswith(b"proxy-")]
+            lines[0] = ("%s /%s %s" % (method, path, version)).encode("latin-1")
+            first = b"\r\n".join(lines)
+        else:
+            return await refuse(writer, "400 Bad Request", "vmagents proxy: use it as a proxy")
+    except ValueError:
+        return await refuse(writer, "400 Bad Request", "vmagents proxy: bad request")
+    if not allowed(host, p):
+        note(host, p)
+        return await refuse(writer, "403 Forbidden",
+                            "vmagents: %s is not allowed from this VM (on this computer: vmagents net %s allow %s)"
+                            % (host, domain, host))
+    try:
+        ur, uw = await asyncio.wait_for(asyncio.open_connection(host, p), 20)
+    except Exception as e:
+        return await refuse(writer, "502 Bad Gateway", "vmagents proxy: %s:%d: %s" % (host, p, e))
+    if connect:
+        writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        await writer.drain()
+    else:
+        uw.write(first)
+        await uw.drain()
+    await asyncio.gather(pipe(reader, uw), pipe(ur, writer))
+
+async def watch():
+    every = float(os.environ.get("VMAGENTS_PROXY_WATCH", "20"))
+    while True:
+        await asyncio.sleep(every)
+        r = subprocess.run(["virsh", "-c", uri, "domstate", domain], capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.startswith("running"):
+            os._exit(0)
+
+async def main():
+    server = await asyncio.start_server(handle, bind, int(port))
+    async with server:
+        await asyncio.gather(server.serve_forever(), watch())
+
+asyncio.run(main())
+'
+
+# On the VM: proxy settings. $1 the proxy URL. Without sudo only what
+# vmagents starts uses it (proxy-env, read by the launcher).
+# shellcheck disable=SC2016
+NET_GUEST_ON_SH='h=$HOME/.config/vmagents
+mkdir -p "$h" || exit 1
+p=$1 n=localhost,127.0.0.1,::1
+printf "http_proxy=%s\nhttps_proxy=%s\nHTTP_PROXY=%s\nHTTPS_PROXY=%s\nno_proxy=%s\nNO_PROXY=%s\n" "$p" "$p" "$p" "$p" "$n" "$n" >"$h/proxy-env"
+if [ "$(id -u)" = 0 ]; then su_=
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then su_="sudo -n"
+else echo "vmagents: no sudo on the VM: only the agents started by vmagents use the proxy" >&2; exit 0
+fi
+$su_ sh -c '\''
+p=$1 n=localhost,127.0.0.1,::1
+f=/etc/environment
+if [ -f $f ]; then sed -i "/^# vmagents proxy (/,/^# vmagents proxy end$/d" $f; fi
+{ echo "# vmagents proxy (vmagents net NAME open removes it)"
+  for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; do echo "$v=$p"; done
+  echo "no_proxy=$n"; echo "NO_PROXY=$n"; echo "# vmagents proxy end"; } >>$f
+if [ -d /etc/apt/apt.conf.d ]; then
+  printf "Acquire::http::Proxy \"%s\";\nAcquire::https::Proxy \"%s\";\n" "$p" "$p" >/etc/apt/apt.conf.d/95vmagents-proxy
+fi
+if [ -d /etc/sudoers.d ]; then
+  echo "Defaults env_keep += \"http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY\"" >/etc/sudoers.d/vmagents-proxy
+  chmod 440 /etc/sudoers.d/vmagents-proxy
+  if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/vmagents-proxy >/dev/null 2>&1; then rm -f /etc/sudoers.d/vmagents-proxy; fi
+fi
+'\'' vmagents "$p"
+'
+
+# shellcheck disable=SC2016
+NET_GUEST_OFF_SH='rm -f "$HOME/.config/vmagents/proxy-env"
+if [ "$(id -u)" = 0 ]; then su_=
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then su_="sudo -n"
+else exit 0
+fi
+$su_ sh -c '\''
+[ -f /etc/environment ] && sed -i "/^# vmagents proxy (/,/^# vmagents proxy end$/d" /etc/environment
+rm -f /etc/apt/apt.conf.d/95vmagents-proxy /etc/sudoers.d/vmagents-proxy
+'\''
+'
+
+allow_file() { printf '%s/net/%s.allow' "$CONF_DIR" "$1"; }
+net_log_file() { printf '%s/net-%s.log' "$CACHE_DIR" "$1"; }
+
+NET_NAME='' NET_GW=''
+net_gateway() { # the loaded VM's libvirt network and its address on this computer
+  read -r NET_NAME < <(vsh domiflist "$C_DOMAIN" 2>/dev/null | awk '$2 == "network" { print $3; exit }') || true
+  [[ -n $NET_NAME ]] || die "$NAME has no card on a libvirt network; its network cannot be restricted"
+  NET_GW=$(vsh net-dumpxml "$NET_NAME" 2>/dev/null | sed -n "s/.*<ip address=['\"]\([0-9.]*\)['\"].*/\1/p" | head -n 1)
+  [[ -n $NET_GW ]] || die "libvirt network $NET_NAME has no IPv4 address on this computer"
+}
+
+# The VM's network cards on libvirt networks, with the filter ($1 = on) or without.
+set_net_filter() { # on|off
+  local xml tmp out
+  xml=$(vsh dumpxml --inactive "$C_DOMAIN") || die "libvirt: cannot read VM $C_DOMAIN"
+  tmp=$(mktemp)
+  ON=$1 FILTER=$NET_FILTER GW=$NET_GW PORT=${P[NETPORT]} awk '
+    /^ *<interface type=.network./ { inif = 1 }
+    inif && /<filterref / { skip = 1 }
+    skip { if (/<\/filterref>/ || /<filterref [^>]*\/>/) skip = 0; next }
+    inif && /^ *<\/interface>/ {
+      if (ENVIRON["ON"] == "on") {
+        print "      <filterref filter=\x27" ENVIRON["FILTER"] "\x27>"
+        print "        <parameter name=\x27GATEWAY\x27 value=\x27" ENVIRON["GW"] "\x27/>"
+        print "        <parameter name=\x27PROXY_PORT\x27 value=\x27" ENVIRON["PORT"] "\x27/>"
+        print "      </filterref>"
+      }
+      inif = 0
+    }
+    { print }
+  ' <<<"$xml" >"$tmp"
+  out=$(vsh define "$tmp" 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
+  if [[ $(domstate) == running ]]; then
+    # The running VM too: its card, with the new filter.
+    vsh dumpxml "$C_DOMAIN" | awk '/^ *<interface type=.network./ { p = 1 } p { print } p && /<\/interface>/ { exit }' |
+      ON=$1 FILTER=$NET_FILTER GW=$NET_GW PORT=${P[NETPORT]} awk '
+        /<filterref / { skip = 1 }
+        skip { if (/<\/filterref>/ || /<filterref [^>]*\/>/) skip = 0; next }
+        /<\/interface>/ && ENVIRON["ON"] == "on" {
+          print "<filterref filter=\x27" ENVIRON["FILTER"] "\x27><parameter name=\x27GATEWAY\x27 value=\x27" ENVIRON["GW"] "\x27/><parameter name=\x27PROXY_PORT\x27 value=\x27" ENVIRON["PORT"] "\x27/></filterref>"
+        }
+        { print }' >"$tmp"
+    out=$(vsh update-device "$C_DOMAIN" "$tmp" --live 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
+  fi
+  rm -f "$tmp"
+}
+
+# Starts the VM's proxy when its network is restricted (one per VM).
+start_proxy() {
+  [[ ${P[NET]:-open} == restricted && -n $C_DOMAIN && -n ${P[NETPORT]:-} ]] || return 0
+  command -v python3 >/dev/null || die "the restricted network of $NAME needs python3 on this computer (for its proxy)"
+  local self
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  if command -v setsid >/dev/null; then
+    setsid -f "$self" __proxy "$NAME" </dev/null >/dev/null 2>&1 || true
+  else
+    nohup "$self" __proxy "$NAME" </dev/null >/dev/null 2>&1 &
+  fi
+  sleep 0.3
+}
+
+cmd___proxy() {
+  load "$1"
+  command -v flock >/dev/null || return 0
+  [[ ${P[NET]:-open} == restricted && -n ${P[NETPORT]:-} ]] || return 0
+  local lock
+  lock=${XDG_RUNTIME_DIR:-/tmp}/vmagents-proxy-$(id -u)-$NAME.lock
+  exec 9>>"$lock"
+  flock -n 9 || return 0  # one proxy per VM
+  printf '%s\n' "$$" >"$lock.pid"
+  net_gateway
+  mkdir -p "$CACHE_DIR"
+  exec python3 -c "$PROXY_PY" "$(allow_file "$NAME")" "$(net_log_file "$NAME")" "$NET_GW" "${P[NETPORT]}" \
+    "$C_URI" "$C_DOMAIN"
+}
+
+stop_proxy() {
+  local f pid
+  f=${XDG_RUNTIME_DIR:-/tmp}/vmagents-proxy-$(id -u)-$NAME.lock.pid
+  [[ -f $f ]] || return 0
+  pid=$(<"$f")
+  [[ $pid =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
+  rm -f "$f"
+  return 0
+}
+
+net_blocked() { # the hosts refused lately, newest first, once each
+  local f
+  f=$(net_log_file "$NAME")
+  [[ -f $f ]] || return 0
+  tail -n 500 "$f" | awk '{ print $2 }' | tac | awk '!seen[$0]++' | head -n "${1:-15}"
+}
+
+cmd_net() {
+  local name=${1:-} what=${2:-} p f port n out
+  [[ -n $name ]] || usage_error "net: missing NAME"
+  load "$name"
+  f=$(allow_file "$NAME")
+  case $what in
+    "")
+      say "Network of $NAME: ${P[NET]:-open}"
+      if [[ ${P[NET]:-open} == restricted ]]; then
+        say "Allowed (vmagents net $NAME allow HOST / deny HOST; the list: $f):"
+        grep -v '^[[:space:]]*\(#\|$\)' "$f" 2>/dev/null | sed 's/^/  /' | paste -sd ' ' | fold -s -w 100 | sed 's/^/  /'
+        out=$(net_blocked)
+        if [[ -n $out ]]; then
+          say "Refused lately:"
+          say "  ${out//$'\n'/$'\n'  }"
+        fi
+      fi
+      return 0 ;;
+    allow | deny)
+      (($# >= 3)) || usage_error "net: $what which host? e.g. $PROG net $NAME $what example.com"
+      mkdir -p "${f%/*}"
+      [[ -f $f ]] || printf '%s' "$NET_ALLOW_DEFAULT" >"$f"
+      shift 2
+      for p in "$@"; do
+        p=${p,,}
+        [[ $p =~ ^(\*\.)?[a-z0-9.-]+(:[0-9]+)?$ ]] || die "not a host name: $p (e.g. example.com, *.example.com, example.com:8443)"
+        if [[ $what == allow ]]; then
+          grep -qxF "$p" "$f" || printf '%s\n' "$p" >>"$f"
+        else
+          grep -vxF "$p" "$f" >"$f.tmp" || true
+          mv -f "$f.tmp" "$f"
+        fi
+      done
+      if [[ $what == allow ]]; then say "Allowed from $NAME: $*"; else say "Not allowed from $NAME any more: $*"; fi
+      [[ ${P[NET]:-open} == restricted ]] || say "(The network of $NAME is open now; the list counts once it is restricted: $PROG net $NAME restricted)"
+      return 0 ;;
+    blocked)
+      out=$(net_blocked 50)
+      if [[ -n $out ]]; then say "$out"; else say "Nothing refused lately."; fi
+      return 0 ;;
+    restricted | open) ;;
+    *) usage_error "net: open, restricted, allow HOST, deny HOST or blocked" ;;
+  esac
+  need_domain "a restricted network"
+  [[ -n $C_DOMAIN ]] || die "$NAME is not a libvirt VM"
+  [[ ${P[OS]:-linux} != windows ]] || die "the restricted network works with Linux VMs only"
+  command -v python3 >/dev/null || die "the restricted network needs python3 on this computer (for its proxy)"
+  if [[ $what == restricted ]]; then
+    mkdir -p "${f%/*}"
+    [[ -f $f ]] || printf '%s' "$NET_ALLOW_DEFAULT" >"$f"
+    if [[ -z ${P[NETPORT]:-} ]]; then
+      local used
+      used=$(cat "$HOSTS_DIR"/*.conf 2>/dev/null | sed -n 's/^NETPORT=//p')
+      for ((port = 18080; port < 18180; port++)); do
+        [[ " $(tr '\n' ' ' <<<"$used") " == *" $port "* ]] && continue
+        port_free "$port" && break
+      done
+      P[NETPORT]=$port
+    fi
+    port=${P[NETPORT]}
+    net_gateway
+    local tmp
+    tmp=$(mktemp)
+    printf '%s\n' "$NET_FILTER_XML" >"$tmp"
+    out=$(vsh nwfilter-define "$tmp" 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
+    rm -f "$tmp"
+    P[NET]=restricted
+    write_profile "$NAME"
+    set_net_filter on
+    project_connect
+    start_proxy
+    run_ssh -T -- "$TARGET" "$(remote_cmd "$NET_GUEST_ON_SH" "http://$NET_GW:$port")" </dev/null ||
+      warn "could not set the proxy on the VM"
+    say "The network of $NAME is restricted: it reaches only the hosts on its list, through a proxy here"
+    say "($NET_GW:$port). See and change the list: $PROG net $NAME; $PROG net $NAME allow HOST"
+    say "Agents already running keep their old settings until they are started again."
+    project_done
+  else
+    net_gateway
+    P[NET]=open
+    write_profile "$NAME"
+    set_net_filter off
+    project_connect  # (started if off: the proxy settings on the VM have to go)
+    run_ssh -T -- "$TARGET" "$(remote_cmd "$NET_GUEST_OFF_SH")" </dev/null || warn "could not remove the proxy settings on the VM"
+    stop_proxy
+    say "The network of $NAME is open again."
+    project_done
+  fi
+}
+
 # ------------------------------------------------------------------ ui
 
 # The terminal UI: a Textual app (UI_PY below) that runs this script.
@@ -4918,9 +5375,9 @@ TEXTS = {"tr": {
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
     "[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · c: changes · "
-    "o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da l: aç · "
-    "j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · c: değişiklikler · o: portlar · "
-    "t: başlat/durdur · u: anlık görüntüler · Y: sormadan · L: dil · q: çık[/]",
+    "i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da "
+    "l: aç · j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · c: değişiklikler · i: ağ · "
+    "o: portlar · t: başlat/durdur · u: anlık görüntüler · Y: sormadan · L: dil · q: çık[/]",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
         "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zeka "
@@ -5000,6 +5457,23 @@ TEXTS = {"tr": {
     "değiştirirler. Bu VM'de kalır ve \"geri al\" (u) onu geri alır. Zaten çalışan bir asistan, yeniden "
     "başlatılana kadar eski modunda kalır.",
     "Yes, yolo": "Evet, sormadan",
+    "Network": "Ağ",
+    "Network: [b]restricted[/] to its list  [dim](i: allow a host, open)[/]":
+        "Ağ: listesiyle [b]kısıtlı[/]  [dim](i: adrese izin ver, aç)[/]",
+    "\n  refused lately: {list}": "\n  son reddedilenler: {list}",
+    "Network: open  [dim](i: restrict it to a list of hosts)[/]": "Ağ: açık  [dim](i: bir adres listesiyle kısıtla)[/]",
+    "The restricted network works with Linux VMs only.": "Kısıtlı ağ yalnızca Linux VM'lerinde çalışır.",
+    "Restrict the network of {n}? It then reaches only the hosts on its list (the agents' services, package "
+    "registries, GitHub; you can add more), through a proxy on this computer. Enforced here, so nothing in the VM "
+    "can get around it.": "{n} ağı kısıtlansın mı? O zaman yalnızca listesindeki adreslere (asistanların "
+    "servisleri, paket depoları, GitHub; daha fazlasını ekleyebilirsin) bu bilgisayardaki bir vekil üzerinden "
+    "ulaşır. Burada uygulandığı için VM'deki hiçbir şey onu aşamaz.",
+    "Restrict": "Kısıtla",
+    "Allow from {n} (a host, *.domain, or HOST:PORT; several with spaces):":
+        "{n} için izin ver (bir adres, *.alan ya da ADRES:PORT; boşlukla birden çok):",
+    "Refused lately: {list}": "Son reddedilenler: {list}", "Nothing refused lately.": "Son zamanda reddedilen yok.",
+    "[b]Network of {n}[/b]: restricted": "[b]{n} ağı[/b]: kısıtlı", "Allow a host": "Bir adrese izin ver",
+    "Show the list (in the log below)": "Listeyi göster (aşağıdaki kayıtta)", "Open the network again": "Ağı tekrar aç",
     "Try": "Dene",
     "A copy of {src} (vmagents try)  [dim](x on {src}: try --clean deletes all)[/]":
         "{src} kopyası (vmagents try)  [dim]({src} üzerinde x: hepsini siler)[/]",
@@ -5207,7 +5681,23 @@ def home_short(path):
     return "~" + path[len(home):] if path and (path == home or path.startswith(home + "/")) else path
 
 
-HERE = git_top(os.getcwd()) or ""  # the repository "vmagents ui" was started in, if any
+HERE = git_top(os.getcwd()) or ""
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "vmagents")
+
+
+def refused(name, n=50):
+    """The hosts the restricted network of NAME refused lately, newest first."""
+    try:
+        with open(os.path.join(CACHE, f"net-{name}.log"), encoding="utf-8") as f:
+            lines = f.readlines()[-500:]
+    except OSError:
+        return []
+    out = []
+    for line in reversed(lines):
+        host = line.split()[-1] if line.split() else ""
+        if host and host not in out:
+            out.append(host)
+    return out[:n]  # the repository "vmagents ui" was started in, if any
 
 
 class VimOptions(OptionList):
@@ -6139,7 +6629,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes", "yolo", "task", "try"}
+                "refresh", "project", "changes", "yolo", "task", "try", "net"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -6210,7 +6700,7 @@ class VmAgentsUI(App):
                     Binding("d", "delete", T("Delete")),
                     Binding("ctrl+right_square_bracket", "back_to_tab", T("Tabs"), key_display="^]",
                             show=more, priority=True),
-                    Binding("Y", "yolo", T("Yolo"), show=False),
+                    Binding("Y", "yolo", T("Yolo"), show=False), Binding("i", "net", T("Network"), show=False),
                     Binding("L", "language", other), Binding("q", "quit", T("Quit")),
                     Binding("g", "refresh", show=False)] + [
                 Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
@@ -6265,7 +6755,8 @@ class VmAgentsUI(App):
         t.focus()
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
-                        "c: changes · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]"))
+                        "c: changes · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · "
+                        "q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -6535,6 +7026,12 @@ class VmAgentsUI(App):
             lines.append("")
             lines.append(T("Open here: {list}  [dim](Enter to go back)[/]",
                            list=", ".join(kind_label(t.kind) + state(t) for t in terms)))
+        if vm.get("net") == "restricted":
+            blocked = refused(n, 3)
+            lines.append(T("Network: [b]restricted[/] to its list  [dim](i: allow a host, open)[/]")
+                         + (T("\n  refused lately: {list}", list=", ".join(blocked)) if blocked else ""))
+        elif vm.get("domain"):
+            lines.append(T("Network: open  [dim](i: restrict it to a list of hosts)[/]"))
         lines.append(T("Agents: [b #ffaf00]act without asking[/] (yolo)  [dim](Y: ask first)[/]") if vm.get("yolo")
                      else T("Agents: ask before acting  [dim](Y: let them act without asking)[/]"))
         lines.append("")
@@ -6824,6 +7321,42 @@ class VmAgentsUI(App):
         for run_id, copy in re.findall(r"^Run (\d+) on (\S+?):", out, re.M):
             self.call_from_thread(self.open_session, copy, "run",
                                   [VMAGENTS, "runs", copy, run_id, "-f", "--hold"])
+
+    def action_net(self):
+        if not (vm := self.need_vm(libvirt=True)):
+            return
+        n = vm["name"]
+        if vm.get("os") == "windows":
+            self.notify(T("The restricted network works with Linux VMs only."))
+            return
+        if vm.get("net") != "restricted":
+            def sure(yes):
+                if yes:
+                    self.background(["net", n, "restricted"], name=n)
+            self.push_screen(Confirm(T("Restrict the network of {n}? It then reaches only the hosts on its list (the "
+                                       "agents' services, package registries, GitHub; you can add more), through a "
+                                       "proxy on this computer. Enforced here, so nothing in the VM can get around "
+                                       "it.", n=n), yes=T("Restrict")), sure)
+            return
+        blocked = refused(n)
+
+        def chosen(what):
+            if what == "allow":
+                def add(r):
+                    if r and r["host"].strip():
+                        self.background(["net", n, "allow", *r["host"].split()], done=lambda rc: self.show_details())
+                self.push_screen(Ask(T("Allow from {n} (a host, *.domain, or HOST:PORT; several with spaces):", n=n),
+                                     [("host", "", blocked[0].removesuffix(":443") if blocked else "",
+                                       "api.example.com")]), add)
+            elif what == "list":
+                self.background(["net", n])
+            elif what == "open":
+                self.background(["net", n, "open"], name=n)
+        note = (T("Refused lately: {list}", list=", ".join(blocked[:8])) if blocked
+                else T("Nothing refused lately."))
+        self.push_screen(Pick(T("[b]Network of {n}[/b]: restricted", n=n),
+                              [("allow", T("Allow a host")), ("list", T("Show the list (in the log below)")),
+                               ("open", T("Open the network again"))], note=f"[dim]{note}[/]"), chosen)
 
     def action_yolo(self):
         if not (vm := self.need_vm()):
@@ -7264,8 +7797,8 @@ main() {
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
-    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy) shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

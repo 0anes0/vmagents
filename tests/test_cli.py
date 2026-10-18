@@ -12,7 +12,7 @@ from tests.helpers import SandboxTest, free_port, listening_port, write_exe
 from tests.ptyrun import run_in_pty
 
 # How vmagents starts claude: through a wrapper that adds the "vmagents login" token.
-WRAP = ('[sh] [-c] [[ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; '
+WRAP = ('[sh] [-c] [p=${1%/*}/proxy-env; [ -r "$p" ] && { set -a; . "$p"; set +a; }; [ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; '
         'case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"] [vmagents] ')
 
 

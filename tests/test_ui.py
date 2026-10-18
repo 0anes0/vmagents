@@ -104,7 +104,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         self.write(images=IMAGES, snaps=SNAPS)
         fake = write_exe(self.d / "vmagents", FAKE)
         self.env = {"FAKE_UI_DIR": str(self.d), "VMAGENTS_BIN": str(fake), "VMAGENTS_CONF_DIR": str(self.d / "conf"),
-                    "LANG": "C.UTF-8"}
+                    "LANG": "C.UTF-8", "XDG_CACHE_HOME": str(self.d / "cache")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.addCleanup(self.restore_env)
@@ -495,6 +495,35 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("j")
             await pilot.pause(0.3)
             self.assertIn("A copy of dev", str(app.main.query_one("#details").render()))
+
+    async def test_network(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            self.assertIn("Network: open", self.text("#details"))
+            await pilot.press("i")
+            await pilot.pause(0.2)
+            self.assertIsInstance(self.app.screen, self.ui.Confirm)
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: self.calls("net"))
+            self.assertEqual(self.calls("net"), [["net", "dev", "restricted"]])
+        self.write(list=[dict(VM, net="restricted")])
+        (self.d / "cache" / "vmagents").mkdir(parents=True)
+        (self.d / "cache" / "vmagents" / "net-dev.log").write_text("1 old.example:443\n2 evil.example:443\n")
+        app = self.ui.VmAgentsUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.wait_for(pilot, lambda: app.vms)
+            details = str(app.main.query_one("#details").render())
+            self.assertIn("restricted", details)
+            self.assertIn("refused lately: evil.example:443, old.example:443", details)
+            await pilot.press("i", "enter")  # allow a host: the last one refused, ready
+            await pilot.pause(0.3)
+            self.assertEqual(app.screen.query_one("#f-host").value, "evil.example")
+            await pilot.press("enter")
+            await self.wait_for(pilot, lambda: len(self.calls("net")) == 2)
+            self.assertEqual(self.calls("net")[-1], ["net", "dev", "allow", "evil.example"])
+            await pilot.press("i", "j", "j", "enter")  # open it again
+            await self.wait_for(pilot, lambda: len(self.calls("net")) == 3)
+            self.assertEqual(self.calls("net")[-1], ["net", "dev", "open"])
 
     async def test_terminal_keys(self):
         k = self.ui.key_bytes

@@ -51,6 +51,7 @@ arayüzünden** yap: `vmagents ui`
 | **Terminal arayüzü** | `vmagents ui`: VM oluştur (sistem, RAM, işlemci, disk, asistanlar, portlar), kabukları ve asistanları sekmelerde aç; anlık görüntüler, portlar, projeler. |
 | **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
 | **Bir görev, birkaç deneme** | `vmagents try dev 3 "görev"`: VM'in saniyeler içinde üç kopyası, her biri görevi yapar (istersen farklı asistanlarla); en iyisini alırsın. |
+| **Kısa tasmalı ağ** | `vmagents net dev restricted`: VM yalnızca listesindeki adreslere (asistanların servisleri, paket depoları, GitHub) ulaşır; senin bilgisayarında uygulanır. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
 | **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
@@ -174,6 +175,7 @@ dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 | `a` | bir asistana tek başına yapacağı bir görev; sekmede izlenir, bitince işaretlenir |
 | `Y` | sormadan çalışma: asistanlar önce sormadan çalışır (bir kez onay ister), ya da yine sorsunlar |
 | `x` | görevi VM'in kopyalarında dene (her biri bir sekmede izlenir); kopyalar varsa onları sil |
+| `i` | ağ: bir adres listesiyle kısıtla; kısıtlıyken bir adrese izin ver (son reddedilen hazır gelir) ya da tekrar aç |
 | `p` / `c` | proje (git deposu) gönder / değişiklikleri sekmede (orada `t`: dal olarak al, `P`: pull request) |
 | `u` | anlık görüntüler: birine dön, ad ve etiketle yenisini al, etiketini değiştir, sil |
 | `o` | portlar: şimdi yönlendir (`o` tekrar: durdur), her bağlantıda, ya da ağındaki cihazlara da |
@@ -251,6 +253,32 @@ görevi [`vmagents run`](#görevler-ve-sormadan-çalışma) gibi yapar ve bitinc
 kapanır. Aynı anda çalıştıkları için bellekleri burada boş olmalı (`--memory MB`
 her birine daha az verir). Kopyalanırken VM'in kendisi kapalı olmalı (`--stop`
 önce kapatır). Kopyalar yalnızca `vmagents create` ile kurulmuş VM'lerden alınır.
+
+## Kısıtlı ağ
+
+Sormadan çalışan bir asistan, gitmemesi gereken yere bir şey gönderebilir ya da
+indirmemesi gerekeni indirebilir. VM'in ağını kısıtlarsan yalnızca listesindeki
+adreslere ulaşır:
+
+```sh
+vmagents net dev restricted          # bundan sonra yalnızca listedeki adresler
+vmagents net dev                     # liste ve son reddedilenler
+vmagents net dev allow api.example.com *.internal.test   # daha fazlası (başka port için ADRES:PORT)
+vmagents net dev deny github.com     # daha azı
+vmagents net dev open                # yine her yer
+```
+
+Liste asistanların servisleri ve kurucuları, paket depoları (npm, PyPI,
+crates.io, Go, Debian, Ubuntu, Arch) ve GitHub ile başlar; aynı zamanda bir
+dosyadır: `~/.config/vmagents/net/AD.allow`. Senin bilgisayarında, VM'in içinden
+değiştirilemeyecek yerde uygulanır: VM'in ağ kartındaki bir libvirt ağ filtresi
+yalnızca SSH, DHCP, DNS ve vmagents'ın bu bilgisayarda VM için çalıştırdığı
+küçük bir vekili geçirir; vekil de HTTP ve HTTPS'i yalnızca listedeki adreslere
+geçirir. VM'de vekil ayarları asistanların, git'in, npm'in, pip'in ve apt ya da
+pacman'ın onu kullanmasını sağlar. VM'in libvirt ağı ve diğer VM'lerin
+değişmez. Burada python3 gerekir; ufw gibi bir güvenlik duvarı varsa VM ağının
+bu bilgisayara vekilin portundan (18080 ve sonrası) ulaşmasına izin ver.
+Arayüzde `i` kısıtlar, bir adrese izin verir ya da açar.
 
 ## Projeler
 
@@ -551,6 +579,7 @@ vmagents runs AD [NO] [-f|--stop] [--clean] [--json]   görevler; birinin çıkt
 vmagents yolo AD on|off          asistanlar önce sormadan çalışır (bir seferlik: vmagents AD --yolo)
 vmagents try AD N [--agents LİSTE] [--memory MB] [--stop] GÖREV   N kopya, her biri görevi yapar
 vmagents tries AD | try AD --clean   kopyalar / onları sil
+vmagents net AD [restricted|open|allow ADRES...|deny ADRES...|blocked]   VM'in ağı
 
 vmagents project AD [KLASÖR]     buradaki bir git deposunu VM'e gönder (--discard, --off)
 vmagents changes AD [--stat]     asistanların orada neyi değiştirdiği
@@ -596,6 +625,7 @@ AGENTS=claude,codex     # VM'de kurulu olanlar
 PORTS=3000,5173         # bağlıyken bu bilgisayara yönlendirilir
 PROJECT=~/code/app      # "vmagents project" ile gönderilen git deposu
 YOLO=off                # on: asistanlar önce sormadan çalışır
+NET=open                # restricted: yalnızca listedeki adresler (vmagents net); NETPORT: vekilin portu
 AUTOSTOP=on             # off: çıktıktan sonra VM açık kalır
 AUTOSNAP=3              # saklanacak otomatik görüntü; 0 = hiç
 IDLE=30                 # "vmagents idle"ın VM'de kurduğu (0 = kapalı)
@@ -646,7 +676,8 @@ ve Arch VM'leri, Windows 10, Claude Code kancaları, arayüz ve projeler.
   çalışır: bağlantı, port açma, pano, bildirimler, boşta kapanma; onları kendin başlat.
 - Windows VM'lerinde tmux yoktur, oturumlar bağlantıyla biter;
   `LC_VMAGENTS=off` ile otomatik başlatmayı atlamak yalnızca Linux VM'lerinde çalışır.
-- Pano, diğer asistanlar ve projeler Linux VM'i ister.
+- Pano, diğer asistanlar, projeler, görevler ve kısıtlı ağ Linux VM'i ister. Kopyalar (`try`)
+  vmagents ile kurulmuş bir VM, kısıtlı ağ bir libvirt ağındaki bir libvirt VM'i ister.
 - Düz bir `ssh` girişi VM'i hiç kapatmaz (o sırada vmagents çalışmıyordur; boşta
   kapanma sonra kapatır). Boşta kapanma, az işlemci kullanan uzun işleri (bir
   indirme, bir `sleep`) göremez.
