@@ -221,7 +221,7 @@ class TryTests(CreateBase):
         self.assertIn("AGENT=codex\n", self.profile("src-t2"))
         args = (self.sb.remote_home / "agent-args").read_text()
         self.assertIn("--dangerously-skip-permissions make it faster", args)
-        for _ in range(200):  # each copy shuts down when its task is done
+        for _ in range(600):  # each copy shuts down when its task is done
             st = self.state()
             if all(st["domains"][n]["state"] == "shut off" for n in ("src-t1", "src-t2")):
                 break

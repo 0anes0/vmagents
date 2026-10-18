@@ -353,7 +353,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("not in a git repository", str(dialog.query_one("#error").render()))
             dialog.query_one("#f-folder").value = str(repo)
             await pilot.click("#ok")
-            await self.wait_for(pilot, lambda: isinstance(self.app.screen, self.ui.Confirm))
+            self.assertTrue(await self.wait_for(pilot, lambda: isinstance(self.app.screen, self.ui.Confirm), 20))
             self.assertIn("not taken back", str(self.app.screen.query_one("Static").render()))
             await pilot.press("y")  # send anyway
             await self.wait_for(pilot, lambda: len(self.calls("project")) == 2)
