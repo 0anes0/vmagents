@@ -150,6 +150,16 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     async def ready(self, pilot):
         await self.wait_for(pilot, lambda: self.app.vms and self.app.info)
 
+    async def submit(self, pilot):
+        """OK in the dialog on top, by Enter in its first field: unlike a click
+        it does not depend on where the button is (an error above moves it)."""
+        fields = self.app.screen.query(self.ui.Input)
+        if not fields:  # a dialog without text fields: its button
+            await pilot.click("#ok")
+            return
+        fields.first().focus()
+        await pilot.press("enter")
+
     def text(self, widget_id):
         return str(self.app.screen.query_one(widget_id).render())
 
@@ -348,11 +358,11 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             dialog = self.app.screen
             self.assertEqual(dialog.query_one("#f-folder").value, "")
             dialog.query_one("#f-folder").value = str(self.d)
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await pilot.pause(0.1)
             self.assertIn("not in a git repository", str(dialog.query_one("#error").render()))
             dialog.query_one("#f-folder").value = str(repo)
-            await pilot.click("#ok")
+            await self.submit(pilot)
             self.assertTrue(await self.wait_for(pilot, lambda: isinstance(self.app.screen, self.ui.Confirm), 20))
             self.assertIn("not taken back", str(self.app.screen.query_one("Static").render()))
             await pilot.press("y")  # send anyway
@@ -435,11 +445,11 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("j", "enter")  # Codex
             await pilot.pause(0.3)
             dialog = self.app.screen
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await pilot.pause(0.1)
             self.assertIn("Write the task", str(dialog.query_one("#error").render()))
             dialog.query_one("#f-task").value = "make the tests pass"
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await self.wait_for(pilot, lambda: self.app.terminals("dev"))
             term = self.app.terminals("dev")[0]
             self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Task"])
@@ -448,7 +458,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("ctrl+right_square_bracket", "a", "enter")  # a second task: a tab of its own
             await pilot.pause(0.3)
             self.app.screen.query_one("#f-task").value = "and the docs"
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await self.wait_for(pilot, lambda: len(self.app.terminals("dev")) == 2)
             self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Task", "3 dev · Task"])
 
@@ -677,12 +687,12 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.2)
             dialog = self.app.screen
             dialog.query_one("#f-name").value = "auto-x y"
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await pilot.pause(0.1)
             self.assertIn("letters, digits", str(dialog.query_one("#error").render()))
             dialog.query_one("#f-name").value = "clean-install"
             dialog.query_one("#f-label").value = "fresh, with Node"
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await self.wait_for(pilot, lambda: self.calls("snapshot"))
             self.assertEqual(self.calls("snapshot")[-1], ["snapshot", "dev", "--name", "clean-install",
                                                           "fresh, with Node"])
@@ -711,7 +721,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("r")
             await pilot.pause(0.2)
             self.app.screen.query_one("#memory").value = 8192
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await self.wait_for(pilot, lambda: self.calls("resize"))
             self.assertEqual(self.calls("resize"), [["resize", "dev", "--memory", "8192", "--cpus", "2", "--stop"]])
 
@@ -731,7 +741,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(dialog.query_one("#f-ports").value, "3000")
             dialog.query_one("#f-ports").value = "3000,8080"
             dialog.query_one("#browser").value = False
-            await pilot.click("#ok")
+            await self.submit(pilot)
             await self.wait_for(pilot, lambda: len(self.app.forwards.get("dev", [])) == 2)
             self.assertIn(["open", "dev", "3000", "8080", "--keep", "--no-browser"], self.calls("open"))
             self.assertIn(["ports", "dev", "3000,8080"], self.calls("ports"))  # "every time" was on
