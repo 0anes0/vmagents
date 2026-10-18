@@ -6,7 +6,7 @@
 # shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.13.0
+VERSION=0.13.1
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -4721,6 +4721,19 @@ class VMTable(VimTable):
     pass
 
 
+def while_open(f):
+    """For what threads and timers call: does nothing once the app is closing
+    (its widgets are gone then)."""
+    @functools.wraps(f)
+    def run(self, *args):
+        try:
+            return f(self, *args)
+        except (NoMatches, IndexError):
+            if self.screen_stack and self.main.query("#vms"):
+                raise  # not closing: a real mistake
+    return run
+
+
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
                 "refresh"}
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
@@ -4981,6 +4994,7 @@ class VmAgentsUI(App):
     def row_selected(self):
         self.action_open()
 
+    @while_open
     def show_vms(self, vms):
         open_here = sorted({t.vm_name for t in self.terminals()})
         seen = (vms, sorted(self.busy), open_here)
@@ -5015,6 +5029,7 @@ class VmAgentsUI(App):
         return vm["name"] if vm else None
 
     @on(DataTable.RowHighlighted, "#vms")
+    @while_open
     def show_details(self):
         d = self.main.query_one("#details", Static)
         vm = self.selected()
@@ -5057,6 +5072,7 @@ class VmAgentsUI(App):
         lines.append(T("[dim]From a terminal: vmagents {n}{more}[/]", n=n, more=f" · vmagents open {n}" if ports else ""))
         d.update("\n".join(lines))
 
+    @while_open
     def log_line(self, text):
         self.main.query_one("#log", RichLog).write(text)
 
