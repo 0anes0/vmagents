@@ -1,6 +1,6 @@
 # Maintainer: EminY <57416756+emincan2000@users.noreply.github.com>
 pkgname=vmagents
-pkgver=0.18.0
+pkgver=0.20.0
 pkgrel=1
 pkgdesc="Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine"
 arch=('any')
@@ -21,7 +21,7 @@ optdepends=('libvirt: start, stop and snapshot libvirt VMs'
             'wl-clipboard: the shared clipboard on Wayland'
             'sshfs: vmagents mount')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('5ead916acad9fa043bcfec6720af34e85e011ffcd5884eb040868bd6e56045a2')
+sha256sums=('0f0fecec79a637f192199fc75a5d7edc3d0002559ca30d05549f7255e19b6cdb')
 
 check() {
   cd "$pkgname-$pkgver"
