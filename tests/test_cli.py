@@ -317,6 +317,14 @@ class LibvirtTests(SandboxTest):
         self.assertIn("has no IPv4 address after 2s", r.stderr)
         self.assertEqual(self.sb.calls("ssh"), [])
 
+    def test_no_ip_with_ufw_on_says_how_to_allow_it(self):
+        write_exe(self.sb.bin / "systemctl", "#!/bin/sh\n[ \"$*\" = \"is-active --quiet ufw\" ]\n")
+        self.sb.set_vm("running", ip="")
+        r = self.sb.run("vm", env={"VMAGENTS_BOOT_TIMEOUT": "2"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has no IPv4 address after 2s", r.stderr)
+        self.assertIn("sudo ufw allow in on virbr0 && sudo ufw route allow in on virbr0", r.stderr)
+
     def test_closed_port_times_out(self):
         self.sb.run("add", "vm", "--port", str(free_port()), check=0)
         self.sb.set_vm("running")

@@ -3,6 +3,7 @@ A real run on libvirt is described in the README."""
 import hashlib
 import json
 import os
+import subprocess
 
 from tests.helpers import SandboxTest, write_exe
 
@@ -28,7 +29,12 @@ if cmd == "pool-dumpxml":
     print("<pool type='dir'>\n  <target>\n    <path>/pool</path>\n  </target>\n</pool>"); sys.exit(0)
 if cmd == "vol-info" and "--pool" in args and args[-1] in st["volumes"]:
     print(f"Name:   {args[-1]}\nAllocation:     325.69 MiB"); sys.exit(0)
-if cmd in ("pool-info", "net-info", "net-start", "pool-refresh"):
+if cmd == "pool-info" and st.get("nopool"):
+    print("error: failed to get pool 'default'", file=sys.stderr); sys.exit(1)
+if cmd == "pool-define-as":
+    st.pop("nopool", None); save(); sys.exit(0)
+if cmd in ("pool-info", "net-info", "net-start", "net-autostart", "pool-refresh", "pool-build", "pool-start",
+           "pool-autostart", "uri"):
     sys.exit(0)
 if cmd == "vol-info":
     sys.exit(0 if args[-1] in st["volumes"] else 1)
@@ -154,6 +160,38 @@ class CreateTests(CreateBase):
         conf = (self.sb.conf / "hosts" / "box.conf").read_text()
         for line in ("DOMAIN=box", "USER=dev", "OS=linux", "CREATED=1"):
             self.assertIn(line + "\n", conf)
+
+    def test_makes_the_default_pool_when_missing(self):
+        # A fresh libvirt on Arch has no "default" storage pool.
+        st = self.state(); st["nopool"] = True; self.lv.write_text(json.dumps(st))
+        self.assertTrue(json.loads(self.sb.run("images", "--json", check=0).stdout)["host"]["libvirt"])
+        r = self.create("a")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("nopool", self.state())
+        calls = [c["argv"] for c in self.sb.calls() if c["prog"] == "virsh"]
+        self.assertIn(["pool-define-as", "default", "dir", "--target", "/var/lib/libvirt/images"], calls)
+        self.assertIn(["pool-autostart", "default"], calls)
+
+    def test_run_from_the_ui_under_uv(self):
+        # uv puts a venv python3 without the system modules first in PATH;
+        # virt-install (#!/usr/bin/env python3) must not get it.
+        venv = self.sb.tmp / "venv"
+        write_exe(venv / "python3", "#!/bin/sh\necho 'No module named gi' >&2; exit 1\n")
+        path = self.sb.env["PATH"]
+        r = self.create("a", env={"PATH": f"{venv}:{path}", "VIRTUAL_ENV": str(venv), "VMAGENTS_HOST_PATH": path})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a", self.state()["domains"])
+
+    def test_turkish_locale(self):
+        # In tr_TR "I" is not in [A-Z]: the profile line DOMAIN=... must still parse.
+        if subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.lower().find("tr_tr.utf") < 0:
+            self.skipTest("no tr_TR locale here")
+        env = {"LC_ALL": "tr_TR.UTF-8"}
+        r = self.create("a", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.sb.run("list", env=env, check=0)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("libvirt:a", r.stdout)
 
     def test_second_vm_reuses_image_and_base(self):
         self.create("a")
