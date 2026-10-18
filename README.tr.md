@@ -54,12 +54,13 @@ arayüzünden** yap: `vmagents ui`
 | **Kısa tasmalı ağ** | `vmagents net dev restricted`: VM yalnızca listesindeki adreslere (asistanların servisleri, paket depoları, GitHub) ulaşır; senin bilgisayarında uygulanır. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
-| **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
+| **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust ya da kendi şablonun) onu bir iş türüne göre hazırlar. |
 | **Geri alma** | Her başlatmadan önce anlık görüntü alınır; `vmagents undo` VM'i oturumdan önceki hâline döndürür. |
 | **Bağlantı kopsa da sürer** | Asistan tmux içinde çalışır. İnternet gitse, tekrar bağlan: aynı oturum. |
 | **İşin bitince kapanır** | Asistandan çıkınca VM kapanır (hâlâ kullanılmıyorsa). Unutulan VM'ler 30 dakika boşta kalınca kendini kapatır. |
 | **Bildirimler** | Claude VM'de izin istediğinde ya da seni beklediğinde masaüstü bildirimi. |
 | **VM'deki sunucu tarayıcında** | `vmagents open dev 3000`, VM'in 3000 portunu buradaki bir port yapar. |
+| **Claude'un geçmiş oturumları** | `vmagents history dev` Claude Code'un VM'deki konuşmalarını listeler, birini okunur biçimde gösterir; `--resume` onu sürdürür. |
 | **Ortak pano** | Claude'un (ya da senin tmux'ta) VM'de kopyaladığı metin senin panona gelir. |
 | **Beş asistan** | Claude Code, Codex, Gemini CLI, OpenCode, aider; ilk kullanımda kurulur. |
 | **Tek adımda kurulum** | `vmagents setup` SSH anahtarını (VM şifresi bir kez sorulur), tmux'u, git'i ve Claude Code'u kurar. |
@@ -143,8 +144,9 @@ Her komutun örnekli kendi yardımı var: `vmagents help create`.
 vmagents ui
 ```
 
-Liste VM'lerini durum, RAM, işlemci, asistan ve portlarıyla gösterir; sağ
-taraf seçilenin ayrıntılarını. Her şey klavyeyle, Vim tuşlarıyla da çalışır
+Liste VM'lerini durum, RAM, işlemci, yük (anlık işlemci kullanımı), asistan ve
+portlarıyla gösterir; sağ taraf seçilenin ayrıntılarını, bu bilgisayarda
+kapladığı bellekle birlikte. Her şey klavyeyle, Vim tuşlarıyla da çalışır
 (`j`/`k` gezinme, `l` ya da Enter açma, `h` ya da Esc geri). `L` arayüzün
 dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 
@@ -180,6 +182,7 @@ dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 | `Y` | sormadan çalışma: asistanlar önce sormadan çalışır (bir kez onay ister), ya da yine sorsunlar |
 | `x` | görevi VM'in kopyalarında dene (her biri bir sekmede izlenir); kopyalar varsa onları sil |
 | `i` | ağ: bir adres listesiyle kısıtla; kısıtlıyken bir adrese izin ver (son reddedilen hazır gelir) ya da tekrar aç |
+| `H` | Claude'un VM'deki geçmiş oturumları, bir sekmede: `j`/`k` ile gezin (altta gösterilir), `r` birini sürdürür |
 | `p` / `c` | proje (git deposu) gönder / değişiklikleri sekmede (orada `t`: dal olarak al, `P`: pull request) |
 | `u` | anlık görüntüler: birine dön, ad ve etiketle yenisini al, etiketini değiştir, sil |
 | `o` | portlar: şimdi yönlendir (`o` tekrar: durdur), her bağlantıda, ya da ağındaki cihazlara da |
@@ -409,6 +412,17 @@ anahtarları VM'de `~/.config/vmagents/codex-env` (ya da `gemini-env`,
 `opencode-env`, `aider-env`) içine konabilir. Bildirimler yalnızca Claude
 için, diğer asistanlar yalnızca Linux VM'leri içindir.
 
+### Claude'un geçmiş oturumları
+
+```sh
+vmagents history dev              # Claude Code'un VM'deki konuşmaları, en yenisi üstte
+vmagents history dev 2            # biri, okunur biçimde: ne sordun, ne cevapladı, hangi araçları kullandı
+vmagents dev --resume NO          # onu sürdür
+```
+
+Claude Code bunları VM'de `~/.claude/projects` içinde tutar; okumak için orada
+python3 gerekir (bulut imajlarında var). Arayüzde: `H`.
+
 ### Otomatik başlatma ve diğer cihazlar
 
 Her etkileşimli SSH girişi Claude'u açar; kabuk için Claude'dan çık ya da
@@ -427,6 +441,17 @@ vmagents create a --image arch --agents claude,codex --ports 3000
 vmagents delete dev                                   # adını yazmanı ister
 vmagents prune                                        # kullanılmayan imajların yerini boşalt
 ```
+
+**Şablonlar** VM'i bir iş türüne göre hazırlar: `vmagents create api --template
+node` ona Node.js, npm ve derleme araçlarını kurar, 3000 ve 5173 portlarını
+açar. Hazır olanlar: `node`, `python`, `ml` (daha çok RAM, işlemci ve disk,
+Jupyter portu), `go`, `rust`; `vmagents templates` listeler. Seçenekler
+şablonun ayarlarını değiştirir (`--memory 8192`). Paket adları dağıtımın
+kendisinindir (derleme araçları Debian'da `build-essential`, Arch'ta
+`base-devel`). Kendi şablonun: `~/.config/vmagents/templates/AD.conf` içinde
+`IMAGE=`, `MEMORY=`, `CPUS=`, `DISK=`, `AGENTS=`, `PORTS=`,
+`PACKAGES=node build postgresql` ve `SETUP=npm install -g pnpm` (sonda çalışan
+bir komut). Arayüzün yeni VM formu da bunları sunar.
 
 `virsh` ve `virt-install` gerekir, kullanıcının da `libvirt` grubunda olması:
 
@@ -563,11 +588,12 @@ vmagents ui                      terminal arayüzü
 
 vmagents create AD [seçenekler]  yeni bir Linux VM kur ve hazırla
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
-    --agents claude,codex,gemini,opencode,aider  --ports 3000,5173  --project KLASÖR
+    --agents claude,codex,gemini,opencode,aider  --ports 3000,5173  --project KLASÖR  --template AD
     --user KULLANICI  --uri LIBVIRT_URI  --idle DAKİKA|off  --no-setup
 vmagents resize AD [--memory MB] [--cpus N] [--stop]
 vmagents delete AD [--yes]       create ile kurulmuş VM'i diskiyle sil
 vmagents images | prune          indirilen imajlar ve yerleri / kullanılmayanları sil
+vmagents templates               create --template'in sunduğu şablonlar
 
 vmagents add AD [seçenekler]     var olan bir VM ekle ya da profilin alanlarını değiştir
     --host HOST  --user KULLANICI  --port PORT  --key DOSYA
@@ -580,6 +606,7 @@ vmagents start AD | stop AD [--force]
 
 vmagents run AD [--ASİSTAN] [--wait] GÖREV   bir asistana arka planda tek başına yapacağı görev
 vmagents runs AD [NO] [-f|--stop] [--clean] [--json]   görevler; birinin çıktısı
+vmagents history AD [NO|KİMLİK]  Claude Code'un VM'deki oturumları; biri, okunur biçimde
 vmagents yolo AD on|off          asistanlar önce sormadan çalışır (bir seferlik: vmagents AD --yolo)
 vmagents try AD N [--agents LİSTE] [--memory MB] [--stop] GÖREV   N kopya, her biri görevi yapar
 vmagents tries AD | try AD --clean   kopyalar / onları sil
@@ -671,7 +698,8 @@ Testler vmagents'ı sahte `ssh`, `virsh`, `virt-install` ve `curl`'e karşı
 klasöründe çalışır. CI her gönderimde bunları shellcheck ile birlikte çalıştırır.
 Her test dosyasının neyi kapsadığı ve gerçek VM'lerde elle nelerin denendiği
 [İngilizce README'de](README.md#tests) ayrıntılı olarak yazıyor: Debian, Ubuntu
-ve Arch VM'leri, Windows 10, Claude Code kancaları, arayüz ve projeler.
+ve Arch VM'leri, Windows 10, Claude Code kancaları, arayüz, projeler, görevler,
+kopyalar, kısıtlı ağ ve AUR paketi.
 
 ## Sınırlar
 

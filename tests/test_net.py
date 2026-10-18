@@ -56,7 +56,9 @@ class ProxyTests(SandboxTest):
         self.state.write_text("running")
         write_exe(self.sb.bin / "virsh", f"#!/bin/sh\ncat {self.state}\n")
         self.port = free_port()
-        env = dict(os.environ, PATH=f"{self.sb.bin}:{os.environ['PATH']}", VMAGENTS_PROXY_WATCH="0.2")
+        # Allowed names that do not exist: refused by their DNS soon, or not.
+        env = dict(os.environ, PATH=f"{self.sb.bin}:{os.environ['PATH']}", VMAGENTS_PROXY_WATCH="0.2",
+                   VMAGENTS_PROXY_CONNECT_TIMEOUT="1")
         self.proc = subprocess.Popen([sys.executable, "-c", var("PROXY_PY"), str(self.allow), str(self.log),
                                       "127.0.0.1", str(self.port), "qemu:///system", "vm"], env=env)
         self.addCleanup(self.proc.kill)

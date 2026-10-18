@@ -54,12 +54,13 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
-| **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux). |
+| **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust, your own) sets it up for a kind of work. |
 | **Undo** | Every start takes a snapshot first; `vmagents undo` puts the VM back to before the session. |
 | **Sessions survive disconnects** | The agent runs in tmux. Lose Wi-Fi, connect again: same session. |
 | **Shuts down when you are done** | Quit the agent and the VM powers off, unless something still uses it. Forgotten VMs shut themselves down after 30 idle minutes. |
 | **Notifications** | A desktop notification when Claude on the VM asks for permission or waits for you. |
 | **The VM's server in your browser** | `vmagents open dev 3000` makes the VM's port 3000 a port here. |
+| **Claude's past sessions** | `vmagents history dev` lists Claude Code's conversations on the VM, shows one readable, and `--resume` goes on with it. |
 | **Shared clipboard** | What Claude (or you, in tmux) copies on the VM lands in your clipboard. |
 | **Five agents** | Claude Code, Codex, Gemini CLI, OpenCode, aider; installed on first use. |
 | **One-step setup** | `vmagents setup` installs the SSH key (you type the VM password once), tmux, git and Claude Code. |
@@ -144,8 +145,9 @@ Every command has its own help with examples: `vmagents help create`.
 vmagents ui
 ```
 
-The list shows your VMs with state, RAM, CPUs, agents and ports; the right
-side, the selected one's details. Everything works from the keyboard, with
+The list shows your VMs with state, RAM, CPUs, load (CPU now), agents and
+ports; the right side, the selected one's details, with the memory it takes
+on this computer. Everything works from the keyboard, with
 Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 
 - **New VM** (`n`): choose the system, RAM, CPUs, disk, agents, ports and a
@@ -178,6 +180,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `Y` | yolo: agents act without asking first (asks you once), or ask again |
 | `x` | try a task on copies of the VM (each followed in a tab); with copies there, delete them |
 | `i` | network: restrict it to a list of hosts; when restricted, allow a host (the last one refused is offered) or open it again |
+| `H` | Claude's past sessions on the VM, in a tab: `j`/`k` through them (shown below), `r` goes on with one |
 | `p` / `c` | send a project (a git repository) / its changes, in a tab (`t` there: take as a branch, `P`: pull request) |
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
@@ -408,6 +411,17 @@ here (vmagents forwards its port 1455). API keys can go into
 `~/.config/vmagents/codex-env` (or `gemini-env`, `opencode-env`, `aider-env`)
 on the VM. Notifications are for Claude only, other agents for Linux VMs only.
 
+### Claude's past sessions
+
+```sh
+vmagents history dev              # Claude Code's conversations on the VM, newest first
+vmagents history dev 2            # one of them, readable: what you asked, its answers, its tools
+vmagents dev --resume ID          # go on with it
+```
+
+Claude Code keeps them on the VM, in `~/.claude/projects`; reading them
+needs python3 there (cloud images have it). In the UI: `H`.
+
 ### Autostart and other devices
 
 Any interactive SSH login opens Claude; quit it or press `Ctrl-b d` for a
@@ -426,6 +440,17 @@ vmagents create a --image arch --agents claude,codex --ports 3000
 vmagents delete dev                                   # asks you to type the name
 vmagents prune                                        # free the space of unused images
 ```
+
+**Templates** set up a VM for a kind of work: `vmagents create api --template
+node` gives it Node.js, npm and build tools, ports 3000 and 5173. Built in:
+`node`, `python`, `ml` (more RAM, CPUs and disk, Jupyter's port), `go`,
+`rust`; `vmagents templates` lists them. Options change what a template
+sets (`--memory 8192`). Package names are the distribution's own (build
+tools are `build-essential` on Debian, `base-devel` on Arch). Your own:
+`~/.config/vmagents/templates/NAME.conf` with `IMAGE=`, `MEMORY=`, `CPUS=`,
+`DISK=`, `AGENTS=`, `PORTS=`, `PACKAGES=node build postgresql` and
+`SETUP=npm install -g pnpm` (a command run at the end). The UI's new-VM form
+offers them too.
 
 Needs `virsh` and `virt-install`, and your user in the `libvirt` group:
 
@@ -561,11 +586,12 @@ vmagents ui                      the terminal UI
 
 vmagents create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
-    --agents claude,codex,gemini,opencode,aider  --ports 3000,5173  --project DIR
+    --agents claude,codex,gemini,opencode,aider  --ports 3000,5173  --project DIR  --template NAME
     --user USER  --uri LIBVIRT_URI  --idle MINUTES|off  --no-setup
 vmagents resize NAME [--memory MB] [--cpus N] [--stop]
 vmagents delete NAME [--yes]     delete a VM made with create, and its disk
 vmagents images | prune          downloaded images and where they are / remove unused ones
+vmagents templates               what create --template offers
 
 vmagents add NAME [options]      add an existing VM, or change fields of a profile
     --host HOST  --user USER  --port PORT  --key FILE
@@ -578,6 +604,7 @@ vmagents start NAME | stop NAME [--force]
 
 vmagents run NAME [--AGENT] [--wait] TASK   a task for an agent, done alone in the background
 vmagents runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
+vmagents history NAME [N|ID]     Claude Code's sessions on the VM; one, readable
 vmagents yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
 vmagents try NAME N [--agents LIST] [--memory MB] [--stop] TASK   N copies, each doing the task
 vmagents tries NAME | try NAME --clean   the copies / delete them
@@ -692,6 +719,17 @@ home directory. CI runs them on every push, with shellcheck.
 - `test_projects.py`: a real git repository sent to the fake VM and back, with
   real git on both sides: commits, changed, new and ignored files, the refused
   re-send, `--discard`, only new commits sent later.
+- `test_runs.py`: tasks against a fake tmux on the fake VM: the agents' options,
+  the log (Claude's steps one per line), `--wait`, stop, clean, the notification.
+- `test_try.py`: copies against a fake libvirt that keeps domains and volumes:
+  new name, UUID, MAC and cloud-init seed, one at a time, the agents taking
+  turns, shutting down after their task, `--clean`; the newest lease winning,
+  and a new address while a VM boots.
+- `test_net.py`: the proxy with real connections (allowed, refused, HTTP and
+  HTTPS, the list read again, ending with the VM), and `net` against a fake
+  libvirt: the filter, the VM's card, the VM's proxy settings, open again.
+- `test_templates.py`, `test_history.py`: templates for `create` (built in,
+  your own, the package names per distribution) and Claude's sessions.
 - `test_ui.py` (needs Textual and pyte, else skipped): the UI with Textual's
   test pilot against a fake `vmagents`: Vim keys, language, the new-VM form,
   snapshots, terminal tabs on a real pseudo-terminal, creating in a tab,
@@ -728,6 +766,12 @@ home directory. CI runs them on every push, with shellcheck.
 - Projects on the Arch VM: git installed by `project`, an agent's commit and
   uncommitted files in `changes`, the refused re-send, `take`, merge, send
   again; in the UI the changes tab and a shell tab going from working to waiting.
+- On the Arch VM: a real Claude Code task (`run --wait`, steps shown, listed by
+  `runs`); `try` with two copies of 2 GB, each with its own address, its task
+  done by Claude and shut down after; the restricted network (Anthropic's API
+  and GitHub reached, example.com refused by the proxy, a direct connection
+  dropped by the filter, a Claude task through it, everything gone after
+  `open`); the AUR package built and installed with `makepkg -si`; `history`.
 
 </details>
 

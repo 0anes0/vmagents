@@ -38,6 +38,13 @@ elif a[:1] == ["create"]:
     time.sleep(float(os.environ.get("FAKE_CREATE_SLEEP", "0")))
     print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
+elif a[:1] == ["history"] and "--json" in a:
+    print(json.dumps([{"id": "s-new", "time": 1760800000, "start": "", "dir": "/home/me", "messages": 2,
+                       "first": "fix the tests"},
+                      {"id": "s-old", "time": 1760700000, "start": "", "dir": "/home/me", "messages": 5,
+                       "first": "add a health endpoint"}]))
+elif a[:1] == ["history"]:
+    print("> asked in " + a[2] + "\n\n* Bash(npm test)\nanswered " + a[2] + "\n\nGo on with it: vmagents dev --resume " + a[2])
 elif a[:1] == ["changes"]:
     show("changes.txt")
 elif a[:1] == ["try"] and "--clean" not in a:
@@ -557,6 +564,27 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Now: CPU 50% · takes 2.1 GB of memory here", self.text("#details"))
             self.app.measure([dict(VM, state="shut off", cpu_ns=None)])  # off: no reading
             self.assertNotIn("dev", self.app.load)
+
+    async def test_history(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("H")
+            await pilot.pause(0.3)
+            pane = self.app.main.query_one(self.ui.History)
+            await self.wait_for(pilot, lambda: len(pane.sessions) == 2)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · History"])
+            log = pane.query_one("#transcript")
+            lines = lambda: "\n".join(str(l.text) for l in log.lines)
+            await self.wait_for(pilot, lambda: "answered s-new" in lines())
+            self.assertIn("> asked in s-new", lines())
+            self.assertNotIn("Go on with it", lines())
+            await pilot.press("j")  # the older one
+            await self.wait_for(pilot, lambda: "answered s-old" in lines())
+            await pilot.press("r")  # go on with it, in a tab
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
+            term = self.app.terminals("dev")[0]
+            await self.wait_for(pilot, lambda: "session: dev --hold --claude --no-tmux -- --resume s-old"
+                                in self.screen_text(term))
 
     async def test_terminal_keys(self):
         k = self.ui.key_bytes

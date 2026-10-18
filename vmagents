@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.19.0
+VERSION=0.20.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -5111,7 +5111,8 @@ async def handle(reader, writer):
                             "vmagents: %s is not allowed from this VM (on this computer: vmagents net %s allow %s)"
                             % (host, domain, host))
     try:
-        ur, uw = await asyncio.wait_for(asyncio.open_connection(host, p), 20)
+        ur, uw = await asyncio.wait_for(asyncio.open_connection(host, p),
+                                        float(os.environ.get("VMAGENTS_PROXY_CONNECT_TIMEOUT", "20")))
     except Exception as e:
         return await refuse(writer, "502 Bad Gateway", "vmagents proxy: %s:%d: %s" % (host, p, e))
     if connect:
@@ -5696,9 +5697,10 @@ TEXTS = {"tr": {
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
     "[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · c: changes · "
-    "i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]": "[dim]Enter ya da "
-    "l: aç · j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · c: değişiklikler · i: ağ · "
-    "o: portlar · t: başlat/durdur · u: anlık görüntüler · Y: sormadan · L: dil · q: çık[/]",
+    "H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]":
+        "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · "
+        "c: değişiklikler · H: geçmiş · i: ağ · o: portlar · t: başlat/durdur · u: anlık görüntüler · Y: sormadan · "
+        "L: dil · q: çık[/]",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
         "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zeka "
@@ -5778,6 +5780,14 @@ TEXTS = {"tr": {
     "değiştirirler. Bu VM'de kalır ve \"geri al\" (u) onu geri alır. Zaten çalışan bir asistan, yeniden "
     "başlatılana kadar eski modunda kalır.",
     "Yes, yolo": "Evet, sormadan",
+    "History": "Geçmiş", "Go on with it": "Sürdür", "Getting Claude's sessions on {n}...":
+        "{n} üzerindeki Claude oturumları alınıyor...",
+    "[red]Could not read the sessions of {n}[/]: {why}": "[red]{n} oturumları okunamadı[/]: {why}",
+    "No Claude Code sessions on {n} yet.": "{n} üzerinde henüz Claude Code oturumu yok.",
+    "[b]Claude's sessions on {n}[/b], newest first  [dim]j/k: move · r: go on with it · g: refresh · Esc: the list[/]":
+        "[b]{n} üzerindeki Claude oturumları[/b], en yenisi üstte  [dim]j/k: gezin · r: sürdür · g: yenile · "
+        "Esc: liste[/]",
+    "History works with Linux VMs only.": "Geçmiş yalnızca Linux VM'lerinde çalışır.",
     "Template [dim](fills in the rest, and installs its packages)[/]":
         "Şablon [dim](gerisini doldurur ve paketlerini kurar)[/]", "None": "Yok",
     "Load": "Yük", "Now: CPU {cpu} · takes {mem} of memory here": "Şu an: işlemci {cpu} · burada {mem} bellek kullanıyor",
@@ -6563,6 +6573,100 @@ class Changes(Vertical):
                                        n=n), yes=T("Open it")), sure)
 
 
+# ------------------------------------------------------------------ Claude's sessions
+
+class History(Vertical):
+    """A tab with Claude Code's sessions on a VM: j/k through them, the one
+    highlighted shown below; r goes on with it (claude --resume)."""
+
+    def __init__(self, vm, **kw):
+        super().__init__(**kw)
+        self.vm, self.sessions = vm, []
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        return [Binding("r", "resume", T("Go on with it")), Binding("g", "load", T("Refresh")),
+                Binding("escape", "app.home", show=False), Binding("h", "app.home", show=False)]
+
+    def compose(self):
+        yield Static(T("Getting Claude's sessions on {n}...", n=self.vm["name"]), id="histstatus")
+        yield VimOptions(id="sessions")
+        yield DiffLog(id="transcript", wrap=True, markup=False, highlight=False, auto_scroll=False)
+
+    def on_mount(self):
+        self.action_load()
+
+    def focus_default(self):
+        try:
+            self.query_one("#sessions", VimOptions).focus()
+        except NoMatches:
+            self.call_after_refresh(self.focus_default)
+
+    def status_label(self):
+        return T("History")
+
+    def action_load(self):
+        self.load()
+
+    @work(thread=True, exclusive=True, group="history")
+    def load(self):
+        rc, out, err = cli("history", self.vm["name"], "--json", timeout=600)
+        try:
+            sessions = json.loads(out) if rc == 0 else None
+        except ValueError:
+            sessions = None
+        self.app.call_from_thread(self.show, sessions, err)
+
+    def show(self, sessions, err=""):
+        status = self.query_one("#histstatus", Static)
+        options = self.query_one("#sessions", VimOptions)
+        options.clear_options()
+        if sessions is None:
+            status.update(T("[red]Could not read the sessions of {n}[/]: {why}", n=self.vm["name"],
+                            why=(err.strip().splitlines() or ["?"])[-1]))
+            return
+        self.sessions = sessions
+        if not sessions:
+            status.update(T("No Claude Code sessions on {n} yet.", n=self.vm["name"]))
+            return
+        status.update(T("[b]Claude's sessions on {n}[/b], newest first  [dim]j/k: move · r: go on with it · "
+                        "g: refresh · Esc: the list[/]", n=self.vm["name"]))
+        for s in sessions:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["time"]))
+            options.add_option(Option(f"{when}  [dim]{s['messages']:>3}[/]  {s['first'] or '-'}", id=s["id"]))
+        options.highlighted = 0
+
+    @on(OptionList.OptionHighlighted, "#sessions")
+    def highlighted(self, e):
+        self.read(e.option.id)
+
+    @work(thread=True, exclusive=True, group="transcript")
+    def read(self, sid):
+        rc, out, err = cli("history", self.vm["name"], sid, timeout=600)
+        self.app.call_from_thread(self.put, out if rc == 0 else err)
+
+    def put(self, text):
+        log = self.query_one("#transcript", DiffLog)
+        log.clear()
+        for line in text.splitlines():
+            if line.startswith("Go on with it:"):
+                continue
+            log.write(Text(line, style="bold" if line.startswith("> ") else "cyan" if line.startswith("* ")
+                           else ""))
+        log.scroll_home(animate=False)
+
+    @on(OptionList.OptionSelected, "#sessions")
+    def action_resume(self, *_):
+        options = self.query_one("#sessions", VimOptions)
+        if options.highlighted is None or not self.sessions:
+            return
+        sid = self.sessions[options.highlighted]["id"]
+        # Without tmux: a Claude already running in tmux there would not take --resume.
+        self.app.open_session(self.vm["name"], "claude", [VMAGENTS, self.vm["name"], "--hold", "--claude", "--no-tmux",
+                                                          "--", "--resume", sid])
+
+
 # ------------------------------------------------------------------ snapshots
 
 class Snapshots(Screen):
@@ -6982,7 +7086,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes", "yolo", "task", "try", "net"}
+                "refresh", "project", "changes", "yolo", "task", "try", "net", "history"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -7013,7 +7117,9 @@ class VmAgentsUI(App):
     #status { padding: 1 2; height: auto; }
     #snaptitle, #snaphelp { padding: 0 1; height: auto; }
     #snaps { height: 1fr; }
-    #chstatus { padding: 0 1; height: auto; }
+    #chstatus, #histstatus { padding: 0 1; height: auto; }
+    #sessions { height: 12; border-bottom: solid $primary; }
+    #transcript { height: 1fr; }
     #diff { height: 1fr; }
     #topbar { height: 2; }
     #brand { width: auto; padding: 0 2 0 1; content-align: left middle; height: 2; }
@@ -7055,6 +7161,7 @@ class VmAgentsUI(App):
                     Binding("ctrl+right_square_bracket", "back_to_tab", T("Tabs"), key_display="^]",
                             show=more, priority=True),
                     Binding("Y", "yolo", T("Yolo"), show=False), Binding("i", "net", T("Network"), show=False),
+                    Binding("H", "history", T("History"), show=False),
                     Binding("L", "language", other), Binding("q", "quit", T("Quit")),
                     Binding("g", "refresh", show=False)] + [
                 Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
@@ -7109,8 +7216,8 @@ class VmAgentsUI(App):
         t.focus()
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
-                        "c: changes · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · "
-                        "q: quit[/]"))
+                        "c: changes · H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · "
+                        "L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -7120,7 +7227,7 @@ class VmAgentsUI(App):
         codes = [c for c, _ in LANGUAGES]
         LANG = codes[(codes.index(LANG) + 1) % len(codes)]
         save_lang(LANG)
-        for c in self.main.query(Changes):
+        for c in list(self.main.query(Changes)) + list(self.main.query(History)):
             c._bindings = BindingsMap(c.make_bindings())
         self.rebind()
         self.relabel()
@@ -7155,7 +7262,7 @@ class VmAgentsUI(App):
         w = self.pane(pid)
         if isinstance(w, Terminal):
             return f"{w.vm_name} · {kind_label(w.kind)}"
-        return f"{(w.vm if isinstance(w, Changes) else w.v)['name']} · {w.status_label()}"
+        return f"{(w.vm if isinstance(w, (Changes, History)) else w.v)['name']} · {w.status_label()}"
 
     def pane_mark(self, pid):
         """Before the label of a terminal tab not shown: a spinner while its
@@ -7618,6 +7725,20 @@ class VmAgentsUI(App):
                                  [("task", T("Task"), "", T("e.g. make the failing tests pass"))],
                                  lambda v: "" if v["task"].strip() else T("Write the task.")), chosen_task)
         self.push_screen(Pick(T("[b]Which agent[/b] does the task on {n}?", n=n), options), chosen_agent)
+
+    def action_history(self):
+        if not (vm := self.need_vm(busy_ok=True)):
+            return
+        if vm.get("os") == "windows":
+            self.notify(T("History works with Linux VMs only."))
+            return
+        for h in self.main.query(History):
+            if h.vm["name"] == vm["name"]:
+                self.show(h.id)
+                h.action_load()
+                return
+        self.count += 1
+        self.add_pane(History(vm, id=f"history-{self.count}"), f"{vm['name']} · {T('History')}")
 
     def action_try(self):
         """N copies of the VM, each doing the same task (vmagents try)."""
