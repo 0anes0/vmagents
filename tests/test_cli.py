@@ -424,7 +424,7 @@ class SetupTests(SandboxTest):
     def test_no_sudo(self):
         os.remove(self.sb.remote_bin / "sudo")
         r = self.setup()
-        self.assertIn("cannot install tmux without root or sudo", r.stderr)
+        self.assertIn("cannot install tmux git without root or sudo", r.stderr)
         self.assertIn("tmux is not available", r.stderr)
 
     def test_installer_failure(self):

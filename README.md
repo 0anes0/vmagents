@@ -42,6 +42,10 @@ also an app-menu launcher.
 - **One command:** `vmagents` (or `vmagents NAME`) connects and opens the agent
   (Claude Code unless you choose another).
 - **Terminal UI:** `vmagents ui` makes and manages VMs from one screen.
+- **Your project in the VM, the work back as a branch:** `vmagents project
+  NAME ~/code/app` sends a git repository there (no GitHub keys on the VM),
+  the agents work on it, `vmagents take NAME` brings their work back as a
+  branch to merge or turn into a pull request. See [Projects](#projects).
 - **New VMs on demand:** `vmagents create NAME` builds a libvirt VM from an
   official cloud image (Debian 13, Debian 12, Ubuntu 24.04 or Arch Linux)
   and sets it up.
@@ -280,6 +284,33 @@ forwards its port 1455). API keys can go into
 lines like `OPENAI_API_KEY=...` or `GEMINI_API_KEY=...`. Notifications are for
 Claude only, and other agents for Linux VMs only.
 
+### Projects
+
+Let the agents work on a repository of yours, in the VM, and take back what
+they did as a branch:
+
+```sh
+vmagents project dev ~/code/app   # send it: ~/projects/app on the VM; agents start there
+vmagents dev                      # ...the agent works (it may run anything: it is a VM)
+vmagents changes dev              # what it changed: its commits, and what it did not commit
+vmagents take dev                 # all that as the branch vmagents/dev in ~/code/app
+git merge vmagents/dev            # or: vmagents take dev --pr (a pull request, with gh)
+vmagents project dev              # send the result (and your new commits) back
+```
+
+The commits travel as git bundles over vmagents's SSH connection: the VM
+needs no access to GitHub and no keys for it, and only committed work goes
+there. `take` makes or moves a branch only; your checkout is not touched.
+Uncommitted work on the VM (new files too, not ignored ones like
+`node_modules`) comes back as one extra commit on top of the agent's own.
+Sending again replaces the VM's copy, so it is refused while the VM has work
+that was not taken back; `--discard` sends anyway and keeps that work on the
+VM under `refs/vmagents/discarded/`. `vmagents create web --project ~/code/app`
+makes a VM with the project in it. In the UI: `p` sends, `c` shows the
+changes in a tab, with `t` (take) and `P` (pull request) there.
+
+![The changes of a project, in a tab](docs/ui-changes.png)
+
 Skip autostart for one login with `ssh -o SetEnv=LC_VMAGENTS=off dev@VM`. This
 works with the default `AcceptEnv LANG LC_*` of Debian and Ubuntu. Turn
 autostart off with `vmagents autostart dev off`.
@@ -307,7 +338,15 @@ the assistants); the list stays usable meanwhile, and the tab says when the VM
 is ready and offers to open it.
 
 **Everything is a tab in one row:** the VM list is always the first, then a
-tab for each terminal, on any VM, and for each VM being created.
+tab for each terminal, on any VM, for each VM being created and for each
+project's changes.
+
+**Who needs you:** a terminal tab you are not looking at shows a spinner
+while its program works (output keeps coming: an agent's spinner, a build),
+and a dot (●) when it stopped or rang the bell: the agent finished or waits
+for you. The list marks that VM too, and a message says which tab (its
+number). It works for every agent and for shells, as it only watches the
+terminal.
 
 **Opening a VM** (Enter) asks how: a shell, Claude Code, Codex, Gemini CLI,
 OpenCode or aider. It opens **inside the UI**, in a terminal tab; F1 to F6
@@ -323,6 +362,7 @@ tabs too). A tab closes when what runs in it ends.
 | `Enter`, `l` | open: shell or AI assistant, in a terminal tab |
 | `s` | a shell on the VM, straight away |
 | `n` | new VM |
+| `p` / `c` | project: send a git repository / its changes, in a tab (`t` there: take them as a branch, `P`: a pull request) |
 | `u` | snapshots: pick one and go back to it, take one with a name and a label, change a label, delete |
 | `o` | ports: forward them now (`o` again stops), every time you connect, or to your LAN too |
 | `t` / `r` | start or stop / RAM and CPUs (shuts the VM down first) |
@@ -370,6 +410,9 @@ vmagents connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
 vmagents NAME --codex|--gemini|--aider|--claude [ARGS...]   another agent this time
 vmagents open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
 vmagents ports NAME 3000,5173    ports forwarded each time you connect (off: none)
+vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
+vmagents changes NAME [--stat]   what the agents changed in it there
+vmagents take NAME [--branch B] [--pr]   that work as a branch here (or a pull request)
 vmagents shell [--keep] NAME [CMD...]   plain shell or command on the VM
 vmagents start NAME              boot a libvirt VM and wait for SSH
 vmagents stop NAME [--force]     shut a libvirt VM down
@@ -623,7 +666,9 @@ python3 -m unittest discover -s tests -t .
   against a fake `vmagents`: the list and its Vim keys, the language switch,
   the new-VM form and its checks, the snapshot screen, and terminal tabs with
   a real pseudo-terminal (typing into them, F-keys, switching tabs, Ctrl+],
-  tabs closing), and creating a VM in a tab while the list is used. It
+  tabs closing), creating a VM in a tab while the list is used, sending a
+  project and its changes tab, and the working/waiting marks (the echo of
+  your own typing does not count as work). It
   needs Textual and pyte (`uv run --with 'textual>=8,<9' --with pyte python -m
   unittest tests.test_ui`), else it is skipped. `tests/test_ui_backend.py` covers what
   it builds on: `list`/`images`/`snapshots --json`, `ports`, `create`/`setup
@@ -634,6 +679,15 @@ python3 -m unittest discover -s tests -t .
   into the tabs again, the switch to Turkish; snapshot names and labels
   (including `&`, `<`, Turkish letters) and undo to a relabeled snapshot on
   real libvirt.
+- `tests/test_projects.py` sends a real git repository to the fake VM and
+  back, with real git on both sides: the agent's commit, a changed and a new
+  file come back (ignored files do not), sending again is refused until the
+  work is taken and merged, `--discard` sets it aside, later sends carry only
+  the new commits, and a VM that was off is off again.
+- By hand, projects on the Arch VM: git installed by `project`, an agent's
+  commit and uncommitted files seen by `changes`, refused re-send, `take`,
+  merge, send again; in the UI the changes tab, and a shell tab working
+  (spinner) and then waiting (dot, message) while the list was shown.
 - By hand, the UI on this computer's libvirt: a new Arch VM with Claude Code,
   Codex and port 8000 made from the form (the port reached here while
   connected, gone after detaching), then RAM and CPUs changed, and the VM
@@ -694,8 +748,11 @@ python3 -m unittest discover -s tests -t .
 - Only libvirt VMs are started and shut down automatically. A plain `ssh`
   login (autostart) never shuts the VM down: vmagents is not running then
   (the idle shutdown does, later).
-- Snapshots need a qcow2 disk and libvirt. The clipboard and other agents
-  need a Linux VM (tmux).
+- Snapshots need a qcow2 disk and libvirt. The clipboard, other agents and
+  projects need a Linux VM.
+- The UI tells "working" from "waiting" by the terminal's output only: a
+  program that is busy but prints nothing for a few seconds looks like it
+  waits.
 - Only libvirt starts, stops and snapshots VMs. Other hypervisors (VirtualBox,
   VMware, Hyper-V, a cloud VM) work through `--host`: connect, open, clipboard,
   notifications, idle shutdown; start them yourself.
@@ -806,11 +863,23 @@ Her şey tek bir sekme sırasındadır: ilk sekme her zaman VM listesi, sonra he
 terminal (hangi VM'de olursa olsun) ve kurulmakta olan her VM. `Ctrl+]` listeye
 gider, tekrar basınca bulunduğun sekmeye döner; F7/F8 önceki/sonraki sekme,
 listede `1`–`9` o sekme. VM kurulumu kendi sekmesinde sürer, bu sırada liste
-kullanılabilir. `u` anlık görüntü
+kullanılabilir. Bakmadığın bir terminal sekmesinde program çalışırken dönen bir
+işaret, durunca (yardımcı işini bitirdi ya da seni bekliyor) bir nokta (●)
+görünür; listede o VM de işaretlenir ve hangi sekme olduğu söylenir. `u` anlık görüntü
 ekranını açar: istediğini seçip ona dönersin, ad ve etiketle yenisini alırsın,
 etiketini değiştirir ya da silersin. `o` portlar, `t` başlat/durdur, `r`
 RAM/işlemci, `d` silme (adını yazarak onaylanır). Python, Textual ve pyte
 gerekir; `uv` kuruluysa vmagents bunları kendisi getirir.
+
+**Projeler:** Bilgisayarındaki bir git deposunu VM'e gönderip yardımcıların
+orada üzerinde çalışmasını, yaptıklarını da dal olarak geri almayı sağlar:
+`vmagents project dev ~/code/app` gönderir (VM'de `~/projects/app`, yardımcılar
+orada açılır), `vmagents changes dev` neyi değiştirdiklerini gösterir,
+`vmagents take dev` hepsini `~/code/app` içinde `vmagents/dev` dalı yapar
+(`--pr` ile pull request açar). Birleştirdikten sonra `vmagents project dev`
+sonucu geri gönderir. Commit'ler vmagents'ın SSH bağlantısıyla gider: VM'in
+GitHub'a erişmesi ya da anahtar taşıması gerekmez. Arayüzde `p` gönderir, `c`
+değişiklikleri bir sekmede gösterir (orada `t` dal olarak alır, `P` pull request).
 
 **Diğer araçlar:** `vmagents dev --codex`, `--gemini`, `--opencode` ya da `--aider` Claude
 yerine o aracı açar; ilk seferde VM'e kendisi kurar. Kalıcı yapmak için:

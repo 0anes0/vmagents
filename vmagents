@@ -6,7 +6,7 @@
 # shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.13.1
+VERSION=0.14.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -17,7 +17,7 @@ DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
 BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
 STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT CREATED "
 HOLD=0
 AGENTS="claude codex gemini opencode aider"
 
@@ -74,6 +74,11 @@ GET STARTED
     vmagents dev --continue                  arguments after the name go to Claude
     vmagents open dev 3000                   a web server on the VM, in your browser here
     vmagents dev --codex                     Codex instead of Claude (also --gemini, --opencode, --aider)
+
+  Work on a project of this computer (a git repository) in the VM:
+    vmagents project dev ~/code/app          send it; agents start in it ("vmagents dev")
+    vmagents changes dev                     what the agents changed there
+    vmagents take dev                        that work as the branch vmagents/dev here (--pr: a pull request)
     ssh dev@VM                               any SSH app opens Claude too (after setup)
 
 COMMANDS
@@ -96,6 +101,11 @@ COMMANDS
     login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
     mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
+
+  Projects (a git repository of this computer, worked on in the VM):
+    project NAME [DIR]   send the repository (default: this folder); again: send new commits
+    changes NAME         what the agents changed since (commits, and what is not committed)
+    take NAME            that work as a branch here (vmagents/NAME); --pr opens a pull request
 
   Undo (libvirt):
     undo NAME [SNAPSHOT] put the VM back to how it was before this session
@@ -158,6 +168,8 @@ Options:
                    also gemini, opencode, aider); the first one is what "vmagents NAME" opens
   --ports LIST     ports of the VM to reach here while connected, e.g. 3000,5173
   --idle MINUTES   the VM shuts itself down after MINUTES unused (default 30; off)
+  --project DIR    send this computer's git repository DIR to the VM ("vmagents
+                   help project"); the agents start in it
   --no-setup       only make the VM; run "vmagents setup NAME" later
 
 Examples:
@@ -498,6 +510,52 @@ Examples:
   vmagents open dev 5173 8080            two ports
   vmagents open dev 9000:3000            the VM's 3000 as localhost:9000
   vmagents open 3000 --no-browser        the default VM; only forward
+EOF
+      ;;
+    project) cat <<EOF
+vmagents project NAME [FOLDER] [--discard | --off]
+
+Sends a git repository of this computer (the one FOLDER is in; default: the
+current folder, or the project NAME already has) to the VM, into
+~/projects/FOLDERNAME there, checked out on the same branch. From then on the
+agents start in it ("vmagents NAME", the UI's tabs). The VM needs no access to
+GitHub: the commits go over vmagents's SSH connection, as a git bundle. Only
+commits go; what is not committed here stays here.
+
+Send it again to bring new commits over. That replaces the VM's copy, so it is
+refused while the VM has work that was not taken back ("vmagents take").
+--discard sends anyway; the VM keeps that work in a ref,
+refs/vmagents/discarded/TIME. --off forgets the project (the copy stays).
+A libvirt VM that was off is started, and shut down again afterwards.
+
+Examples:
+  vmagents project dev ~/code/app
+  vmagents create web --project ~/code/app     a new VM with the project in it
+EOF
+      ;;
+    changes) cat <<EOF
+vmagents changes NAME [--stat]
+
+Shows what changed in the project on the VM since it was sent: the commits
+the agents made, and what is not committed there (new files too, but not
+ignored ones), as one diff. --stat: the files only. Nothing on the VM changes.
+EOF
+      ;;
+    take) cat <<EOF
+vmagents take NAME [--branch BRANCH] [--pr]
+
+Brings the work done in the project on the VM to this computer's repository,
+as the branch vmagents/NAME (or BRANCH), pointing at the agents' commits plus
+one commit with what they did not commit. Your checkout is not touched: look
+at it, then merge it (git merge vmagents/NAME). --pr also pushes the branch to
+origin and opens a pull request with the GitHub CLI (gh).
+
+After merging, "vmagents project NAME" sends the result back, and the agents
+go on from there.
+
+Examples:
+  vmagents take dev
+  vmagents take dev --branch feature/health --pr
 EOF
       ;;
     ports) cat <<EOF
@@ -1362,6 +1420,7 @@ INSTALL_SH=$REMOTE_ENV'if command -v cloud-init >/dev/null 2>&1; then
 fi
 need=
 command -v tmux >/dev/null 2>&1 || need="$need tmux"
+command -v git >/dev/null 2>&1 || need="$need git"  # for projects (vmagents project), and the agents use it
 # $1: "no" leaves Claude Code out (another agent only).
 cl=${1:-yes}
 [ "$cl" = no ] || command -v claude >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || need="$need curl"
@@ -1407,11 +1466,9 @@ command -v tmux >/dev/null 2>&1 || echo "vmagents: tmux is not available; the ag
 exit 0
 '
 
-# Installs another agent than Claude ($1) for the user, in ~/.local/bin.
+# pkg PACKAGE...: installs with the VM's package manager (root or sudo).
 # shellcheck disable=SC2016
-AGENT_INSTALL_SH=$REMOTE_ENV'a=$1
-if command -v "$a" >/dev/null 2>&1; then echo "$a is already installed."; exit 0; fi
-if [ "$(id -u)" = 0 ]; then su_=
+PKG_SH='if [ "$(id -u)" = 0 ]; then su_=
 elif command -v sudo >/dev/null 2>&1; then su_=sudo
 else su_=none
 fi
@@ -1429,7 +1486,13 @@ pkg() {
   else echo "vmagents: no known package manager; install $* yourself" >&2; return 1
   fi
 }
-command -v curl >/dev/null 2>&1 || pkg curl || exit 1
+'
+
+# Installs another agent than Claude ($1) for the user, in ~/.local/bin.
+# shellcheck disable=SC2016
+AGENT_INSTALL_SH=$REMOTE_ENV'a=$1
+if command -v "$a" >/dev/null 2>&1; then echo "$a is already installed."; exit 0; fi
+'$PKG_SH'command -v curl >/dev/null 2>&1 || pkg curl || exit 1
 mkdir -p "$HOME/.local/bin" || exit 1
 case $a in
   codex)
@@ -1928,6 +1991,7 @@ list_json() {
     printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
       "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
       "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
+    printf '"project": %s, ' "$(json_str "${P[PROJECT]:-}")"
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
@@ -2522,16 +2586,16 @@ EOF
 
 cmd_create() {
   local name='' image=debian13 memory=4096 cpus=2 disk=20 user uri=qemu:///system install=1 idle=30 k
-  local agents=claude ports=''
+  local agents=claude ports='' project=''
   user=$(id -un)
   while (($#)); do
     case $1 in
-      --image | --memory | --cpus | --disk | --user | --uri | --idle | --agents | --ports)
+      --image | --memory | --cpus | --disk | --user | --uri | --idle | --agents | --ports | --project)
         (($# >= 2)) || usage_error "create: $1 needs a value"
         case $1 in
           --image) image=$2 ;; --memory) memory=$2 ;; --cpus) cpus=$2 ;;
           --disk) disk=$2 ;; --user) user=$2 ;; --uri) uri=$2 ;; --idle) idle=$2 ;;
-          --agents) agents=${2// /} ;; --ports) ports=${2// /} ;;
+          --agents) agents=${2// /} ;; --ports) ports=${2// /} ;; --project) project=$2 ;;
         esac
         shift 2 ;;
       --no-setup) install=0; shift ;;
@@ -2548,6 +2612,10 @@ cmd_create() {
   agent_list_ok "$agents" || die "--agents takes a comma-separated list of: $AGENTS"
   [[ -z $ports ]] || port_list_ok "$ports" || die "--ports takes a comma-separated list of ports, e.g. 3000,5173"
   check_value USER "$user"
+  if [[ -n $project ]]; then
+    command -v git >/dev/null || die "--project: git is not installed on this computer"
+    git -C "$project" rev-parse -q --verify HEAD >/dev/null 2>&1 || die "--project: $project is not a git repository with commits"
+  fi
   image_info "$image"
   local tool
   local iso_tool=''
@@ -2642,8 +2710,13 @@ cmd_create() {
       info "Idle shutdown"
       if install_idle "$idle"; then P[IDLE]=$idle; write_profile "$NAME"; else warn "idle shutdown not set up (later: $PROG idle $NAME $idle)"; fi
     fi
+    if [[ -n $project ]]; then
+      info "Project"
+      cmd_project "$name" "$project"
+    fi
   else
     say "Created. Next: $PROG setup $name --agents $agents"
+    [[ -z $project ]] || say "Then: $PROG project $name $(printf %q "$project")"
   fi
 }
 
@@ -3671,6 +3744,276 @@ cmd_open() {
   return 0
 }
 
+# ------------------------------------------------------------------ projects
+
+# A git repository of this computer goes to the VM, where the agents work on
+# it; their work comes back as a branch here. Both ways as git bundles over
+# the SSH connection: the VM needs no access to GitHub and no keys for it.
+# On the VM the repository is ~/projects/FOLDER with these refs:
+#   refs/vmagents/base   what was sent last
+#   refs/vmagents/work   the work: the agents' commits, plus one more commit
+#                        with what is not committed (new files too)
+#   refs/vmagents/taken  the work as it was last taken back
+# Here: refs/vmagents/NAME/base and refs/vmagents/NAME/work.
+
+# work_tree: the tree of the working copy, new files included (not ignored
+# ones), without touching the index.
+# shellcheck disable=SC2016
+WORK_TREE_SH='work_tree() {
+  i_=$(mktemp) || return 1
+  cp "$(git rev-parse --git-path index)" "$i_" 2>/dev/null || rm -f "$i_"
+  GIT_INDEX_FILE=$i_ git add -A . >/dev/null 2>&1 && GIT_INDEX_FILE=$i_ git write-tree
+  r_=$?; rm -f "$i_"; return $r_
+}
+project_cd() {
+  case $1 in "~/"*) set -- "$HOME/${1#"~/"}" ;; esac
+  cd "$1" 2>/dev/null && [ -d .git ]
+}
+'
+
+# $1 folder, prints refs/vmagents/base when there is one.
+# shellcheck disable=SC2016
+PROJECT_BASE_SH=$WORK_TREE_SH'project_cd "$1" && git rev-parse -q --verify refs/vmagents/base 2>/dev/null'
+
+# Receives a bundle on stdin. $1 folder, $2 branch, $3 $4 user name and
+# email for commits, $5 1: also when the VM has work not taken back (it is
+# kept as refs/vmagents/discarded/TIME), $6 the commit sent. Exit 5: there is
+# such work; 7: the folder is not a vmagents project.
+# shellcheck disable=SC2016
+PROJECT_RECEIVE_SH='command -v git >/dev/null 2>&1 || pkg git >&2 || exit 1
+'$WORK_TREE_SH'b_=$(mktemp) || exit 1
+trap '\''rm -f "$b_"'\'' EXIT
+cat >"$b_"
+d=$1
+case $d in "~/"*) d=$HOME/${d#"~/"} ;; esac
+if [ ! -d "$d/.git" ]; then
+  if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then
+    echo "vmagents: $1 on the VM has files and is not a git repository; move it away first" >&2; exit 7
+  fi
+  mkdir -p "$d" && cd "$d" && git init -q . && git symbolic-ref HEAD "refs/heads/$2" || exit 1
+fi
+cd "$d" || exit 1
+git config user.name "$3" && git config user.email "$4" || exit 1
+if [ -s "$b_" ]; then git fetch -q "$b_" "+HEAD:refs/vmagents/incoming" || exit 1; fi
+new=$6
+git cat-file -e "$new^{commit}" 2>/dev/null || { echo "vmagents: the VM did not get commit $new" >&2; exit 1; }
+if git rev-parse -q --verify HEAD >/dev/null; then
+  t=$(work_tree) || exit 1
+  ok=
+  base=$(git rev-parse -q --verify refs/vmagents/base)
+  # Nothing done since it was sent, or everything taken back and part of what comes now.
+  [ -n "$base" ] && [ "$t" = "$(git rev-parse "$base^{tree}")" ] && ok=1
+  tk=$(git rev-parse -q --verify refs/vmagents/taken)
+  [ -n "$tk" ] && [ "$t" = "$(git rev-parse "$tk^{tree}")" ] && git merge-base --is-ancestor "$tk" "$new" && ok=1
+  if [ -z "$ok" ]; then
+    [ "$5" = 1 ] || exit 5
+    w=$(git commit-tree "$t" -p HEAD -m "Work discarded by vmagents project --discard") &&
+      git update-ref "refs/vmagents/discarded/$(date +%Y%m%d-%H%M%S)" "$w" || exit 1
+  fi
+fi
+git checkout -q -f -B "$2" "$new" && git clean -q -f -d && git update-ref refs/vmagents/base "$new" || exit 1
+git update-ref -d refs/vmagents/incoming 2>/dev/null
+exit 0
+'
+
+# The work as a bundle on stdout (refs/vmagents/work). $1 folder, $2 1: mark
+# it as taken back. Exit 10: no work since it was sent; 4: no project.
+# shellcheck disable=SC2016
+PROJECT_WORK_SH='command -v git >/dev/null 2>&1 || { echo "vmagents: git is not installed on the VM" >&2; exit 1; }
+'$WORK_TREE_SH'project_cd "$1" || exit 4
+base=$(git rev-parse -q --verify refs/vmagents/base) || exit 4
+t=$(work_tree) && h=$(git rev-parse HEAD) || exit 1
+if [ "$t" = "$(git rev-parse "$h^{tree}")" ]; then w=$h
+else w=$(git commit-tree "$t" -p "$h" -m "Work not committed on the VM") || exit 1
+fi
+git update-ref refs/vmagents/work "$w" || exit 1
+[ "$w" = "$base" ] && exit 10
+[ "$2" = 1 ] && { git update-ref refs/vmagents/taken "$w" || exit 1; }
+git bundle create - refs/vmagents/work "^$base" 2>/dev/null
+'
+
+PROJ='' WAS_OFF=0
+project_load() { # NAME: the profile and its project here (PROJ)
+  load "$1"
+  [[ -n ${P[PROJECT]:-} ]] || die "$NAME has no project; send one: $PROG project $NAME [FOLDER]"
+  PROJ=${P[PROJECT]}
+  git -C "$PROJ" rev-parse --git-dir >/dev/null 2>&1 || die "the project of $NAME, $PROJ, is not a git repository any more"
+  git -C "$PROJ" rev-parse -q --verify "refs/vmagents/$NAME/base" >/dev/null ||
+    die "$PROJ does not know what was sent to $NAME; send it again: $PROG project $NAME"
+}
+
+# Starts the VM when needed; project_done shuts it down again if it was off.
+project_connect() {
+  WAS_OFF=0
+  [[ -n $C_DOMAIN && $(domstate 2>/dev/null) != running ]] && WAS_OFF=1
+  resolve_target
+  build_ssh_opts
+  [[ $C_OS != windows ]] || die "projects work with Linux VMs only"
+}
+project_done() {
+  if ((WAS_OFF)) && [[ ${P[AUTOSTOP]:-on} == on ]]; then
+    info "Shutting $NAME down again (it was off)."
+    stop_vm 0 || true
+  fi
+}
+
+# The VM's work into refs/vmagents/NAME/work here. $1 1: mark it as taken.
+# Returns 10 when there is no work.
+fetch_work() {
+  local tmp rc=0
+  tmp=$(mktemp)
+  run_ssh -T -- "$TARGET" "$(remote_cmd "$REMOTE_ENV$PROJECT_WORK_SH" "$C_DIR" "$1")" </dev/null >"$tmp" || rc=$?
+  case $rc in
+    0) ;;
+    10) rm -f "$tmp"; return 10 ;;
+    4) rm -f "$tmp"; die "the project is not on $NAME (in ${C_DIR:-its home}); send it: $PROG project $NAME" ;;
+    *) rm -f "$tmp"; die "could not get the work from $NAME (exit code $rc)" ;;
+  esac
+  git -C "$PROJ" fetch -q "$tmp" "+refs/vmagents/work:refs/vmagents/$NAME/work" ||
+    { rm -f "$tmp"; die "could not read the work of $NAME into $PROJ"; }
+  rm -f "$tmp"
+}
+
+show_work() { # how the work differs from what was sent: commits, then files
+  local base=refs/vmagents/$NAME/base work=refs/vmagents/$NAME/work
+  git -C "$PROJ" --no-pager log --format='  %h %s' "$base..$work"
+  git -C "$PROJ" --no-pager diff --stat "$base" "$work"
+}
+
+cmd_project() {
+  local name='' dir='' discard=0 off=0 top head branch known remote tmp rc=0 uname uemail
+  while (($#)); do
+    case $1 in
+      --discard) discard=1 ;;
+      --off) off=1 ;;
+      -*) usage_error "project: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1
+        elif [[ -z $dir ]]; then dir=$1
+        else usage_error "project: too many arguments"
+        fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "project: missing NAME"
+  load "$name"
+  if ((off)); then
+    # shellcheck disable=SC2088 # a literal "~/" (the VM's home)
+    [[ ${P[DIR]:-} == "~/projects/"* ]] && unset 'P[DIR]'
+    unset 'P[PROJECT]'
+    write_profile "$NAME"
+    say "$NAME has no project any more; agents start in the VM's home. (The copy on the VM stays.)"
+    return 0
+  fi
+  command -v git >/dev/null || die "git is not installed on this computer"
+  dir=${dir:-${P[PROJECT]:-.}}
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || die "$dir is not in a git repository"
+  head=$(git -C "$top" rev-parse -q --verify HEAD) || die "$top has no commits yet; commit first"
+  branch=$(git -C "$top" symbolic-ref -q --short HEAD) || branch=vmagents
+  [[ -z $(git -C "$top" status --porcelain 2>/dev/null) ]] ||
+    info "Note: what is not committed in $top stays here; only commits go to the VM."
+  # shellcheck disable=SC2088 # the VM's home, expanded there
+  remote="~/projects/${top##*/}"
+  [[ -n ${P[PROJECT]:-} && ${P[PROJECT]} != "$top" ]] && info "The project of $NAME was ${P[PROJECT]}; now it is $top."
+  uname=$(git -C "$top" config user.name) || uname=$(id -un)
+  uemail=$(git -C "$top" config user.email) || uemail="$(id -un)@localhost"
+
+  project_connect
+  known=$(run_ssh -T -- "$TARGET" "$(remote_cmd "$PROJECT_BASE_SH" "$remote")" </dev/null 2>/dev/null) || known=''
+  tmp=$(mktemp)
+  if [[ $known != "$head" ]]; then
+    if [[ $known =~ ^[0-9a-f]{40,64}$ ]] && git -C "$top" merge-base --is-ancestor "$known" "$head" 2>/dev/null; then
+      git -C "$top" bundle create -q "$tmp" HEAD "^$known" || { rm -f "$tmp"; die "git bundle failed"; }
+    else
+      git -C "$top" bundle create -q "$tmp" HEAD || { rm -f "$tmp"; die "git bundle failed"; }
+    fi
+  fi
+  info "Sending $branch of $top to $NAME..."
+  run_ssh -T -- "$TARGET" "$(remote_cmd "$REMOTE_ENV$PKG_SH$PROJECT_RECEIVE_SH" "$remote" "$branch" "$uname" "$uemail" \
+    "$discard" "$head")" <"$tmp" || rc=$?
+  rm -f "$tmp"
+  case $rc in
+    0) ;;
+    5)
+      printf '%s: %s has work on the project that was not taken back:\n' "$PROG" "$NAME" >&2
+      printf '  see it: %s changes %s    take it: %s take %s\n' "$PROG" "$NAME" "$PROG" "$NAME" >&2
+      printf '  or send anyway, setting that work aside on the VM: %s project %s --discard\n' "$PROG" "$NAME" >&2
+      project_done
+      exit 5 ;;
+    7) project_done; exit 1 ;;
+    *) project_done; die "sending the project failed (exit code $rc)" ;;
+  esac
+  git -C "$top" update-ref "refs/vmagents/$NAME/base" "$head"
+  P[PROJECT]=$top P[DIR]=$remote
+  write_profile "$NAME"
+  say "Sent $branch ($(git -C "$top" rev-parse --short "$head")) of $top to $NAME, in $remote."
+  say "Agents start there: $PROG $NAME"
+  say "What they changed: $PROG changes $NAME    as a branch here: $PROG take $NAME"
+  project_done
+}
+
+cmd_changes() {
+  local name='' stat=0 rc=0
+  while (($#)); do
+    case $1 in
+      --stat) stat=1 ;;
+      -*) usage_error "changes: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "changes: too many arguments"; name=$1 ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "changes: missing NAME"
+  project_load "$name"
+  project_connect
+  fetch_work 0 || rc=$?
+  project_done
+  if ((rc == 10)); then
+    say "No changes on $NAME since the project was sent."
+    return 0
+  fi
+  say "Changes on $NAME in $C_DIR (sent: $(git -C "$PROJ" rev-parse --short "refs/vmagents/$NAME/base")):"
+  show_work
+  ((stat)) || { say ""; git -C "$PROJ" diff "refs/vmagents/$NAME/base" "refs/vmagents/$NAME/work"; }
+}
+
+cmd_take() {
+  local name='' branch='' pr=0 rc=0 cur
+  while (($#)); do
+    case $1 in
+      --branch) (($# >= 2)) || usage_error "take: --branch needs a name"; branch=$2; shift ;;
+      --pr) pr=1 ;;
+      -*) usage_error "take: unknown option $1" ;;
+      *) [[ -z $name ]] || usage_error "take: too many arguments"; name=$1 ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "take: missing NAME"
+  project_load "$name"
+  branch=${branch:-vmagents/$NAME}
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "not a valid branch name: $branch"
+  cur=$(git -C "$PROJ" symbolic-ref -q --short HEAD) || cur=''
+  [[ $cur != "$branch" ]] || die "$branch is checked out in $PROJ; switch to another branch first"
+  ((pr)) && { command -v gh >/dev/null || die "--pr needs the GitHub CLI (gh)"; }
+  project_connect
+  fetch_work 1 || rc=$?
+  project_done
+  if ((rc == 10)); then
+    say "Nothing to take: no changes on $NAME since the project was sent."
+    return 0
+  fi
+  git -C "$PROJ" branch -f "$branch" "refs/vmagents/$NAME/work" >/dev/null || die "could not make the branch $branch"
+  say "The work of $NAME is the branch $branch in $PROJ:"
+  show_work
+  if ((pr)); then
+    git -C "$PROJ" push -u origin "$branch" || die "could not push $branch to origin"
+    (cd "$PROJ" && gh pr create --head "$branch" --fill) || die "gh pr create failed"
+  else
+    say ""
+    say "Merge it: git merge $branch    or a pull request: $PROG take $NAME --pr"
+    say "Then send the project again ($PROG project $NAME): the VM goes on from there."
+  fi
+}
+
 # ------------------------------------------------------------------ ui
 
 # The terminal UI: a Textual app (UI_PY below) that runs this script.
@@ -3709,6 +4052,8 @@ import struct
 import subprocess
 import termios
 import threading
+import time
+from collections import deque
 
 import pyte
 from rich.segment import Segment
@@ -3750,9 +4095,9 @@ TEXTS = {"tr": {
     "running": "açık", "off": "kapalı", "paused": "duraklatıldı", "missing": "yok", "not libvirt": "libvirt değil",
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
-    "[dim]Enter or l: open · j/k: move · n: new VM · o: ports · t: start/stop · u: snapshots · L: language · "
-    "q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · o: portlar · t: başlat/durdur · "
-    "u: anlık görüntüler · L: dil · q: çık[/]",
+    "[dim]Enter or l: open · j/k: move · n: new VM · p: project · c: changes · o: ports · t: start/stop · "
+    "u: snapshots · L: language · q: quit[/]": "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · p: proje · "
+    "c: değişiklikler · o: portlar · t: başlat/durdur · u: anlık görüntüler · L: dil · q: çık[/]",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
         "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zekâ "
@@ -3788,6 +4133,39 @@ TEXTS = {"tr": {
     "creating…": "oluşturuluyor…", "ready": "hazır", "failed": "başarısız", "Close": "Kapat",
     "{n} is ready.": "{n} hazır.", "Creating {n} failed.": "{n} oluşturulamadı.",
     "{n} is still being created; quitting stops that.": "{n} hâlâ oluşturuluyor; çıkarsan bu durur.",
+    "{tab} is waiting for you ({key}).": "{tab} seni bekliyor ({key}).", "waiting": "bekliyor",
+    # projects
+    "Project": "Proje", "Changes": "Değişiklikler", "Refresh": "Yenile", "Take as a branch": "Dal olarak al",
+    "Pull request": "Pull request", "Getting the changes of {n}...": "{n} değişiklikleri alınıyor...",
+    "[red]Could not get the changes of {n}[/]: {why}": "[red]{n} değişiklikleri alınamadı[/]: {why}",
+    "[b]No changes[/b] on {n} since the project was sent ({p}).":
+        "Proje gönderildiğinden beri {n} üzerinde [b]değişiklik yok[/b] ({p}).",
+    "[b]Changes on {n}[/b] since the project was sent: {summary}\n[dim]t: take them as the branch vmagents/{n} in "
+    "{p} (your checkout stays as it is) · P: a pull request · r: refresh[/]":
+        "Proje gönderildiğinden beri [b]{n} üzerindeki değişiklikler[/b]: {summary}\n[dim]t: {p} içinde "
+        "vmagents/{n} dalı olarak al (çalışma kopyan olduğu gibi kalır) · P: pull request · r: yenile[/]",
+    "Nothing to take.": "Alınacak bir şey yok.",
+    "The work of {n} is the branch vmagents/{n} now.": "{n} üzerindeki iş artık vmagents/{n} dalı.",
+    "Push the branch vmagents/{n} to origin and open a pull request (with gh)?":
+        "vmagents/{n} dalı origin'e gönderilip (gh ile) bir pull request açılsın mı?",
+    "Open it": "Aç", "Send anyway": "Yine de gönder", "Folder": "Klasör", "Give a folder.": "Bir klasör ver.",
+    "Project: {p} → {d} on the VM  [dim](c: changes)[/]": "Proje: {p} → VM'de {d}  [dim](c: değişiklikler)[/]",
+    "Project: none  [dim](p: send a git repository of this computer)[/]":
+        "Proje: yok  [dim](p: bu bilgisayardaki bir git deposunu gönder)[/]",
+    "Projects work with Linux VMs only.": "Projeler yalnızca Linux VM'lerinde çalışır.",
+    "{p} is not in a git repository.": "{p} bir git deposunda değil.",
+    "Sent the project to {n}; agents start in it.": "Proje {n} makinesine gönderildi; yardımcılar onun içinde açılır.",
+    "{n} has work on the project that was not taken back (c shows it; t there takes it). Send anyway? That work is "
+    "set aside on the VM, not deleted.": "{n} üzerinde projede henüz geri alınmamış iş var (c gösterir, orada t "
+    "alır). Yine de gönderilsin mi? O iş VM'de bir kenara konur, silinmez.",
+    "Send a git repository of this computer to {n}; the agents work on it there, and what they do comes back as a "
+    "branch (c). Sending again brings new commits over.": "Bu bilgisayardaki bir git deposunu {n} makinesine gönder; "
+    "yardımcılar orada onun üzerinde çalışır, yaptıkları bir dal olarak geri gelir (c). Tekrar göndermek yeni "
+    "commit'leri taşır.",
+    "{n} has no project yet: p sends one.": "{n} için henüz proje yok: p ile gönder.",
+    "Project [dim](a git repository of this computer, to work on in the VM; optional)[/]":
+        "Proje [dim](bu bilgisayardaki, VM'de üzerinde çalışılacak bir git deposu; isteğe bağlı)[/]",
+    "Project: {p} is not a git repository.": "Proje: {p} bir git deposu değil.",
     "Only Claude Code runs on Windows VMs.": "Windows VM'lerinde yalnızca Claude Code çalışır.",
     "{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the VM).":
         "{count} terminal açık. Çıkınca kapanırlar (tmux içindeki yardımcılar VM'de çalışmaya devam eder).",
@@ -3946,7 +4324,27 @@ def create_args(v):
          "--disk", str(v["disk"]), "--agents", ",".join(v["agents"]), "--idle", str(v["idle"] or "off")]
     if v["ports"]:
         a += ["--ports", v["ports"]]
+    if v.get("project"):
+        a += ["--project", v["project"]]
     return a
+
+
+def git_top(folder):
+    """The top folder of the git repository FOLDER is in, or None."""
+    try:
+        r = subprocess.run(["git", "-C", os.path.expanduser(folder), "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def home_short(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path and (path == home or path.startswith(home + "/")) else path
+
+
+HERE = git_top(os.getcwd()) or ""  # the repository "vmagents ui" was started in, if any
 
 
 class VimOptions(OptionList):
@@ -4169,6 +4567,8 @@ class NewVM(Screen):
                     yield Label(T("Shut down when unused for"))
                     yield Select([(idle_label(m), m) for m in IDLE_MINUTES], value=30, allow_blank=False, id="idle",
                                  compact=True)
+            yield Label(T("Project [dim](a git repository of this computer, to work on in the VM; optional)[/]"))
+            yield Input(home_short(HERE), placeholder="~/code/app", id="project", compact=True)
             yield Static("", id="error", classes="error")
             yield Static("", id="command", classes="command")
             with Horizontal(classes="buttons"):
@@ -4193,6 +4593,7 @@ class NewVM(Screen):
             "agents": [k for k, _ in AGENTS if self.query_one(f"#agent-{k}", Checkbox).value],
             "ports": val("ports").value.replace(" ", ""),
             "idle": val("idle").value,
+            "project": os.path.expanduser(val("project").value.strip()),
         }
 
     def problem(self, v):
@@ -4214,6 +4615,8 @@ class NewVM(Screen):
             return T("Ports: numbers separated by commas, e.g. 3000,5173.")
         if v["ports"] and any(not 1 <= int(p) <= 65535 for p in v["ports"].split(",")):
             return T("Ports go from 1 to 65535.")
+        if v["project"] and not git_top(v["project"]):
+            return T("Project: {p} is not a git repository.", p=home_short(v["project"]))
         return ""
 
     def refresh_command(self):
@@ -4340,6 +4743,117 @@ class Creating(Vertical):
     def close(self):
         if self.rc is not None:
             self.app.close_pane(self.id)
+
+
+# ------------------------------------------------------------------ a project's changes
+
+class DiffLog(RichLog):
+    BINDINGS = [Binding("j", "scroll_down", show=False), Binding("k", "scroll_up", show=False),
+                Binding("space", "page_down", show=False)]
+
+
+def diff_line(line):
+    """A line of "vmagents changes" output, coloured like git does."""
+    style = ""
+    if line.startswith("diff --git"):
+        style = "bold"
+    elif line.startswith(("+++", "---", "index ")):
+        style = "dim"
+    elif line.startswith("@@"):
+        style = "cyan"
+    elif line.startswith("+"):
+        style = "green"
+    elif line.startswith("-"):
+        style = "red"
+    return Text(line, style=style)
+
+
+class Changes(Vertical):
+    """A tab with what the agents changed in the VM's project since it was
+    sent: commits, files, the diff. r: again, t: take it as a branch here,
+    P: a pull request, Esc: the list."""
+
+    def __init__(self, vm, **kw):
+        super().__init__(**kw)
+        self.vm = vm
+        self.state = "loading"  # loading, none, changes, error
+        self._bindings = BindingsMap(self.make_bindings())
+
+    @staticmethod
+    def make_bindings():
+        return [Binding("r", "load", T("Refresh")), Binding("t", "take", T("Take as a branch")),
+                Binding("P", "pr", T("Pull request")), Binding("escape", "app.home", show=False),
+                Binding("h", "app.home", show=False)]
+
+    def compose(self):
+        yield Static(T("Getting the changes of {n}...", n=self.vm["name"]), id="chstatus")
+        yield DiffLog(id="diff", wrap=False, markup=False, highlight=False, auto_scroll=False)
+
+    def on_mount(self):
+        self.action_load()
+
+    def focus_default(self):
+        try:
+            self.query_one(DiffLog).focus()
+        except NoMatches:
+            self.call_after_refresh(self.focus_default)
+
+    def status_label(self):
+        return T("Changes")
+
+    def action_load(self):
+        self.state = "loading"
+        self.query_one("#chstatus", Static).update(T("Getting the changes of {n}...", n=self.vm["name"]))
+        self.load()
+
+    @work(thread=True, exclusive=True, group="changes")
+    def load(self):
+        rc, out, err = cli("changes", self.vm["name"], timeout=900)
+        self.app.call_from_thread(self.show, rc, out, err)
+
+    def show(self, rc, out, err):
+        log = self.query_one(DiffLog)
+        log.clear()
+        n = self.vm["name"]
+        project = home_short(self.vm.get("project") or "")
+        if rc != 0:
+            self.state = "error"
+            self.query_one("#chstatus", Static).update(
+                T("[red]Could not get the changes of {n}[/]: {why}", n=n, why=(err.strip().splitlines() or ["?"])[-1]))
+            return
+        if out.startswith("No changes"):
+            self.state = "none"
+            self.query_one("#chstatus", Static).update(
+                T("[b]No changes[/b] on {n} since the project was sent ({p}).", n=n, p=project))
+            return
+        self.state = "changes"
+        summary = next((x.strip() for x in out.splitlines() if re.match(r"^ \d+ files? changed", x)), "")
+        self.query_one("#chstatus", Static).update(
+            T("[b]Changes on {n}[/b] since the project was sent: {summary}\n[dim]t: take them as the branch "
+              "vmagents/{n} in {p} (your checkout stays as it is) · P: a pull request · r: refresh[/]",
+              n=n, summary=summary, p=project))
+        for line in out.splitlines()[1:]:
+            log.write(diff_line(line))
+        log.scroll_home(animate=False)
+
+    def action_take(self):
+        if self.state != "changes":
+            self.app.notify(T("Nothing to take."))
+            return
+        self.app.background(["take", self.vm["name"]], done=lambda rc: rc == 0 and self.app.notify(
+            T("The work of {n} is the branch vmagents/{n} now.", n=self.vm["name"])), name=self.vm["name"])
+
+    def action_pr(self):
+        if self.state != "changes":
+            self.app.notify(T("Nothing to take."))
+            return
+        n = self.vm["name"]
+
+        def sure(yes):
+            if yes:
+                self.app.background(["take", n, "--pr"], name=n)
+        self.app.push_screen(Confirm(T("Push the branch vmagents/{n} to origin and open a pull request (with gh)?",
+                                       n=n), yes=T("Open it")), sure)
 
 
 # ------------------------------------------------------------------ snapshots
@@ -4519,6 +5033,9 @@ class Terminal(Widget, can_focus=True):
         super().__init__(**kw)
         self.argv, self.label = argv, label
         self.vm_name = self.kind = None
+        self.reads = deque(maxlen=32)  # when output came: a working agent keeps redrawing its spinner
+        self.working = self.attention = False
+        self.last_active = self.last_key = 0.0
         self.vt = self.stream = self.proc = None
         self.fd = None
         self.rc = None
@@ -4531,6 +5048,7 @@ class Terminal(Widget, can_focus=True):
         cols, rows = max(self.size.width, 20), max(self.size.height, 5)
         self.vt = pyte.HistoryScreen(cols, rows, history=5000)
         self.vt.write_process_input = self.write  # answers to "where is the cursor?" and the like
+        self.vt.bell = self.ring
         self.stream = pyte.ByteStream(self.vt)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -4554,6 +5072,9 @@ class Terminal(Widget, can_focus=True):
         except OSError:
             data = b""
         if data:
+            now = time.monotonic()
+            if now - self.last_key > 0.5:  # not the echo of what you type
+                self.reads.append(now)
             if self.vt.history.position < self.vt.history.size:
                 self.vt.next_page()  # new output: back to the bottom
             self.feed(data)
@@ -4575,6 +5096,23 @@ class Terminal(Widget, can_focus=True):
             self.vt.define_charset(m.group(2).decode(), m.group(1).decode())
             pos = m.end()
         self.stream.feed(data[pos:])
+
+    class Bell(Message):
+        def __init__(self, terminal):
+            super().__init__()
+            self.terminal = terminal
+
+    def ring(self, *_):
+        self.post_message(self.Bell(self))
+
+    def busy(self, now):
+        """Output keeps coming (4 times in 2 seconds or more): the program works."""
+        return sum(1 for t in self.reads if now - t < 2) >= 4
+
+    def send(self, data):
+        """What you type (or paste)."""
+        self.last_key = time.monotonic()
+        self.write(data)
 
     def write(self, data):
         if self.fd is None:
@@ -4609,14 +5147,14 @@ class Terminal(Widget, can_focus=True):
         event.prevent_default()
         data = key_bytes(event.key, event.character, self.vt is not None and MODE_CURSOR_KEYS in self.vt.mode)
         if data:
-            self.write(data)
+            self.send(data)
 
     def on_paste(self, event):
         event.stop()
         text = event.text.replace("\r\n", "\r").replace("\n", "\r").encode()
         if self.vt is not None and MODE_PASTE in self.vt.mode:
             text = b"\x1b[200~" + text + b"\x1b[201~"
-        self.write(text)
+        self.send(text)
 
     def scroll(self, up, event):
         event.stop()
@@ -4624,7 +5162,7 @@ class Terminal(Widget, can_focus=True):
             return
         if self.vt.mode & MODES_MOUSE:
             if MODE_SGR_MOUSE in self.vt.mode:
-                self.write(b"\x1b[<%d;%d;%dM" % (64 if up else 65, event.x + 1, event.y + 1))
+                self.send(b"\x1b[<%d;%d;%dM" % (64 if up else 65, event.x + 1, event.y + 1))
             return
         if up:
             self.vt.prev_page()
@@ -4735,7 +5273,8 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh"}
+                "refresh", "project", "changes"}
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
 
@@ -4765,6 +5304,8 @@ class VmAgentsUI(App):
     #status { padding: 1 2; height: auto; }
     #snaptitle, #snaphelp { padding: 0 1; height: auto; }
     #snaps { height: 1fr; }
+    #chstatus { padding: 0 1; height: auto; }
+    #diff { height: 1fr; }
     #topbar { height: 2; }
     #brand { width: auto; padding: 0 2 0 1; content-align: left middle; height: 2; }
     #tabs { width: 1fr; }
@@ -4795,7 +5336,8 @@ class VmAgentsUI(App):
             other = dict(LANGUAGES)[LANGUAGES[(list(dict(LANGUAGES)).index(LANG) + 1) % len(LANGUAGES)][0]]
             more = len(self.pane_ids()) > 1
             return [Binding("enter", "open", T("Open"), show=False),
-                    Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell")),
+                    Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell"), show=False),
+                    Binding("p", "project", T("Project")), Binding("c", "changes", T("Changes")),
                     Binding("o", "ports", T("Ports")), Binding("t", "toggle", T("Start/stop")),
                     Binding("u", "snapshots", T("Snapshots")), Binding("r", "resize", T("Resources")),
                     Binding("d", "delete", T("Delete")),
@@ -4806,7 +5348,7 @@ class VmAgentsUI(App):
                 Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
                 dataclasses.replace(b, show=False) for b in tabs]
         home = [Binding("ctrl+right_square_bracket", "home", T("VM list"), priority=True, key_display="^]")]
-        if kind == "create":
+        if kind != "term":
             return home + tabs
         return home + [Binding("f1", "open_kind('shell')", T("Shell"), priority=True)] + [
             Binding(f"f{i}", f"open_kind('{k}')", label, priority=True)
@@ -4846,6 +5388,7 @@ class VmAgentsUI(App):
         self.load_info()
         self.refresh_vms()
         self.set_interval(5, self.refresh_vms)
+        self.set_interval(0.5, self.watch_terminals)
 
     def setup_list(self):
         t = self.main.query_one("#vms", DataTable)
@@ -4853,8 +5396,8 @@ class VmAgentsUI(App):
         t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
         t.focus()
         self._seen = None
-        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · o: ports · t: start/stop · u: snapshots · "
-                        "L: language · q: quit[/]"))
+        self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · p: project · c: changes · o: ports · "
+                        "t: start/stop · u: snapshots · L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -4864,6 +5407,8 @@ class VmAgentsUI(App):
         codes = [c for c, _ in LANGUAGES]
         LANG = codes[(codes.index(LANG) + 1) % len(codes)]
         save_lang(LANG)
+        for c in self.main.query(Changes):
+            c._bindings = BindingsMap(c.make_bindings())
         self.rebind()
         self.relabel()
         self.setup_list()
@@ -4886,7 +5431,7 @@ class VmAgentsUI(App):
 
     def pane_kind(self, pid=None):
         pid = pid or self.current_pane()
-        return "home" if pid == "home" else "term" if pid.startswith("term-") else "create"
+        return "home" if pid == "home" else "term" if pid.startswith("term-") else "other"
 
     def pane(self, pid):
         return self.main.query_one("#panes", ContentSwitcher).get_child_by_id(pid)
@@ -4897,12 +5442,58 @@ class VmAgentsUI(App):
         w = self.pane(pid)
         if isinstance(w, Terminal):
             return f"{w.vm_name} · {kind_label(w.kind)}"
-        return f"{w.v['name']} · {w.status_label()}"
+        return f"{(w.vm if isinstance(w, Changes) else w.v)['name']} · {w.status_label()}"
+
+    def pane_mark(self, pid):
+        """Before the label of a terminal tab not shown: a spinner while its
+        program works, a dot when it stopped (waiting for you, or done)."""
+        w = self.pane(pid) if pid.startswith("term-") else None
+        if w is None or pid == self.current_pane():
+            return ("", "")
+        if w.attention:
+            return ("● ", "bold #ffaf00")
+        if w.working:
+            return (SPINNER[int(time.monotonic() * 8) % len(SPINNER)] + " ", "cyan")
+        return ("", "")
 
     def relabel(self):
         for i, tab in enumerate(self.main.query_one(Tabs).query(Tab), start=1):
-            label = self.pane_label(tab.id[4:])
-            tab.label = Text.assemble((f"{i} ", "dim"), label) if i < 10 else label
+            pid = tab.id[4:]
+            label = Text.assemble((f"{i} " if i < 10 else "", "dim"), self.pane_mark(pid), self.pane_label(pid))
+            if label != tab.label:
+                tab.label = label
+
+    def watch_terminals(self):
+        """Which programs work, and which stopped while you were elsewhere."""
+        now, changed = time.monotonic(), False
+        for t in self.terminals():
+            if t.rc is None and t.busy(now):
+                t.last_active = now
+                changed |= not t.working
+                t.working = True
+            elif t.working and now - t.last_active > 3:
+                t.working, changed = False, True
+                if t.id != self.current_pane():
+                    self.needs_you(t)
+            changed |= t.working and t.id != self.current_pane()  # the spinner turns
+        if changed:
+            self.relabel()
+
+    def needs_you(self, t):
+        if t.attention:
+            return
+        t.attention = True
+        self.notify(T("{tab} is waiting for you ({key}).", tab=f"{t.vm_name} · {kind_label(t.kind)}",
+                      key=f"{self.pane_ids().index(t.id) + 1}" if t.id in self.pane_ids() else "F7/F8"))
+        self.bell()
+        self._seen = None
+        self.back_to_list()
+
+    @on(Terminal.Bell)
+    def terminal_bell(self, event):
+        if event.terminal.id != self.current_pane():
+            self.needs_you(event.terminal)
+            self.relabel()
 
     def rebind(self):
         self._bindings = BindingsMap(self.make_bindings())
@@ -4921,10 +5512,12 @@ class VmAgentsUI(App):
             self.last = pid
             w = self.pane(pid)
             if isinstance(w, Terminal):
+                w.attention = False
                 w.focus()
             else:
                 w.focus_default()
         self.rebind()
+        self.relabel()
 
     def add_pane(self, widget, label):
         self.main.query_one("#panes", ContentSwitcher).mount(widget)
@@ -4941,6 +5534,7 @@ class VmAgentsUI(App):
         if self.last == pid:
             self.last = None
         self.call_after_refresh(self.relabel)
+        self.call_after_refresh(self.back_to_list)  # its marks in the list go too
         self.rebind()
         self._seen = None
 
@@ -4997,7 +5591,8 @@ class VmAgentsUI(App):
     @while_open
     def show_vms(self, vms):
         open_here = sorted({t.vm_name for t in self.terminals()})
-        seen = (vms, sorted(self.busy), open_here)
+        waiting = sorted({t.vm_name for t in self.terminals() if t.attention})
+        seen = (vms, sorted(self.busy), open_here, waiting)
         if seen == getattr(self, "_seen", None):
             return
         self._seen = seen
@@ -5007,7 +5602,7 @@ class VmAgentsUI(App):
         t.clear()
         for vm in vms:
             agents = vm.get("agents") or [vm.get("agent", "claude")]
-            name = ("* " if vm.get("default") else "  ") + vm["name"] + (" ▸" if vm["name"] in open_here else "")
+            name = ("* " if vm.get("default") else "  ") + vm["name"] + (" [b #ffaf00]●[/]" if vm["name"] in waiting else " ▸" if vm["name"] in open_here else "")
             state = "[cyan]◆[/] " + T("working") if vm["name"] in self.busy else state_mark(vm)
             t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"), ", ".join(agents),
                       ",".join(map(str, vm.get("ports") or [])) or "-", key=vm["name"])
@@ -5058,10 +5653,16 @@ class VmAgentsUI(App):
                      else T("Ports: none"))
         for _, desc in self.forwards.get(n, []):
             lines.append(f"  [green]→[/] {desc}")
+        project = vm.get("project")
+        lines.append(T("Project: {p} → {d} on the VM  [dim](c: changes)[/]", p=home_short(project), d=vm.get("dir"))
+                     if project else T("Project: none  [dim](p: send a git repository of this computer)[/]"))
         if terms := self.terminals(n):
+            def state(t):
+                return (" [b #ffaf00]" + T("waiting") + "[/]" if t.attention
+                        else " [cyan]" + T("working") + "[/]" if t.working else "")
             lines.append("")
             lines.append(T("Open here: {list}  [dim](Enter to go back)[/]",
-                           list=", ".join(kind_label(t.kind) for t in terms)))
+                           list=", ".join(kind_label(t.kind) + state(t) for t in terms)))
         lines.append("")
         lines.append(" · ".join([
             T("idle shutdown {m} min", m=vm["idle"]) if vm.get("idle") else T("no idle shutdown"),
@@ -5190,6 +5791,56 @@ class VmAgentsUI(App):
     def action_shell(self):
         if vm := self.need_vm(busy_ok=True):
             self.open_session(vm["name"], "shell")
+
+    def action_project(self):
+        if not (vm := self.need_vm()):
+            return
+        if vm.get("os") == "windows":
+            self.notify(T("Projects work with Linux VMs only."))
+            return
+        n = vm["name"]
+
+        def check(v):
+            if not v["folder"]:
+                return T("Give a folder.")
+            if not git_top(v["folder"]):
+                return T("{p} is not in a git repository.", p=v["folder"])
+            return ""
+
+        def sent(rc, args):
+            if rc == 0:
+                self.notify(T("Sent the project to {n}; agents start in it.", n=n))
+            elif rc == 5:
+                def discard(yes):
+                    if yes:
+                        self.background(args + ["--discard"], done=lambda rc: sent(rc, args), name=n)
+                self.push_screen(Confirm(T("{n} has work on the project that was not taken back (c shows it; t there "
+                                           "takes it). Send anyway? That work is set aside on the VM, not deleted.",
+                                           n=n), yes=T("Send anyway"), danger=True), discard)
+
+        def chosen(r):
+            if r:
+                args = ["project", n, os.path.expanduser(r["folder"])]
+                self.background(args, done=lambda rc: sent(rc, args), name=n)
+        self.push_screen(Ask(T("Send a git repository of this computer to {n}; the agents work on it there, and "
+                               "what they do comes back as a branch (c). Sending again brings new commits over.", n=n),
+                             [("folder", T("Folder"), home_short(vm.get("project") or HERE), "~/code/app")], check),
+                         chosen)
+
+    def action_changes(self):
+        if not (vm := self.need_vm(busy_ok=True)):
+            return
+        if not vm.get("project"):
+            self.notify(T("{n} has no project yet: p sends one.", n=vm["name"]))
+            return
+        for c in self.main.query(Changes):
+            if c.vm["name"] == vm["name"]:
+                c.vm = vm
+                self.show(c.id)
+                c.action_load()
+                return
+        self.count += 1
+        self.add_pane(Changes(vm, id=f"changes-{self.count}"), f"{vm['name']} · {T('Changes')}")
 
     def action_new(self):
         self.push_screen(NewVM(self.info, [v["name"] for v in self.vms]))
@@ -5615,7 +6266,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

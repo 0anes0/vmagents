@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,6 +38,11 @@ elif a[:1] == ["create"]:
     time.sleep(float(os.environ.get("FAKE_CREATE_SLEEP", "0")))
     print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
+elif a[:1] == ["changes"]:
+    show("changes.txt")
+elif a[:1] == ["project"]:
+    print("Sending main of " + a[2] + " to " + a[1] + "...", flush=True)
+    sys.exit(0 if "--discard" in a else int(os.environ.get("FAKE_PROJECT_RC", "0")))
 elif a[:1] == ["open"]:
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     for p in [x for x in a[2:] if x.isdigit()]:
@@ -64,6 +70,22 @@ IMAGES = {"images": [{"name": "debian13", "description": "Debian 13", "downloade
           "host": {"memory_mb": 16384, "memory_available_mb": 9000, "cpus": 8, "libvirt": True, "pool": "default",
                    "pool_available_gb": 100, "missing": [],
                    "agents": ["claude", "codex", "gemini", "opencode", "aider"]}}
+CHANGES = """Changes on dev in ~/projects/app (sent: 1a2b3c4):
+  5d6e7f8 add the health route
+  9a8b7c6 Work not committed on the VM
+ src/server.ts | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/server.ts b/src/server.ts
+index 1111111..2222222 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -1,3 +1,4 @@
+ const app = express();
+-app.listen(3000);
++app.get("/health", (_req, res) => res.json({ ok: true }));
++app.listen(3000);
+"""
 SNAPS = [{"name": "auto-1", "time": "2026-10-16 09:00:00", "state": "shutoff", "description": ""},
          {"name": "snap-2", "time": "2026-10-16 10:00:00", "state": "running", "description": "before refactor"}]
 
@@ -82,11 +104,17 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.addCleanup(self.restore_env)
+        (self.d / "changes.txt").write_text(CHANGES)
         src = self.d / "ui.py"
         src.write_text(var("UI_PY"))
         spec = importlib.util.spec_from_file_location("vmagents_ui", src)
         self.ui = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.ui)
+        cwd = os.getcwd()
+        os.chdir(self.d)  # not in a git repository: no project suggested
+        try:
+            spec.loader.exec_module(self.ui)
+        finally:
+            os.chdir(cwd)
         self.app = self.ui.VmAgentsUI()
 
     def restore_env(self):
@@ -250,6 +278,131 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.5)
             self.assertFalse(self.app.is_running)
 
+    async def test_working_and_waiting(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("s")  # a shell on dev
+            await pilot.pause(0.3)
+            await pilot.press("f2")  # and Claude Code, shown
+            await pilot.pause(0.3)
+            shell, claude = self.app.terminals("dev")
+            import time
+            now = time.monotonic()
+            shell.reads.extend([now - 0.3, now - 0.2, now - 0.1, now])  # output keeps coming: it works
+            self.app.watch_terminals()
+            await pilot.pause(0.1)
+            self.assertTrue(shell.working)
+            self.assertRegex(self.tab_labels()[1], r"^2 [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] dev · Shell$")
+            shell.reads.clear()
+            shell.last_active = now - 4  # then quiet: waiting for you
+            self.app.watch_terminals()
+            await pilot.pause(0.1)
+            self.assertTrue(shell.attention)
+            self.assertEqual(self.tab_labels()[1], "2 ● dev · Shell")
+            self.assertIn("dev · Shell is waiting for you (2).", [n.message for n in self.app._notifications])
+            await pilot.press("ctrl+right_square_bracket")
+            await pilot.pause(0.2)
+            self.assertIn("Shell waiting", self.text("#details"))
+            self.assertIn("●", str(self.app.main.query_one("#vms").get_row_at(0)[0]))
+            await pilot.press("2")  # seen: the dot goes
+            await pilot.pause(0.2)
+            self.assertFalse(shell.attention)
+            self.assertEqual(self.tab_labels()[1], "2 dev · Shell")
+            shell.feed(b"\x07")  # a bell where you are: nothing
+            await pilot.pause(0.2)
+            await pilot.press("f7")  # (to the list)
+            claude.feed(b"\x07")  # a bell elsewhere: it needs you
+            await pilot.pause(0.2)
+            self.assertTrue(claude.attention)
+            self.assertFalse(shell.attention)
+
+    async def test_typing_is_not_working(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("s")
+            await pilot.pause(0.3)
+            term = self.app.terminals("dev")[0]
+            await self.wait_for(pilot, lambda: "session:" in self.screen_text(term))
+            await pilot.pause(0.6)
+            for word in ("a", "b", "c", "d", "e"):
+                await pilot.press(word, "enter")
+            await self.wait_for(pilot, lambda: "you typed: e" in self.screen_text(term))
+            self.assertFalse(term.busy(__import__("time").monotonic()))  # the echo of your keys
+
+    # --- projects
+    async def test_project(self):
+        repo = self.d / "code" / "app"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        os.environ["FAKE_PROJECT_RC"] = "5"
+        self.addCleanup(os.environ.pop, "FAKE_PROJECT_RC")
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            self.assertIn("Project: none", self.text("#details"))
+            await pilot.press("p")
+            await pilot.pause(0.3)
+            dialog = self.app.screen
+            self.assertEqual(dialog.query_one("#f-folder").value, "")
+            dialog.query_one("#f-folder").value = str(self.d)
+            await pilot.click("#ok")
+            await pilot.pause(0.1)
+            self.assertIn("not in a git repository", str(dialog.query_one("#error").render()))
+            dialog.query_one("#f-folder").value = str(repo)
+            await pilot.click("#ok")
+            await self.wait_for(pilot, lambda: isinstance(self.app.screen, self.ui.Confirm))
+            self.assertIn("not taken back", str(self.app.screen.query_one("Static").render()))
+            await pilot.press("y")  # send anyway
+            await self.wait_for(pilot, lambda: len(self.calls("project")) == 2)
+            self.assertEqual(self.calls("project"), [["project", "dev", str(repo)],
+                                                     ["project", "dev", str(repo), "--discard"]])
+
+    async def test_changes(self):
+        self.write(list=[dict(VM, project="/home/me/code/app", dir="~/projects/app"),
+                         dict(VM, name="srv", default=False, domain="", host="192.0.2.5", state=None)])
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            self.assertIn("Project: /home/me/code/app → ~/projects/app on the VM", self.text("#details"))
+            await pilot.press("c")
+            await pilot.pause(0.5)
+            pane = self.app.main.query_one(self.ui.Changes)
+            await self.wait_for(pilot, lambda: pane.state == "changes")
+            self.assertEqual(self.app.current_pane(), pane.id)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Changes"])
+            self.assertIn("1 file changed, 2 insertions(+), 1 deletion(-)", str(pane.query_one("#chstatus").render()))
+            log = pane.query_one(self.ui.DiffLog)
+            self.assertTrue(log.has_focus)
+            self.assertIn("+app.get", "\n".join(str(l.text) for l in log.lines))
+            await pilot.press("t")  # take it as a branch
+            await self.wait_for(pilot, lambda: self.calls("take"))
+            self.assertEqual(self.calls("take"), [["take", "dev"]])
+            await pilot.press("P")  # a pull request: asks first
+            await pilot.pause(0.2)
+            self.assertIsInstance(self.app.screen, self.ui.Confirm)
+            await pilot.press("y")
+            await self.wait_for(pilot, lambda: len(self.calls("take")) == 2)
+            self.assertEqual(self.calls("take")[-1], ["take", "dev", "--pr"])
+            await pilot.press("escape")
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), "home")
+            await pilot.press("c")  # again: the same tab, refreshed
+            await pilot.pause(0.3)
+            self.assertEqual(len(self.app.main.query(self.ui.Changes)), 1)
+            self.assertEqual(len(self.calls("changes")), 2)
+            await pilot.press("ctrl+right_square_bracket", "j", "c")  # srv has no project
+            await pilot.pause(0.3)
+            self.assertEqual(len(self.calls("changes")), 2)
+        (self.d / "changes.txt").write_text("No changes on dev since the project was sent.\n")
+        app = self.ui.VmAgentsUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.wait_for(pilot, lambda: app.vms)
+            await pilot.press("c")
+            await pilot.pause(0.5)
+            pane = app.main.query_one(self.ui.Changes)
+            await self.wait_for(pilot, lambda: pane.state == "none")
+            await pilot.press("t")
+            await pilot.pause(0.3)
+            self.assertEqual(self.calls("take"), [["take", "dev"], ["take", "dev", "--pr"]])  # nothing to take
+
     async def test_terminal_keys(self):
         k = self.ui.key_bytes
         self.assertEqual(k("ctrl+c", None), b"\x03")
@@ -287,6 +440,11 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             form.query_one("#agent-opencode").value = True
             form.query_one("#ports").value = "3000,5173"
             form.query_one("#idle").value = 0
+            form.query_one("#project").value = str(self.d)
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.2)
+            self.assertIn("is not a git repository", self.text("#error"))
+            form.query_one("#project").value = ""
             await pilot.pause(0.2)
             self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,opencode "
                           "--idle off --ports 3000,5173", self.text("#command"))
