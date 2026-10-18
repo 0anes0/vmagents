@@ -80,6 +80,11 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 or from a clone: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 It puts `vmagents` in `~/.local/bin`; `./install.sh --uninstall` removes it.
 
+As a package: on Debian and Ubuntu the `.deb` from the
+[releases](https://github.com/emincan2000/vmagents/releases)
+(`sudo apt install ./vmagents_*_all.deb`); on Arch Linux the PKGBUILD in
+[packaging/aur](packaging/aur) (`cd packaging/aur && makepkg -si`).
+
 **Requirements**
 
 - **Your computer:** Linux, bash 4+, the OpenSSH client. `virsh` for libvirt

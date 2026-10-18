@@ -1,0 +1,38 @@
+# Maintainer: EminY <57416756+emincan2000@users.noreply.github.com>
+pkgname=vmagents
+pkgver=0.17.0
+pkgrel=1
+pkgdesc="Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine"
+arch=('any')
+url="https://github.com/emincan2000/vmagents"
+license=('MIT')
+depends=('bash' 'openssh')
+optdepends=('libvirt: start, stop and snapshot libvirt VMs'
+            'virt-install: make new VMs (vmagents create)'
+            'libisoburn: make new VMs (their cloud-init seed)'
+            'dnsmasq: the libvirt network of new VMs'
+            'qemu-desktop: run new VMs'
+            'python: the terminal UI and the restricted network'
+            'uv: fetches the terminal UI'"'"'s Python packages'
+            'git: projects (vmagents project, changes, take)'
+            'github-cli: pull requests (vmagents take --pr)'
+            'libnotify: desktop notifications'
+            'xclip: the shared clipboard on X11'
+            'wl-clipboard: the shared clipboard on Wayland'
+            'sshfs: vmagents mount')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('0bd880b4f569051c1b9cf8b4f879229b8f2460adfd368d6432debaa9d9e92651')
+
+check() {
+  cd "$pkgname-$pkgver"
+  [[ $(bash ./vmagents --version) == "vmagents $pkgver" ]]
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 vmagents "$pkgdir/usr/bin/vmagents"
+  ln -s vmagents "$pkgdir/usr/bin/vmclaude"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 README.tr.md "$pkgdir/usr/share/doc/$pkgname/README.tr.md"
+}

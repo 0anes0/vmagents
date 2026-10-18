@@ -11,6 +11,14 @@ jobs:
           sudo apt-get install -y -qq shellcheck zsh openssh-client desktop-file-utils
           pip install asyncssh 'textual>=8,<9' 'pyte>=0.8.2'
       - name: shellcheck
-        run: shellcheck vmagents install.sh
+        run: shellcheck vmagents install.sh packaging/deb/build.sh packaging/aur/update.sh
       - name: tests
         run: python3 -m unittest discover -v -s tests -t .
+      - name: Debian package
+        run: |
+          packaging/deb/build.sh dist
+          sudo apt-get install -y -qq --no-install-recommends ./dist/vmagents_*_all.deb
+          test "$(/usr/bin/vmagents --version)" = "vmagents $(sed -n 's/^VERSION=//p' vmagents)"
+          test "$(readlink /usr/bin/vmclaude)" = vmagents
+      - name: AUR files
+        run: bash -n packaging/aur/PKGBUILD && grep -q '^pkgname = vmagents' packaging/aur/.SRCINFO

@@ -80,6 +80,10 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 ya da depodan: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 `vmagents`'ı `~/.local/bin` içine koyar; `./install.sh --uninstall` kaldırır.
 
+Paket olarak: Debian ve Ubuntu'da [sürümler](https://github.com/emincan2000/vmagents/releases)
+sayfasındaki `.deb` (`sudo apt install ./vmagents_*_all.deb`); Arch Linux'ta
+[packaging/aur](packaging/aur) içindeki PKGBUILD (`cd packaging/aur && makepkg -si`).
+
 **Gerekenler**
 
 - **Bilgisayarın:** Linux, bash 4+, OpenSSH istemcisi. libvirt VM'leri için

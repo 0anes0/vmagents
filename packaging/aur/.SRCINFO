@@ -1,0 +1,26 @@
+pkgbase = vmagents
+	pkgdesc = Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine
+	pkgver = 0.17.0
+	pkgrel = 1
+	url = https://github.com/emincan2000/vmagents
+	arch = any
+	license = MIT
+	depends = bash
+	depends = openssh
+	optdepends = libvirt: start, stop and snapshot libvirt VMs
+	optdepends = virt-install: make new VMs (vmagents create)
+	optdepends = libisoburn: make new VMs (their cloud-init seed)
+	optdepends = dnsmasq: the libvirt network of new VMs
+	optdepends = qemu-desktop: run new VMs
+	optdepends = python: the terminal UI and the restricted network
+	optdepends = uv: fetches the terminal UI's Python packages
+	optdepends = git: projects (vmagents project, changes, take)
+	optdepends = github-cli: pull requests (vmagents take --pr)
+	optdepends = libnotify: desktop notifications
+	optdepends = xclip: the shared clipboard on X11
+	optdepends = wl-clipboard: the shared clipboard on Wayland
+	optdepends = sshfs: vmagents mount
+	source = vmagents-0.17.0.tar.gz::https://github.com/emincan2000/vmagents/archive/refs/tags/v0.17.0.tar.gz
+	sha256sums = 0bd880b4f569051c1b9cf8b4f879229b8f2460adfd368d6432debaa9d9e92651
+
+pkgname = vmagents

@@ -1,0 +1,24 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches VERSION
+        run: test "$GITHUB_REF_NAME" = "v$(sed -n 's/^VERSION=//p' vmagents)"
+      - name: Debian package
+        run: packaging/deb/build.sh dist
+      - name: GitHub release with the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.deb --title "vmagents ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
