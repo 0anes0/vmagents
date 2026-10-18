@@ -34,6 +34,7 @@ elif a[:2] == ["images", "--json"]: show("images.json")
 elif a[:1] == ["snapshots"]: show("snaps.json")
 elif a[:1] == ["create"]:
     print("Creating VM " + a[1], flush=True)
+    time.sleep(float(os.environ.get("FAKE_CREATE_SLEEP", "0")))
     print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
 elif a[:1] == ["open"]:
@@ -123,6 +124,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     def screen_text(self, term):
         return "\n".join(term.vt.display) if term.vt else ""
 
+    def tab_labels(self):
+        return [t.label.plain for t in self.app.query_one(self.ui.Tabs).query(self.ui.Tab)]
+
     # --- the list
     async def test_list_and_vim_keys(self):
         async with self.start() as pilot:
@@ -164,38 +168,60 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     async def test_open_shell_and_agents_as_tabs(self):
         async with self.start() as pilot:
             await self.ready(pilot)
+            self.assertEqual(self.tab_labels(), ["1 VMs"])
             await pilot.press("enter")  # how to open it?
             await pilot.pause(0.3)
             self.assertIsInstance(self.app.screen, self.ui.OpenAs)
             await pilot.press("enter")  # the first: Shell
-            session = self.app.screen
-            self.assertIsInstance(session, self.ui.Session)
-            term = session.query_one(self.ui.Terminal)
+            await pilot.pause(0.3)
+            term = self.app.terminals("dev")[0]
+            self.assertEqual(self.app.current_pane(), term.id)
             await self.wait_for(pilot, lambda: "session: shell dev" in self.screen_text(term))
             await pilot.press(*"hello", "enter")
             await self.wait_for(pilot, lambda: "you typed: hello" in self.screen_text(term))
             self.assertIn("you typed: hello", self.screen_text(term))
-            # q, n, d... are for the terminal here, not the list
-            await pilot.press("q", "enter")
-            await self.wait_for(pilot, lambda: "you typed: q" in self.screen_text(term))
+            # q, n, d, 1... are for the terminal here, not the list
+            await pilot.press("q", "1", "enter")
+            await self.wait_for(pilot, lambda: "you typed: q1" in self.screen_text(term))
             self.assertTrue(self.app.is_running)
-            await pilot.press("f3")  # Codex, as a second tab
+            await pilot.press("f3")  # Codex, as another tab
             await pilot.pause(0.3)
-            terms = session.query(self.ui.Terminal)
-            self.assertEqual([t.label for t in terms], ["Shell", "Codex"])
-            await self.wait_for(pilot, lambda: "session: dev --hold --codex" in self.screen_text(terms[1]))
-            await pilot.press("ctrl+right_square_bracket")  # back to the list; both keep running
+            shell, codex = self.app.terminals("dev")
+            self.assertEqual([shell.kind, codex.kind], ["shell", "codex"])
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Shell", "3 dev · Codex"])
+            self.assertEqual(self.app.current_pane(), codex.id)
+            await self.wait_for(pilot, lambda: "session: dev --hold --codex" in self.screen_text(codex))
+            await pilot.press("f7")  # the tab before
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), shell.id)
+            self.assertTrue(shell.has_focus)
+            await pilot.press("f7", "f7")  # the list, then round to the last tab
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), codex.id)
+            await pilot.press("ctrl+right_square_bracket")  # the list; both keep running
             await pilot.pause(0.3)
-            self.assertNotIsInstance(self.app.screen, self.ui.Session)
+            self.assertEqual(self.app.current_pane(), "home")
+            self.assertTrue(self.app.query_one("#vms").has_focus)
             self.assertIn("Open here: Shell, Codex", self.text("#details"))
-            await pilot.press("enter")  # straight back, no question
+            await pilot.press("ctrl+right_square_bracket")  # and back to the last tab
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), codex.id)
+            await pilot.press("ctrl+right_square_bracket", "2")  # on the list, 2: the second tab
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), shell.id)
+            await pilot.press("ctrl+right_square_bracket", "enter")  # Enter on dev: straight back, no question
             await pilot.pause(0.3)
-            self.assertIs(self.app.screen, session)
-            await pilot.press(*"exit", "enter")  # Codex ends: its tab closes
-            await self.wait_for(pilot, lambda: len(session.query(self.ui.Terminal)) == 1)
+            self.assertEqual(self.app.current_pane(), shell.id)
+            await pilot.press(*"exit", "enter")  # the shell ends: its tab closes, Codex shows
+            await self.wait_for(pilot, lambda: len(self.app.terminals()) == 1)
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), codex.id)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Codex"])
             await pilot.press(*"exit", "enter")  # the last one: back to the list
-            await self.wait_for(pilot, lambda: not self.app.sessions)
-            self.assertNotIsInstance(self.app.screen, self.ui.Session)
+            await self.wait_for(pilot, lambda: not self.app.terminals())
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), "home")
+            self.assertEqual(self.tab_labels(), ["1 VMs"])
 
     async def test_open_as_with_keys(self):
         async with self.start() as pilot:
@@ -204,16 +230,18 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.3)
             await pilot.press("j", "l")  # Claude Code
             await pilot.pause(0.5)
-            term = self.app.screen.query_one(self.ui.Terminal)
+            term = self.app.terminals("dev")[0]
             await self.wait_for(pilot, lambda: "session: dev --hold --claude" in self.screen_text(term))
             await pilot.press("ctrl+right_square_bracket")
             await pilot.pause(0.2)
             await pilot.press("j", "s")  # s: a shell on srv, directly
             await pilot.pause(0.5)
-            term = self.app.screen.query_one(self.ui.Terminal)
+            term = self.app.terminals("srv")[0]
             await self.wait_for(pilot, lambda: "session: shell srv" in self.screen_text(term))
-            await pilot.press("ctrl+right_square_bracket")
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Claude Code", "3 srv · Shell"])
+            await pilot.press("f8")  # tabs of all VMs in one row
             await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), "home")
             await pilot.press("h")  # nothing on the list
             await pilot.press("q")  # quit asks: terminals are open
             await pilot.pause(0.2)
@@ -262,18 +290,53 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.2)
             self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,opencode "
                           "--idle off --ports 3000,5173", self.text("#command"))
-            await pilot.press("ctrl+s")
-            await self.wait_for(pilot, lambda: getattr(self.app.screen, "rc", None) is not None)
-            screen = self.app.screen
+            await pilot.press("ctrl+s")  # creating: a tab of its own
+            await self.wait_for(pilot, lambda: self.app.creating() and self.app.creating()[0].rc is not None)
+            screen = self.app.creating()[0]
+            self.assertEqual(self.app.current_pane(), screen.id)
             self.assertEqual(screen.rc, 0)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · ready"])
             self.assertEqual(self.calls("create")[-1], ["create", "web", "--image", "arch", "--memory", "8192",
                                                         "--cpus", "4", "--disk", "40", "--agents", "claude,opencode",
                                                         "--idle", "off", "--ports", "3000,5173"])
             self.assertFalse(screen.query_one("#open").disabled)
             await pilot.click("#login")  # logging in runs in a terminal tab too
             await pilot.pause(0.5)
-            term = self.app.screen.query_one(self.ui.Terminal)
+            term = self.app.terminals("web")[0]
             await self.wait_for(pilot, lambda: "session: login web" in self.screen_text(term))
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · Log in"])  # the creating tab is done
+
+    async def test_create_in_the_background(self):
+        os.environ["FAKE_CREATE_SLEEP"] = "4"
+        self.addCleanup(os.environ.pop, "FAKE_CREATE_SLEEP")
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("n")
+            await pilot.pause(0.3)
+            self.app.screen.query_one("#name").value = "web"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.3)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · creating…"])
+            await pilot.press("escape")  # the list is usable meanwhile
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.current_pane(), "home")
+            await pilot.press("j")
+            await pilot.pause(0.2)
+            self.assertEqual(self.app.selected_name(), "srv")
+            await pilot.press("q")  # quitting would stop it: asks
+            await pilot.pause(0.2)
+            self.assertIn("still being created", str(self.app.screen.query_one("Static").render()))
+            await pilot.press("n")
+            await self.wait_for(pilot, lambda: self.app.creating()[0].rc is not None, seconds=10)
+            await pilot.pause(0.2)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · ready"])
+            self.assertEqual(self.app.current_pane(), "home")
+            await pilot.press("2")
+            await pilot.pause(0.2)
+            await pilot.click("#back")  # Close
+            await pilot.pause(0.3)
+            self.assertEqual(self.tab_labels(), ["1 VMs"])
+            self.assertEqual(self.app.current_pane(), "home")
 
     async def test_new_vm_checks(self):
         async with self.start() as pilot:
@@ -304,9 +367,10 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.3)
             self.app.screen.query_one("#name").value = "web"
             await pilot.press("ctrl+s")
-            await self.wait_for(pilot, lambda: getattr(self.app.screen, "rc", None) is not None)
+            await self.wait_for(pilot, lambda: self.app.creating() and self.app.creating()[0].rc is not None)
             self.assertIn("failed", self.text("#status"))
             self.assertTrue(self.app.screen.query_one("#open").disabled)
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · failed"])
 
     # --- snapshots
     async def test_snapshots(self):

@@ -301,15 +301,19 @@ to go back). `n` opens the form for a new VM:
 
 ![New VM](docs/ui-new.png)
 
-It shows the `vmagents create` command line it is going to run, then the
-output while the VM is made (download, cloud-init, tmux, the assistants), and
-offers to open it.
+It shows the `vmagents create` command line it is going to run. The VM is
+then made in a tab of its own, with the output (download, cloud-init, tmux,
+the assistants); the list stays usable meanwhile, and the tab says when the VM
+is ready and offers to open it.
+
+**Everything is a tab in one row:** the VM list is always the first, then a
+tab for each terminal, on any VM, and for each VM being created.
 
 **Opening a VM** (Enter) asks how: a shell, Claude Code, Codex, Gemini CLI,
 OpenCode or aider. It opens **inside the UI**, in a terminal tab; F1 to F6
-open the others next to it, and `Ctrl+]` goes back to the list while they
-keep running (Enter on that VM returns to them). A tab closes when what runs
-in it ends.
+open the others next to it. `Ctrl+]` goes to the list while they keep running,
+and `Ctrl+]` again goes back to the tab you were in (Enter on a VM goes to its
+tabs too). A tab closes when what runs in it ends.
 
 ![A shell and Claude Code in tabs](docs/ui-session.png)
 
@@ -324,13 +328,16 @@ in it ends.
 | `t` / `r` | start or stop / RAM and CPUs (shuts the VM down first) |
 | `d` | delete (type the name to confirm; profiles of VMs not made by vmagents are only removed) |
 | `L` | language: English, Türkçe (remembered) |
-| `q` | quit (asks first when terminals are open) |
+| `1` … `9` | that tab (1 is the list) |
+| `Ctrl+]` | back to the tab you were in |
+| `q` | quit (asks first when terminals are open or a VM is being created) |
 
 | Key (terminal tab) | |
 |---|---|
 | `F1` | shell |
 | `F2` … `F6` | Claude Code, Codex, Gemini CLI, OpenCode, aider |
-| `Ctrl+]` | back to the list |
+| `Ctrl+]` | the list |
+| `F7` / `F8` | previous / next tab (also `Ctrl+PgUp` / `Ctrl+PgDn`, where the terminal passes them on) |
 | everything else | goes to the VM; the mouse wheel scrolls back |
 
 The UI only runs this `vmagents` and reads its `--json` output, so everything
@@ -348,7 +355,7 @@ vmagents NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmagents dev --continu
 vmagents ui                      a terminal UI for all of this
 vmagents create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
-    --agents claude,codex,gemini,aider  --ports 3000,5173
+    --agents claude,codex,gemini,opencode,aider  --ports 3000,5173
     --user USER  --uri LIBVIRT_URI  --idle MINUTES|off  --no-setup
 vmagents resize NAME [--memory MB] [--cpus N] [--stop]
 vmagents delete NAME [--yes]     delete a VM made with create, and its disk
@@ -615,7 +622,8 @@ python3 -m unittest discover -s tests -t .
 - `tests/test_ui.py` drives the terminal UI with Textual's test pilot
   against a fake `vmagents`: the list and its Vim keys, the language switch,
   the new-VM form and its checks, the snapshot screen, and terminal tabs with
-  a real pseudo-terminal (typing into them, F-keys, Ctrl+], tabs closing). It
+  a real pseudo-terminal (typing into them, F-keys, switching tabs, Ctrl+],
+  tabs closing), and creating a VM in a tab while the list is used. It
   needs Textual and pyte (`uv run --with 'textual>=8,<9' --with pyte python -m
   unittest tests.test_ui`), else it is skipped. `tests/test_ui_backend.py` covers what
   it builds on: `list`/`images`/`snapshots --json`, `ports`, `create`/`setup
@@ -793,8 +801,12 @@ geri). `L` arayüzün dilini değiştirir (English / Türkçe) ve seçim hatırl
 (Claude Code, Codex, Gemini CLI, OpenCode, aider) ve açılacak portlar seçilir;
 arayüz aynı işi yapan `vmagents create` komutunu da gösterir. Bir VM'de Enter
 nasıl açmak istediğini sorar (kabuk ya da bir yardımcı) ve onu **arayüzün
-içinde**, bir terminal sekmesinde açar; F1–F6 diğerlerini yan sekmelerde açar,
-`Ctrl+]` listeye döner (sekmeler çalışmaya devam eder). `u` anlık görüntü
+içinde**, bir terminal sekmesinde açar; F1–F6 diğerlerini yan sekmelerde açar.
+Her şey tek bir sekme sırasındadır: ilk sekme her zaman VM listesi, sonra her
+terminal (hangi VM'de olursa olsun) ve kurulmakta olan her VM. `Ctrl+]` listeye
+gider, tekrar basınca bulunduğun sekmeye döner; F7/F8 önceki/sonraki sekme,
+listede `1`–`9` o sekme. VM kurulumu kendi sekmesinde sürer, bu sırada liste
+kullanılabilir. `u` anlık görüntü
 ekranını açar: istediğini seçip ona dönersin, ad ve etiketle yenisini alırsın,
 etiketini değiştirir ya da silersin. `o` portlar, `t` başlat/durdur, `r`
 RAM/işlemci, `d` silme (adını yazarak onaylanır). Python, Textual ve pyte

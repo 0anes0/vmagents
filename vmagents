@@ -6,7 +6,7 @@
 # shellcheck disable=SC2317,SC2329 # commands are called by name ("cmd_$cmd" in main)
 set -euo pipefail
 
-VERSION=0.12.0
+VERSION=0.13.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -3696,6 +3696,7 @@ UI_PY=$(cat <<'UI_END'
 --json), so everything it does can also be done by hand. Shells and AI
 assistants open inside it, as tabs of a built-in terminal (pyte)."""
 import asyncio
+import dataclasses
 import fcntl
 import functools
 import json
@@ -3712,10 +3713,12 @@ import threading
 import pyte
 from rich.segment import Segment
 from rich.style import Style
+from rich.text import Text
 from textual import on, work
 from textual.app import App
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.strip import Strip
@@ -3774,9 +3777,17 @@ TEXTS = {"tr": {
     "[b]Open {n}[/b] as:": "[b]{n}[/b] nasıl açılsın?", "Shell   [dim]a terminal on the VM[/]":
         "Kabuk   [dim]VM'de bir terminal[/]", "default": "varsayılan", "installs it first": "önce kurulur",
     "Log Claude in": "Claude'a giriş yap",
-    "[dim]Inside: F1 to F6 open the others as tabs, Ctrl+] goes back to the list.[/]":
-        "[dim]İçeride: F1–F6 diğerlerini sekme olarak açar, Ctrl+] listeye döner.[/]",
+    "[dim]Inside: F1 to F6 open the others as tabs, F7/F8 switch tabs, Ctrl+] goes to the list.[/]":
+        "[dim]İçeride: F1–F6 diğerlerini sekme olarak açar, F7/F8 sekme değiştirir, Ctrl+] listeye gider.[/]",
     "VM list": "VM listesi", "Log in": "Giriş",
+    # tabs
+    "VMs": "VM'ler", "Tabs": "Sekmeler", "← Tab": "← Sekme", "Tab →": "Sekme →",
+    "[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · 1 to 9 here: that tab[/]":
+        "[dim]Sekmeler: Ctrl+] liste ⇄ son sekme · F7/F8 (ya da Ctrl+PgUp/PgDn) önceki/sonraki · "
+        "burada 1–9: o sekme[/]",
+    "creating…": "oluşturuluyor…", "ready": "hazır", "failed": "başarısız", "Close": "Kapat",
+    "{n} is ready.": "{n} hazır.", "Creating {n} failed.": "{n} oluşturulamadı.",
+    "{n} is still being created; quitting stops that.": "{n} hâlâ oluşturuluyor; çıkarsan bu durur.",
     "Only Claude Code runs on Windows VMs.": "Windows VM'lerinde yalnızca Claude Code çalışır.",
     "{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the VM).":
         "{count} terminal açık. Çıkınca kapanırlar (tmux içindeki yardımcılar VM'de çalışmaya devam eder).",
@@ -4230,19 +4241,20 @@ class NewVM(Screen):
         if err := self.problem(v):
             self.query_one("#error", Static).update(err)
             return
-        self.app.switch_screen(Creating(v))
+        self.app.pop_screen()
+        self.app.start_create(v)
 
 
-class Creating(Screen):
-    """Runs "vmagents create" and shows what it prints."""
-    BINDINGS = [Binding("escape", "back", show=False)]
+class Creating(Vertical):
+    """A tab that runs "vmagents create" and shows what it prints. The rest of
+    the UI stays usable meanwhile (Ctrl+] or Esc: the list)."""
+    BINDINGS = [Binding("escape", "app.home", show=False)]
 
-    def __init__(self, v):
-        super().__init__()
+    def __init__(self, v, **kw):
+        super().__init__(**kw)
         self.v, self.proc, self.rc = v, None, None
 
     def compose(self):
-        yield Header()
         yield Static(T("[b]Creating {n}[/b]: downloading the image (once), making the VM, then installing tmux and "
                        "the AI assistants. This takes a few minutes.", n=self.v["name"]), id="status")
         yield RichLog(id="output", wrap=True, markup=False)
@@ -4253,11 +4265,22 @@ class Creating(Screen):
             if "claude" in self.v["agents"]:
                 yield Button(T("Log Claude in"), id="login", disabled=True)
             yield Button(T("Cancel"), id="cancel", variant="error")
-            yield Button(T("Back"), id="back", disabled=True)
-        yield Footer()
+            yield Button(T("Close"), id="back", disabled=True)
 
     def on_mount(self):
         self.run_create()
+
+    def focus_default(self):
+        b = [b for b in self.query(Button) if not b.disabled and b.id != "cancel"]
+        try:
+            (b[0] if b else self.query_one("#output", RichLog)).focus()
+        except NoMatches:  # not there yet
+            self.call_after_refresh(self.focus_default)
+
+    def status_label(self):
+        if self.rc is None:
+            return T("creating…")
+        return T("ready") if self.rc == 0 else T("failed")
 
     @work(thread=True)
     def run_create(self):
@@ -4288,32 +4311,35 @@ class Creating(Screen):
                             "delete it in the list (d).", n=self.v["name"], rc=rc))
             self.query_one("#cancel", Button).disabled = True
             self.query_one("#back", Button).disabled = False
-        self.app.refresh_vms()
+        self.app.create_finished(self)
 
     @on(Button.Pressed, "#cancel")
     def cancel(self):
         if self.proc and self.proc.poll() is None:
             os.killpg(self.proc.pid, signal.SIGTERM)
 
+    def running(self):
+        return self.rc is None and self.proc is not None and self.proc.poll() is None
+
     @on(Button.Pressed, "#open")
     def open_vm(self):
-        self.app.pop_screen()
         self.app.open_session(self.v["name"], self.v["agents"][0])
+        self.app.close_pane(self.id)
 
     @on(Button.Pressed, "#shell")
     def open_shell(self):
-        self.app.pop_screen()
         self.app.open_session(self.v["name"], "shell")
+        self.app.close_pane(self.id)
 
     @on(Button.Pressed, "#login")
     def login(self):
-        self.app.pop_screen()
         self.app.open_session(self.v["name"], "login")
+        self.app.close_pane(self.id)
 
     @on(Button.Pressed, "#back")
-    def action_back(self):
+    def close(self):
         if self.rc is not None:
-            self.app.pop_screen()
+            self.app.close_pane(self.id)
 
 
 # ------------------------------------------------------------------ snapshots
@@ -4492,6 +4518,7 @@ class Terminal(Widget, can_focus=True):
     def __init__(self, argv, label, **kw):
         super().__init__(**kw)
         self.argv, self.label = argv, label
+        self.vm_name = self.kind = None
         self.vt = self.stream = self.proc = None
         self.fd = None
         self.rc = None
@@ -4642,95 +4669,18 @@ class Terminal(Widget, can_focus=True):
         return Strip(segments).adjust_cell_length(width)
 
 
-class Session(Screen):
-    """The VM's terminals: a shell and AI assistants, one tab each. All keys
-    go to the terminal, except Ctrl+] (back to the list) and F1 to F6."""
+def kind_label(kind):
+    if kind == "shell":
+        return T("Shell")
+    if kind == "login":
+        return T("Log in")
+    return AGENT_NAMES.get(kind, kind)
 
-    def __init__(self, vm, first=None):
-        super().__init__()
-        self.vm, self.first = vm, first
-        self.count = 0
-        self._bindings = BindingsMap(self.make_bindings())
 
-    @staticmethod
-    def make_bindings():
-        return [Binding("ctrl+right_square_bracket", "leave", T("VM list"), priority=True, key_display="^]"),
-                Binding("f1", "open('shell')", T("Shell"), priority=True)] + [
-            Binding(f"f{i}", f"open('{k}')", label, priority=True) for i, (k, label) in enumerate(AGENTS, start=2)]
-
-    def compose(self):
-        with Horizontal(id="sessionbar"):
-            yield Static(f"[b]{self.vm['name']}[/b]", id="vmname")
-            yield Tabs(id="tabs")
-        yield ContentSwitcher(id="terms")
-        yield Footer()
-
-    def on_mount(self):
-        self.query_one(Tabs).can_focus = False
-        if self.first:
-            self.action_open(self.first)
-
-    def command(self, kind):
-        n = self.vm["name"]
-        if kind == "shell":
-            return [VMAGENTS, "shell", n], T("Shell")
-        if kind == "login":
-            return [VMAGENTS, "login", n], T("Log in")
-        return [VMAGENTS, n, "--hold", f"--{kind}"], AGENT_NAMES[kind]
-
-    def terminals(self):
-        return list(self.query(Terminal))
-
-    def action_open(self, kind):
-        """Shows the tab of KIND, opening it first if needed."""
-        if kind not in ("shell", "login") and self.vm.get("os") == "windows" and kind != "claude":
-            self.notify(T("Only Claude Code runs on Windows VMs."))
-            return
-        for t in self.terminals():
-            if t.kind == kind and t.rc is None:
-                self.show(t.id)
-                return
-        argv, label = self.command(kind)
-        self.count += 1
-        t = Terminal(argv, label, id=f"term-{self.count}")
-        t.kind = kind
-        self.query_one(ContentSwitcher).mount(t)
-        self.query_one(Tabs).add_tab(Tab(label, id=f"tab-{self.count}"))
-        self.show(t.id)
-
-    def show(self, term_id):
-        self.query_one(ContentSwitcher).current = term_id
-        tabs = self.query_one(Tabs)
-        tab_id = "tab-" + term_id.split("-", 1)[1]
-        if tabs.active != tab_id:
-            tabs.active = tab_id
-        self.query_one(f"#{term_id}", Terminal).focus()
-
-    @on(Tabs.TabActivated)
-    def tab_activated(self, event):
-        if event.tab is not None:
-            term_id = "term-" + event.tab.id.split("-", 1)[1]
-            if self.query_one(ContentSwitcher).current != term_id:
-                self.show(term_id)
-
-    @on(Terminal.Exited)
-    def exited(self, event):
-        t = event.terminal
-        self.query_one(Tabs).remove_tab("tab-" + t.id.split("-", 1)[1])
-        t.remove()
-        left = [x for x in self.terminals() if x is not t]
-        if left:
-            self.show(left[-1].id)
-        else:
-            self.app.session_closed(self.vm["name"])
-
-    def action_leave(self):
-        self.app.pop_screen()
-        self.app.back_to_list()
-
-    def close_all(self):
-        for t in self.terminals():
-            t.close()
+def kind_command(name, kind):
+    if kind in ("shell", "login"):
+        return [VMAGENTS, kind, name]
+    return [VMAGENTS, name, "--hold", f"--{kind}"]
 
 
 class OpenAs(ModalScreen):
@@ -4758,7 +4708,8 @@ class OpenAs(ModalScreen):
         with Vertical(classes="dialog"):
             yield Static(T("[b]Open {n}[/b] as:", n=vm["name"]))
             yield VimOptions(*options, id="pick")
-            yield Static(T("[dim]Inside: F1 to F6 open the others as tabs, Ctrl+] goes back to the list.[/]"))
+            yield Static(T("[dim]Inside: F1 to F6 open the others as tabs, F7/F8 switch tabs, Ctrl+] goes to the "
+                           "list.[/]"))
 
     @on(OptionList.OptionSelected)
     def selected(self, e):
@@ -4772,9 +4723,12 @@ class VMTable(VimTable):
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
                 "refresh"}
+TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
 
 class VmAgentsUI(App):
+    """One row of tabs: the VM list first, then a tab for each terminal (a
+    shell or an AI assistant on a VM) and for each VM being created."""
     TITLE = "vmagents"
     ENABLE_COMMAND_PALETTE = False
     CSS = """
@@ -4798,10 +4752,11 @@ class VmAgentsUI(App):
     #status { padding: 1 2; height: auto; }
     #snaptitle, #snaphelp { padding: 0 1; height: auto; }
     #snaps { height: 1fr; }
-    #sessionbar { height: 2; }
-    #vmname { width: auto; padding: 0 2 0 1; content-align: left middle; height: 2; }
+    #topbar { height: 2; }
+    #brand { width: auto; padding: 0 2 0 1; content-align: left middle; height: 2; }
     #tabs { width: 1fr; }
-    #terms { height: 1fr; }
+    #panes { height: 1fr; }
+    Creating { padding: 0 1 1 1; }
     """
 
     def __init__(self):
@@ -4811,50 +4766,84 @@ class VmAgentsUI(App):
         self.vms, self.info = [], {}
         self.forwards = {}  # name -> list of (Popen, description)
         self.busy = set()
-        self.sessions = {}  # name -> Session screen
+        self.count = 0
+        self.last = None  # the tab Ctrl+] goes back to from the list
         self._bindings = BindingsMap(self.make_bindings())
 
-    @staticmethod
-    def make_bindings():
-        other = dict(LANGUAGES)[LANGUAGES[(list(dict(LANGUAGES)).index(LANG) + 1) % len(LANGUAGES)][0]]
-        return [Binding("enter", "open", T("Open"), show=False),
-                Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell")), Binding("o", "ports", T("Ports")),
-                Binding("t", "toggle", T("Start/stop")), Binding("u", "snapshots", T("Snapshots")),
-                Binding("r", "resize", T("Resources")), Binding("d", "delete", T("Delete")),
-                Binding("L", "language", other), Binding("q", "quit", T("Quit")),
-                Binding("g", "refresh", show=False)]
+    def make_bindings(self):
+        """The keys of the tab shown: the list's, or a terminal's (which get
+        all other keys)."""
+        kind = self.pane_kind()
+        tabs = [Binding("f7", "prev_tab", T("← Tab"), priority=True),
+                Binding("f8", "next_tab", T("Tab →"), priority=True),
+                Binding("ctrl+pageup", "prev_tab", show=False, priority=True),
+                Binding("ctrl+pagedown", "next_tab", show=False, priority=True)]
+        if kind == "home":
+            other = dict(LANGUAGES)[LANGUAGES[(list(dict(LANGUAGES)).index(LANG) + 1) % len(LANGUAGES)][0]]
+            more = len(self.pane_ids()) > 1
+            return [Binding("enter", "open", T("Open"), show=False),
+                    Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell")),
+                    Binding("o", "ports", T("Ports")), Binding("t", "toggle", T("Start/stop")),
+                    Binding("u", "snapshots", T("Snapshots")), Binding("r", "resize", T("Resources")),
+                    Binding("d", "delete", T("Delete")),
+                    Binding("ctrl+right_square_bracket", "back_to_tab", T("Tabs"), key_display="^]",
+                            show=more, priority=True),
+                    Binding("L", "language", other), Binding("q", "quit", T("Quit")),
+                    Binding("g", "refresh", show=False)] + [
+                Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
+                dataclasses.replace(b, show=False) for b in tabs]
+        home = [Binding("ctrl+right_square_bracket", "home", T("VM list"), priority=True, key_display="^]")]
+        if kind == "create":
+            return home + tabs
+        return home + [Binding("f1", "open_kind('shell')", T("Shell"), priority=True)] + [
+            Binding(f"f{i}", f"open_kind('{k}')", label, priority=True)
+            for i, (k, label) in enumerate(AGENTS, start=2)] + tabs
+
+    @property
+    def main(self):
+        """The screen with the tabs. (The app's own queries go to the screen on
+        top, which may be a dialog.)"""
+        return self.screen_stack[0]
 
     def check_action(self, action, parameters):
-        # The list's keys work on the list only, not in forms, terminals or dialogs.
-        if action in LIST_ACTIONS and len(self.screen_stack) > 1:
+        # The app's keys are for its tabs, not for forms or dialogs over them.
+        if action in LIST_ACTIONS | TAB_ACTIONS and len(self.screen_stack) > 1:
             return False
         return True
 
     def compose(self):
-        yield Header()
-        with Horizontal():
-            yield VMTable(id="vms", cursor_type="row", zebra_stripes=True)
-            with VerticalScroll(id="side", can_focus=False):
-                yield Static("", id="details")
-        log = RichLog(id="log", wrap=True, markup=True)
-        log.can_focus = False  # the keys are for the list
-        yield log
+        with Horizontal(id="topbar"):
+            yield Static("[b]vmagents[/b]", id="brand")
+            yield Tabs(Tab(T("VMs"), id="tab-home"), id="tabs")
+        with ContentSwitcher(id="panes", initial="home"):
+            with Vertical(id="home"):
+                with Horizontal():
+                    yield VMTable(id="vms", cursor_type="row", zebra_stripes=True)
+                    with VerticalScroll(id="side", can_focus=False):
+                        yield Static("", id="details")
+                log = RichLog(id="log", wrap=True, markup=True)
+                log.can_focus = False  # the keys are for the list
+                yield log
         yield Footer()
 
     def on_mount(self):
+        self.main.query_one(Tabs).can_focus = False
         self.setup_list()
+        self.relabel()
         self.load_info()
         self.refresh_vms()
         self.set_interval(5, self.refresh_vms)
 
     def setup_list(self):
-        t = self.query_one("#vms", DataTable)
+        t = self.main.query_one("#vms", DataTable)
         t.clear(columns=True)
         t.add_columns(T("Name"), T("State"), T("RAM"), T("CPUs"), T("AI"), T("Ports"))
         t.focus()
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · o: ports · t: start/stop · u: snapshots · "
                         "L: language · q: quit[/]"))
+        self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
+                        "1 to 9 here: that tab[/]"))
 
     # --- language
     def action_language(self):
@@ -4862,14 +4851,116 @@ class VmAgentsUI(App):
         codes = [c for c, _ in LANGUAGES]
         LANG = codes[(codes.index(LANG) + 1) % len(codes)]
         save_lang(LANG)
-        self._bindings = BindingsMap(self.make_bindings())
-        for s in self.sessions.values():
-            s._bindings = BindingsMap(s.make_bindings())
-        self.refresh_bindings()
+        self.rebind()
+        self.relabel()
         self.setup_list()
         if self.vms:
             self.show_vms(self.vms)
         self.notify(T("Language: English"))
+
+    # --- tabs
+    def pane_ids(self):
+        try:
+            return [t.id[4:] for t in self.main.query_one(Tabs).query(Tab)]
+        except (NoMatches, IndexError):
+            return ["home"]
+
+    def current_pane(self):
+        try:
+            return self.main.query_one("#panes", ContentSwitcher).current or "home"
+        except (NoMatches, IndexError):
+            return "home"
+
+    def pane_kind(self, pid=None):
+        pid = pid or self.current_pane()
+        return "home" if pid == "home" else "term" if pid.startswith("term-") else "create"
+
+    def pane(self, pid):
+        return self.main.query_one("#panes", ContentSwitcher).get_child_by_id(pid)
+
+    def pane_label(self, pid):
+        if pid == "home":
+            return T("VMs")
+        w = self.pane(pid)
+        if isinstance(w, Terminal):
+            return f"{w.vm_name} · {kind_label(w.kind)}"
+        return f"{w.v['name']} · {w.status_label()}"
+
+    def relabel(self):
+        for i, tab in enumerate(self.main.query_one(Tabs).query(Tab), start=1):
+            label = self.pane_label(tab.id[4:])
+            tab.label = Text.assemble((f"{i} ", "dim"), label) if i < 10 else label
+
+    def rebind(self):
+        self._bindings = BindingsMap(self.make_bindings())
+        self.refresh_bindings()
+
+    def show(self, pid):
+        """Shows the tab PID ("home": the list) and gives it the keys."""
+        self.main.query_one("#panes", ContentSwitcher).current = pid
+        tabs = self.main.query_one(Tabs)
+        if tabs.active != f"tab-{pid}":
+            tabs.active = f"tab-{pid}"
+        if pid == "home":
+            self.main.query_one("#vms", DataTable).focus()
+            self.back_to_list()
+        else:
+            self.last = pid
+            w = self.pane(pid)
+            if isinstance(w, Terminal):
+                w.focus()
+            else:
+                w.focus_default()
+        self.rebind()
+
+    def add_pane(self, widget, label):
+        self.main.query_one("#panes", ContentSwitcher).mount(widget)
+        self.main.query_one(Tabs).add_tab(Tab(label, id=f"tab-{widget.id}"))
+        self.show(widget.id)
+        self.relabel()
+
+    def close_pane(self, pid, then="home"):
+        """Removes the tab PID; if it was shown, shows THEN."""
+        if self.current_pane() == pid:
+            self.show(then)  # first, so that the tabs do not pick one themselves
+        self.main.query_one(Tabs).remove_tab(f"tab-{pid}")
+        self.pane(pid).remove()
+        if self.last == pid:
+            self.last = None
+        self.call_after_refresh(self.relabel)
+        self.rebind()
+        self._seen = None
+
+    @on(Tabs.TabActivated)
+    def tab_activated(self, event):
+        if event.tab is not None and self.current_pane() != event.tab.id[4:]:
+            self.show(event.tab.id[4:])
+
+    def action_home(self):
+        self.show("home")
+
+    def action_back_to_tab(self):
+        ids = self.pane_ids()
+        if self.last in ids:
+            self.show(self.last)
+        elif len(ids) > 1:
+            self.show(ids[-1])
+
+    def step_tab(self, step):
+        ids = self.pane_ids()
+        cur = self.current_pane()
+        self.show(ids[(ids.index(cur) + step) % len(ids)] if cur in ids else "home")
+
+    def action_prev_tab(self):
+        self.step_tab(-1)
+
+    def action_next_tab(self):
+        self.step_tab(1)
+
+    def action_goto_tab(self, n):
+        ids = self.pane_ids()
+        if n <= len(ids):
+            self.show(ids[n - 1])
 
     # --- data
     @work(thread=True, exclusive=True, group="info")
@@ -4891,17 +4982,18 @@ class VmAgentsUI(App):
         self.action_open()
 
     def show_vms(self, vms):
-        seen = (vms, sorted(self.busy), sorted(self.sessions))
+        open_here = sorted({t.vm_name for t in self.terminals()})
+        seen = (vms, sorted(self.busy), open_here)
         if seen == getattr(self, "_seen", None):
             return
         self._seen = seen
         self.vms = vms
-        t = self.query_one("#vms", DataTable)
+        t = self.main.query_one("#vms", DataTable)
         current = self.selected_name()
         t.clear()
         for vm in vms:
             agents = vm.get("agents") or [vm.get("agent", "claude")]
-            name = ("* " if vm.get("default") else "  ") + vm["name"] + (" ▸" if vm["name"] in self.sessions else "")
+            name = ("* " if vm.get("default") else "  ") + vm["name"] + (" ▸" if vm["name"] in open_here else "")
             state = "[cyan]◆[/] " + T("working") if vm["name"] in self.busy else state_mark(vm)
             t.add_row(name, state, gb(vm.get("memory_mb")), str(vm.get("cpus") or "-"), ", ".join(agents),
                       ",".join(map(str, vm.get("ports") or [])) or "-", key=vm["name"])
@@ -4910,9 +5002,10 @@ class VmAgentsUI(App):
         self.show_details()
         n = len(vms)
         self.sub_title = (T("{n} VM", n=n) if n == 1 else T("{n} VMs", n=n)) if vms else T("no VMs yet: press n")
+        self.main.query_one("#brand", Static).update(f"[b]vmagents[/b] [dim]{self.sub_title}[/]")
 
     def selected(self):
-        t = self.query_one("#vms", DataTable)
+        t = self.main.query_one("#vms", DataTable)
         if not self.vms or t.cursor_row is None or t.cursor_row >= len(self.vms):
             return None
         return self.vms[t.cursor_row]
@@ -4923,7 +5016,7 @@ class VmAgentsUI(App):
 
     @on(DataTable.RowHighlighted, "#vms")
     def show_details(self):
-        d = self.query_one("#details", Static)
+        d = self.main.query_one("#details", Static)
         vm = self.selected()
         if not vm:
             d.update(T("[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI "
@@ -4950,10 +5043,10 @@ class VmAgentsUI(App):
                      else T("Ports: none"))
         for _, desc in self.forwards.get(n, []):
             lines.append(f"  [green]→[/] {desc}")
-        if n in self.sessions:
+        if terms := self.terminals(n):
             lines.append("")
             lines.append(T("Open here: {list}  [dim](Enter to go back)[/]",
-                           list=", ".join(t.label for t in self.sessions[n].terminals())))
+                           list=", ".join(kind_label(t.kind) for t in terms)))
         lines.append("")
         lines.append(" · ".join([
             T("idle shutdown {m} min", m=vm["idle"]) if vm.get("idle") else T("no idle shutdown"),
@@ -4965,36 +5058,72 @@ class VmAgentsUI(App):
         d.update("\n".join(lines))
 
     def log_line(self, text):
-        self.query_one("#log", RichLog).write(text)
+        self.main.query_one("#log", RichLog).write(text)
 
-    # --- sessions: terminals inside the UI
+    # --- terminals inside the UI, one tab each
+    def terminals(self, name=None):
+        return [t for t in self.main.query(Terminal) if name is None or t.vm_name == name]
+
+    def creating(self):
+        return list(self.main.query(Creating))
+
     def open_session(self, name, kind):
+        """Shows the tab of KIND (shell, login or an AI assistant) on the VM
+        NAME, opening it if needed; with no KIND, the VM's last tab."""
         vm = next((v for v in self.vms if v["name"] == name), {"name": name, "agent": "claude"})
-        s = self.sessions.get(name)
-        if s is None:
-            s = self.sessions[name] = Session(vm, first=kind)
-            self.install_screen(s, name=f"session:{name}")
-            self.push_screen(f"session:{name}")
-        else:
-            if self.screen is not s:
-                self.push_screen(f"session:{name}")
-            if kind:
-                s.action_open(kind)
+        terms = self.terminals(name)
+        if kind is None:
+            if terms:
+                last = self.pane(self.last) if self.last in self.pane_ids() else None
+                self.show(last.id if last in terms else terms[-1].id)
+            return
+        if kind not in ("shell", "login", "claude") and vm.get("os") == "windows":
+            self.notify(T("Only Claude Code runs on Windows VMs."))
+            return
+        for t in terms:
+            if t.kind == kind and t.rc is None:
+                self.show(t.id)
+                return
+        self.count += 1
+        t = Terminal(kind_command(name, kind), kind_label(kind), id=f"term-{self.count}")
+        t.vm_name, t.kind = name, kind
+        self.add_pane(t, f"{name} · {kind_label(kind)}")
         self._seen = None
+
+    def action_open_kind(self, kind):
+        w = self.pane(self.current_pane())
+        if isinstance(w, Terminal):
+            self.open_session(w.vm_name, kind)
+
+    @on(Terminal.Exited)
+    def exited(self, event):
+        """A program ended: its tab closes (the VM's other tab, or the list, shows)."""
+        t = event.terminal
+        if self.current_pane() != t.id:
+            self.close_pane(t.id)
+            return
+        others = [x for x in self.terminals(t.vm_name) if x is not t]
+        self.close_pane(t.id, then=others[-1].id if others else "home")
 
     def back_to_list(self):
         self._seen = None
         if self.vms:
             self.show_vms(self.vms)
 
-    def session_closed(self, name):
-        s = self.sessions.pop(name, None)
-        if s is None:
-            return
-        if self.screen is s:
-            self.pop_screen()
-        self.call_after_refresh(self.uninstall_screen, f"session:{name}")
-        self.back_to_list()
+    # --- creating VMs, in a tab
+    def start_create(self, v):
+        self.count += 1
+        c = Creating(v, id=f"create-{self.count}")
+        self.add_pane(c, f"{v['name']} · {T('creating…')}")
+
+    def create_finished(self, c):
+        self.relabel()
+        self.refresh_vms()
+        if self.current_pane() != c.id:
+            if c.rc == 0:
+                self.notify(T("{n} is ready.", n=c.v["name"]))
+            else:
+                self.notify(T("Creating {n} failed.", n=c.v["name"]), severity="error")
 
     @work(thread=True)
     def background(self, args, done=None, name=None):
@@ -5033,7 +5162,7 @@ class VmAgentsUI(App):
     def action_open(self):
         if not (vm := self.need_vm(busy_ok=True)):
             return
-        if vm["name"] in self.sessions:  # back to what is open there
+        if self.terminals(vm["name"]):  # back to what is open there
             self.open_session(vm["name"], None)
             return
 
@@ -5173,21 +5302,28 @@ class VmAgentsUI(App):
                                     "name to confirm:", n=n), n), sure)
 
     def action_quit(self):
-        count = sum(len(s.terminals()) for s in self.sessions.values())
-        if not count:
+        count = len(self.terminals())
+        making = [c for c in self.creating() if c.running()]
+        if not count and not making:
             self.stop_forwards()
             self.exit()
             return
 
         def sure(yes):
             if yes:
-                for s in self.sessions.values():
-                    s.close_all()
+                for t in self.terminals():
+                    t.close()
+                for c in making:
+                    c.cancel()
                 self.stop_forwards()
                 self.exit()
-        self.push_screen(Confirm(T("{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the "
-                                   "VM).", count=count), yes=T("Quit")), sure)
-
+        text = []
+        if count:
+            text.append(T("{count} terminal(s) are open. Quit closes them (agents in tmux keep running on the VM).",
+                          count=count))
+        if making:
+            text.append(T("{n} is still being created; quitting stops that.", n=", ".join(c.v["name"] for c in making)))
+        self.push_screen(Confirm("\n\n".join(text), yes=T("Quit")), sure)
 
 def main():
     VmAgentsUI().run()
