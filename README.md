@@ -497,7 +497,12 @@ vmagents prune                                        # free the space of unused
 ```
 
 Needs `virsh` and `virt-install` (`sudo apt install libvirt-daemon-system
-virtinst`, and your user in the `libvirt` group). What `create` does:
+virtinst`; on Arch `sudo pacman -S libvirt virt-install libisoburn dnsmasq
+qemu-desktop` and `sudo systemctl enable --now libvirtd`), and your user in the
+`libvirt` group. If libvirt has no `default` storage pool yet (fresh Arch),
+`create` makes one in `/var/lib/libvirt/images`. With ufw on, allow the libvirt bridge
+(`virbr0`, or what `virsh net-info default` shows) or the VM gets no IP address:
+`sudo ufw allow in on virbr0 && sudo ufw route allow in on virbr0 && sudo ufw route allow out on virbr0`. What `create` does:
 
 1. Downloads the official cloud image once into `~/.cache/vmagents/images`
    and checks it against the distribution's published SHA-512/SHA-256 sums.
