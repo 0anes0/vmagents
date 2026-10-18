@@ -16,10 +16,16 @@ import json, os, sys
 args = sys.argv[1:]
 if args[:1] == ["-c"]: args = args[2:]
 path = os.environ["FAKE_LV"]
+# One virsh at a time (tries run several), and whole writes only.
+import fcntl
+lock = open(path + ".lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
 st = json.load(open(path))
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps({"prog": "virsh", "argv": args}) + "\n")
-def save(): json.dump(st, open(path, "w"))
+def save():
+    json.dump(st, open(path + ".tmp", "w"))
+    os.replace(path + ".tmp", path)
 def opt(name):
     return args[args.index(name) + 1] if name in args else None
 cmd, rest = args[0], [a for a in args[1:] if not a.startswith("--")]
