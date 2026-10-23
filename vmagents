@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.21.0
+VERSION=0.21.1
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -560,7 +560,8 @@ chose for it) or a shell, in a terminal on the phone. It is the same session
 as on the computer (tmux on the VM): start a task here, look at it from the
 couch. A VM that is off is started. A bar on the phone gives Esc, Tab,
 Shift+Tab, Ctrl, the arrows; the box below it sends a whole message at once
-(the phone's own keyboard and dictation work there).
+(the phone's own keyboard and dictation work there). A key from the bar goes
+after what was typed: type the start of a name, tap Tab, it is completed.
 
 Where the phone reaches it: over Tailscale (default; tailscale.com, free):
 encrypted, from anywhere, and nothing opens to the internet. Install it on
@@ -6809,7 +6810,7 @@ async function load() {
   }));
 }
 
-let term, fit, ws, cur, ended = false, ctrl = false, size = +(store("vmagents-font") || 14);
+let term, fit, ws, cur, ended = false, ctrl = false, composing = false, size = +(store("vmagents-font") || 14);
 
 function sendRaw(s) { if (ws && ws.readyState === 1) ws.send(s); }
 function input(d) {
@@ -6838,6 +6839,8 @@ function open(name, kind, label) {
     const ta = $("term").querySelector("textarea");
     if (ta) { ta.setAttribute("autocapitalize", "off"); ta.setAttribute("autocorrect", "off"); ta.spellcheck = false; }
     term.onData(input);
+    ta.addEventListener("compositionstart", () => composing = true);
+    ta.addEventListener("compositionend", () => composing = false);
     term.onResize(({ cols, rows }) => sendRaw("r" + JSON.stringify({ cols, rows })));
   }
   term.reset();
@@ -6872,22 +6875,44 @@ const KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["Ctrl", nul
 for (const [label, seq] of KEYS) {
   const b = el("button", "", label);
   if (seq === null) { b.id = "ctrl"; b.onclick = () => { ctrl = !ctrl; b.classList.toggle("on", ctrl); }; }
-  else b.onclick = () => sendRaw("i" + seq);
+  else b.onclick = () => press(seq);
   b.addEventListener("mousedown", e => e.preventDefault());  // keeps the keyboard where it is
   $("keys").append(b);
 }
 
-function sendText() {
+// What is typed in the box goes to the terminal; true if there was some.
+function flush() {
   const t = $("text").value;
-  if (!t) { sendRaw("i\r"); return; }
+  if (!t) return false;
   // Several lines as one paste, so the first line break does not send it early.
   sendRaw("i" + (t.includes("\n") ? "\x1b[200~" + t + "\x1b[201~" : t));
-  setTimeout(() => sendRaw("i\r"), 50);
   $("text").value = ""; $("text").style.height = "";
+  return true;
+}
+function later(s) { setTimeout(() => sendRaw("i" + s), 50); }
+function sendText() { if (flush()) later("\r"); else sendRaw("i\r"); }
+// A key from the bar comes after the words before it: those in the box, and
+// the word the phone keyboard still holds back. Leaving the terminal makes the
+// keyboard let go of it, but xterm.js drops it then, so it goes from here.
+// Tab then completes what was typed.
+function press(seq) {
+  let wait = flush(), held = "";
+  const ta = term && term.textarea, take = e => { held = e.data || ""; };
+  if (composing && ta && document.activeElement === ta) {
+    ta.addEventListener("compositionend", take);
+    ta.blur(); ta.focus();
+    ta.removeEventListener("compositionend", take);
+    if (held) { sendRaw("i" + held); wait = true; }
+  }
+  if (wait) later(seq); else sendRaw("i" + seq);
 }
 $("send").onclick = sendText;
 $("send").addEventListener("mousedown", e => e.preventDefault());
-$("text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); } });
+$("text").addEventListener("keydown", e => {
+  if (e.isComposing) return;
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
+  if (e.key === "Tab") { e.preventDefault(); press(e.shiftKey ? "\x1b[Z" : "\t"); }  // a keyboard with Tab
+});
 $("text").addEventListener("input", () => { const t = $("text"); t.style.height = ""; t.style.height = Math.min(120, t.scrollHeight) + "px"; });
 $("back").onclick = close;
 function font(d) { size = Math.max(9, Math.min(24, size + d)); store("vmagents-font", String(size)); if (term) { term.options.fontSize = size; fitNow(); } }

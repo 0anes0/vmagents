@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from tests.helpers import SandboxTest, free_port, listening_port, write_exe
 from tests.test_idle_notify import var
@@ -185,6 +187,14 @@ class ServerTests(SandboxTest):
         self.assertEqual(self.get("/nope")[0], 404)
         self.assertIn("wrong key", (self.sb.tmp / "phone.log").read_text())
 
+    @unittest.skipUnless(shutil.which("node"), "needs node")
+    def test_page_script(self):
+        body = self.get("/")[2]
+        script = self.sb.tmp / "page.js"
+        script.write_text(body[body.index('<script>\n"use strict"') + 8:body.rindex("</script>")])
+        r = subprocess.run(["node", "--check", str(script)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_terminal(self):
         ws = WS(self.port, "t=sekret-key&vm=dev&kind=agent&cols=50&rows=20")
         self.assertEqual(ws.status, "HTTP/1.1 101 Switching Protocols")
@@ -230,6 +240,14 @@ class CommandTests(SandboxTest):
         self.addCleanup(lambda: self.sb.run("phone", "off"))
 
     def test_needs_tailscale(self):
+        # This computer may have Tailscale: a PATH with all but it.
+        hide = self.sb.tmp / "no-tailscale"
+        hide.mkdir()
+        for d in ("/usr/local/bin", "/usr/bin", "/bin"):
+            for f in Path(d).iterdir() if Path(d).is_dir() else ():
+                if f.name != "tailscale" and not (hide / f.name).exists():
+                    (hide / f.name).symlink_to(f)
+        self.sb.env["PATH"] = f"{self.sb.bin}:{hide}"
         r = self.sb.run("phone")
         self.assertEqual(r.returncode, 1)
         self.assertIn("Tailscale is not installed", r.stderr)

@@ -307,7 +307,8 @@ bilgisayarındaki oturumun aynısıdır: asistan VM'de tmux'ta çalışır, yani
 bir şey başlat, koltuktan bak. Kapalı bir VM başlatılır. Bir çubuk telefon
 klavyesinde olmayan tuşları verir (Esc, Tab, Shift+Tab, Ctrl, oklar); altındaki
 kutu bütün bir mesajı tek seferde gönderir, böylece telefonun kendi klavyesi,
-otomatik düzeltmesi ve sesle yazması çalışır. Telefon uyanınca sayfa kendiliğinden
+otomatik düzeltmesi ve sesle yazması çalışır. Çubuktaki bir tuş yazdığından sonra
+gider; bir dosya adının başını yaz, tamamlamak için Tab'a dokun. Telefon uyanınca sayfa kendiliğinden
 yeniden bağlanır.
 
 Sayfa senin bilgisayarında çalışan küçük bir web sunucusudur ve

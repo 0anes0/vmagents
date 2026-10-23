@@ -306,7 +306,8 @@ your computer: the agent runs in tmux on the VM, so start something at the
 desk and look at it from the couch. A VM that is off is started. A bar gives
 the keys a phone keyboard lacks (Esc, Tab, Shift+Tab, Ctrl, the arrows), and
 a box below it sends a whole message at once, so the phone's own keyboard,
-autocorrect and dictation work. The page comes back by itself when the phone
+autocorrect and dictation work. A key from the bar goes after what you typed,
+so type the start of a file name and tap Tab to complete it. The page comes back by itself when the phone
 wakes up.
 
 The page is a small web server on your computer, reached over
