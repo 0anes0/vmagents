@@ -1,6 +1,6 @@
 pkgbase = vmagents
 	pkgdesc = Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine
-	pkgver = 0.21.0
+	pkgver = 0.21.1
 	pkgrel = 1
 	url = https://github.com/emincan2000/vmagents
 	arch = any
@@ -20,7 +20,7 @@ pkgbase = vmagents
 	optdepends = xclip: the shared clipboard on X11
 	optdepends = wl-clipboard: the shared clipboard on Wayland
 	optdepends = sshfs: vmagents mount
-	source = vmagents-0.21.0.tar.gz::https://github.com/emincan2000/vmagents/archive/refs/tags/v0.21.0.tar.gz
-	sha256sums = e7cde7927f48107e8805581116293646171e58dde0fc75f7bfe8c53fd585792f
+	source = vmagents-0.21.1.tar.gz::https://github.com/emincan2000/vmagents/archive/refs/tags/v0.21.1.tar.gz
+	sha256sums = a3b37a44383c33575062f73b41653736bbc191304a1817746179c2e25f2f6c14
 
 pkgname = vmagents
