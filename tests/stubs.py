@@ -199,9 +199,14 @@ with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps({"prog": "scp", "argv": args}) + "\n")
 def local(p):
     m = re.match(r"^[^/:]+@(\[[^]]*\]|[^:]+):(.*)$", p)
-    return m.group(2) if m else p
+    if not m:
+        return p
+    return os.path.join(os.environ.get("STUB_REMOTE_HOME", ""), m.group(2))  # relative: in the home
 try:
-    shutil.copyfile(local(args[-2]), local(args[-1]))
+    if "-r" in args:
+        shutil.copytree(local(args[-2]), local(args[-1]))
+    else:
+        shutil.copyfile(local(args[-2]), local(args[-1]))
 except OSError as e:
     print(f"scp: {local(args[-2])}: {e.strerror}", file=sys.stderr)
     sys.exit(1)

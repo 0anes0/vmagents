@@ -47,6 +47,13 @@ elif a[:1] == ["history"]:
     print("> asked in " + a[2] + "\n\n* Bash(npm test)\nanswered " + a[2] + "\n\nGo on with it: vmagents dev --resume " + a[2])
 elif a[:1] == ["changes"]:
     show("changes.txt")
+elif a[:1] == ["phone"] and "--json" in a:
+    if os.environ.get("FAKE_PHONE_ERR") and "--lan" not in a:
+        print("vmagents: Tailscale is not installed; ...", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"on": True, "listen": "lan" if "--lan" in a else "tailscale", "address": "100.64.0.7",
+                      "port": 7700, "url": "http://100.64.0.7:7700/#t=" + ("NEW" if "--new" in a else "KEY"),
+                      "qr": ["█▀▀█", "█▄▄█"], "ssh": [{"name": "dev", "port": 7701, "user": "me"}]}))
 elif a[:1] == ["try"] and "--clean" not in a:
     print("Made 2 copies of dev: dev-t1 dev-t2", flush=True)
     print("Run 3 on dev-t1: Claude Code works on it, without asking (in tmux session run-3).", flush=True)
@@ -584,6 +591,49 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await self.wait_for(pilot, lambda: self.app.terminals("dev"))
             term = self.app.terminals("dev")[0]
             await self.wait_for(pilot, lambda: "session: dev --hold --claude --no-tmux -- --resume s-old"
+                                in self.screen_text(term))
+
+    async def test_phone(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("m")
+            await pilot.pause(0.3)
+            self.assertIsInstance(self.app.screen, self.ui.Phone)
+            await self.wait_for(pilot, lambda: "#t=KEY" in self.text("#phone-more"))
+            self.assertIn("█▀▀█", self.text("#qr"))
+            self.assertIn("Over Tailscale", self.text("#phone-text"))
+            self.assertIn("SSH app into dev: ssh -p 7701 me@100.64.0.7", self.text("#phone-more"))
+            await pilot.press("n")  # a new link
+            await self.wait_for(pilot, lambda: "#t=NEW" in self.text("#phone-more"))
+            await pilot.press("o")  # off
+            await pilot.pause(0.3)
+            self.assertNotIsInstance(self.app.screen, self.ui.Phone)
+            self.assertEqual(self.calls("phone"), [["phone", "--json"], ["phone", "--json", "--new"], ["phone", "off"]])
+
+    async def test_phone_without_tailscale(self):
+        os.environ["FAKE_PHONE_ERR"] = "1"
+        self.addCleanup(os.environ.pop, "FAKE_PHONE_ERR", None)
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("m")
+            await self.wait_for(pilot, lambda: "Tailscale is not installed" in self.text("#phone-text"))
+            self.assertFalse(self.app.screen.query_one("#lan").has_class("hidden"))
+            await pilot.press("w")  # the local network then
+            await self.wait_for(pilot, lambda: "same Wi-Fi" in self.text("#phone-text"))
+            self.assertTrue(self.app.screen.query_one("#lan").has_class("hidden"))
+
+    async def test_task_on_windows(self):
+        self.write(list=[dict(VM, os="windows", agents=[])])
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("a")  # only Claude Code there: no agent to choose
+            await pilot.pause(0.3)
+            self.assertIsInstance(self.app.screen, self.ui.Ask)
+            self.app.screen.query_one("#f-task").value = "fix the build"
+            await self.submit(pilot)
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
+            term = self.app.terminals("dev")[0]
+            await self.wait_for(pilot, lambda: "session: run dev --wait --hold --claude -- fix the build"
                                 in self.screen_text(term))
 
     async def test_terminal_keys(self):

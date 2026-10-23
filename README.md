@@ -12,7 +12,7 @@
   ![Languages](https://img.shields.io/badge/UI-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Projects](#projects) · [Commands](#commands)
+  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Commands](#commands)
 </div>
 
 ---
@@ -52,6 +52,7 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
 | **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
 | **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
+| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs and opens their agents in a terminal (over Tailscale, from anywhere). SSH apps get a port per VM too. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
 | **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust, your own) sets it up for a kind of work. |
@@ -240,6 +241,11 @@ autostop and the idle shutdown leave the VM on. With a [project](#projects),
 `vmagents changes` and `take` then bring the result back as a branch. In the
 UI, `a` gives a task and follows it in a tab.
 
+Tasks run on Windows VMs too (Claude Code only): there is no tmux there, so
+the task gets a Windows process of its own, started through WMI, which goes
+on when the connection ends; `runs` shows, follows and stops it the same way,
+and stopping it ends everything it started.
+
 ## Try a task several times
 
 ```sh
@@ -285,6 +291,38 @@ agents, git, npm, pip and apt or pacman use it. The VM's libvirt network and
 your other VMs are not changed. It needs python3 here; with a firewall such
 as ufw, allow the VM network to reach this computer on the proxy's port
 (18080 and up). In the UI, `i` restricts it, allows a host or opens it.
+
+## From the phone
+
+```sh
+vmagents phone                         # a QR code: scan it with the phone's camera
+vmagents phone ssh dev "ssh-ed25519 AAAA... termius"   # an SSH app instead (its public key)
+vmagents phone off                     # off again
+```
+
+The phone's browser gets a page with your VMs; tap one for its agent or a
+shell, in a terminal on the phone (xterm.js). It is the same session as on
+your computer: the agent runs in tmux on the VM, so start something at the
+desk and look at it from the couch. A VM that is off is started. A bar gives
+the keys a phone keyboard lacks (Esc, Tab, Shift+Tab, Ctrl, the arrows), and
+a box below it sends a whole message at once, so the phone's own keyboard,
+autocorrect and dictation work. The page comes back by itself when the phone
+wakes up.
+
+The page is a small web server on your computer, reached over
+[Tailscale](https://tailscale.com) (free): encrypted, from anywhere, and
+nothing is opened to the internet. Install it on the computer
+(`curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up`)
+and the app on the phone, with the same account. Only on the same Wi-Fi?
+`vmagents phone --lan` (not encrypted then; networks of schools and hotels
+often keep devices apart). The link in the QR code holds a random key and the
+server answers nothing without it; `--new` makes a new one. Who connected is
+logged in `~/.cache/vmagents/phone.log`. In the UI: `m`.
+
+SSH apps (Termius, Blink, JuiceSSH) work too: `phone ssh NAME KEY` puts the
+app's public key on the VM and gives it a port on your computer (7701, ...)
+that leads to the VM's SSH server and starts the VM first when it is off.
+With autostart on, Claude Code opens as you log in.
 
 ## Projects
 
@@ -616,6 +654,8 @@ vmagents take NAME [--branch B] [--pr]   that work as a branch here (or a pull r
 
 vmagents open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
 vmagents ports NAME 3000,5173    ports forwarded each time you connect (off: none)
+vmagents phone [--lan] [--new] [--port N] | phone off   your VMs on the phone: a QR code to scan
+vmagents phone ssh NAME KEY|off  an SSH app on the phone into the VM (a port here per VM)
 vmagents undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
 vmagents snapshot NAME [--name SNAP] [LABEL]   take one; snapshots NAME lists them
 vmagents snapshot NAME --label SNAP LABEL      change a snapshot's label
@@ -710,7 +750,9 @@ home directory. CI runs them on every push, with shellcheck.
 - `test_create.py`: `create` and `delete` (which refuses VMs it did not make),
   the missing `default` pool, the UI under uv, and a Turkish locale (built
   with `localedef` when it is not installed).
-- `test_windows.py`: OS detection, and the PowerShell commands sent, decoded.
+- `test_windows.py`: OS detection, and the PowerShell commands sent, decoded;
+  tasks on Windows (the task and runner sent with scp, the start script, list,
+  log, stop, clean).
 - `test_stop.py`: autostop, `start`, `stop`; every reason to keep a VM on.
 - `test_snapshots.py`: automatic snapshots and their pruning, names, labels, `undo`.
 - `test_idle_notify.py`: `hook.sh` with Claude's hook input, the watcher, the idle installers.
@@ -728,6 +770,10 @@ home directory. CI runs them on every push, with shellcheck.
 - `test_net.py`: the proxy with real connections (allowed, refused, HTTP and
   HTTPS, the list read again, ending with the VM), and `net` against a fake
   libvirt: the filter, the VM's card, the VM's proxy settings, open again.
+- `test_phone.py`: the QR code (compared with the `qrcode` library), the web
+  server with a real WebSocket client (the page, the list, wrong keys, a
+  terminal with its size and exit code), the SSH forward, `phone ssh` putting
+  the key on the fake VM and taking it off.
 - `test_templates.py`, `test_history.py`: templates for `create` (built in,
   your own, the package names per distribution) and Claude's sessions.
 - `test_ui.py` (needs Textual and pyte, else skipped): the UI with Textual's
@@ -772,6 +818,12 @@ home directory. CI runs them on every push, with shellcheck.
   and GitHub reached, example.com refused by the proxy, a direct connection
   dropped by the filter, a Claude task through it, everything gone after
   `open`); the AUR package built and installed with `makepkg -si`; `history`.
+- Tasks on Windows 10: a real Claude Code task with `--wait`, one in the
+  background going on after the connection closed, listed, stopped (with what
+  Claude had started in the background), cleaned.
+- The phone page in Chromium at phone size: the list, a shell and Claude Code
+  on the Arch VM (started by it), the message box, the session ending; a QR
+  code decoded by jsQR; an SSH client through `phone ssh`, starting the VM.
 
 </details>
 
@@ -782,7 +834,8 @@ home directory. CI runs them on every push, with shellcheck.
   open, clipboard, notifications, idle shutdown; start them yourself.
 - Windows VMs have no tmux, so sessions end with the connection; skipping
   autostart with `LC_VMAGENTS=off` works on Linux VMs only.
-- The clipboard, other agents, projects, tasks and the restricted network need a Linux VM. Copies
+- The clipboard, other agents, projects and the restricted network need a Linux VM;
+  on Windows, tasks run with Claude Code only. Copies
   (`try`) need a VM made by vmagents; the restricted network a libvirt VM on a libvirt network.
 - A plain `ssh` login never shuts the VM down (vmagents is not running then;
   the idle shutdown does, later). The idle shutdown cannot see long jobs that

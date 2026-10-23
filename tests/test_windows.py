@@ -3,6 +3,7 @@ the PowerShell commands vmagents sends (decoded and checked). The scripts
 themselves were run on a real Windows 10 VM; see the README."""
 import base64
 import gzip
+import json
 import re
 import subprocess
 import unittest
@@ -130,6 +131,60 @@ class CommandTests(SandboxTest):
         self.assertIn("ok    Claude Code on the VM: 2.1.300 (Claude Code)", r.stdout)
         self.assertIn("ok    Git for Windows: git version 2.56.0.windows.2", r.stdout)
         self.assertNotIn("tmux", r.stdout)
+
+
+class RunTests(SandboxTest):
+    """Tasks on a Windows VM: no tmux there, so the run starts through WMI;
+    the task and the runner go over scp (the command line is too short)."""
+
+    def setUp(self):
+        super().setUp()
+        self.sb.run("add", "w", "--host", "192.0.2.8", "--user", "emin", "--os", "windows", "--dir", "~/work", check=0)
+
+    def script(self, i=-1):
+        return decode(self.sb.calls("ssh")[i]["argv"][-1])[1]
+
+    def test_start(self):
+        task = "fix the tests; it's \"quoted\" & <odd> " + "x" * 3000  # longer than a Windows command line could carry
+        r = self.sb.run("run", "w", task, env={"STUB_SSH_OUTPUT": "7\r\n"}, check=0)
+        self.assertIn("Run 7 on w: Claude Code works on it, without asking (in a process of its own).", r.stdout)
+        sent = next(c["argv"] for c in self.sb.calls("scp"))
+        self.assertIn("-r", sent)
+        up = sent[-1].split(":", 1)[1]
+        self.assertRegex(up, r"^vmagents-run-\d+-\d+$")
+        self.assertEqual((self.sb.remote_home / up / "task").read_text(), task + "\n")
+        runner = (self.sb.remote_home / up / "run.ps1").read_text()
+        self.assertIn("AssignProcessToJobObject", runner)
+        self.assertIn('>`"$d\\log`" 2>&1', runner)
+        self.assertTrue(runner.isascii())  # Windows PowerShell reads it in the ANSI code page
+        start = self.script()
+        self.assertIn(f"$up = Join-Path $env:USERPROFILE '{up}'", start)
+        self.assertIn("Resolve-Dir '~/work'", start)
+        self.assertIn("' -p --output-format stream-json --verbose --dangerously-skip-permissions'", start)
+        self.assertIn("Invoke-CimMethod -ClassName Win32_Process -MethodName Create", start)
+        self.assertNotIn("xxxx", start)
+        self.assertLess(len(self.sb.calls("ssh")[-1]["argv"][-1]), 8000)
+
+    def test_only_claude(self):
+        r = self.sb.run("run", "w", "--codex", "a task")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("only Claude Code runs on Windows VMs", r.stderr)
+
+    def test_list_log_stop_clean(self):
+        rows = "1\037claude\0370\0371760000000\0371760000060\037add a test\n2\037claude\037running\0371760000100\037\037fix it\n"
+        out = self.sb.run("runs", "w", env={"STUB_SSH_OUTPUT": rows}, check=0).stdout
+        self.assertRegex(out, r"\n1 +Claude Code +done +\S+ \S+ +add a test\n2 +Claude Code +running +\S+ \S+ +fix it\n")
+        self.assertIn("Sort-Object { [int]$_.Name }", self.script())
+        runs = json.loads(self.sb.run("runs", "w", "--json", env={"STUB_SSH_OUTPUT": rows}, check=0).stdout)
+        self.assertEqual([(x["id"], x["state"], x["ended"]) for x in runs], [(1, "0", 1760000060), (2, "running", None)])
+        log = self.sb.run("runs", "w", "2", "-f", env={"STUB_SSH_OUTPUT": "claude\r\nnot json\n"}, check=0).stdout
+        self.assertEqual(log, "not json\n")
+        self.assertIn("$d = RunDir '2'", self.script())
+        self.assertIn("$follow = '1'", self.script())
+        self.sb.run("runs", "w", "2", "--stop", check=0)
+        self.assertIn("taskkill.exe /T /F /PID", self.script())
+        self.assertIn("Deleted 3 run(s)", self.sb.run("runs", "w", "--clean", env={"STUB_SSH_OUTPUT": "3\r\n"}, check=0).stdout)
+        self.assertIn("No runs on w yet.", self.sb.run("runs", "w", env={"STUB_SSH_OUTPUT": ""}, check=0).stdout)
 
 
 class QuotingTests(unittest.TestCase):

@@ -9,7 +9,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck zsh openssh-client desktop-file-utils
-          pip install asyncssh 'textual>=8,<9' 'pyte>=0.8.2'
+          pip install asyncssh 'textual>=8,<9' 'pyte>=0.8.2' qrcode
       - name: shellcheck
         run: shellcheck vmagents install.sh packaging/deb/build.sh packaging/aur/update.sh
       - name: tests

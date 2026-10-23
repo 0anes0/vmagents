@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.20.0
+VERSION=0.21.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -97,6 +97,9 @@ GET STARTED
     vmagents take dev                        that work as the branch vmagents/dev here (--pr: a pull request)
     ssh dev@VM                               any SSH app opens Claude too (after setup)
 
+  From the phone:
+    vmagents phone                           a QR code: the phone's browser gets your VMs and their agents
+
 COMMANDS
   Make and remove VMs (libvirt):
     create NAME          new Linux VM from an official cloud image, ready for Claude
@@ -118,6 +121,8 @@ COMMANDS
     login NAME           log Claude in on the VM, with the browser of THIS computer
     mcp NAME --add       let Claude Code on THIS computer work in the VM (run, read, write, edit)
     mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
+    phone                the VMs on the phone: a QR code to scan (over Tailscale; --lan: same Wi-Fi)
+    phone ssh NAME KEY   let an SSH app on the phone into the VM, with that app's public key
 
   Tasks (an agent works alone, in the background, without asking):
     run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
@@ -543,6 +548,50 @@ Examples:
   vmagents open 3000 --no-browser        the default VM; only forward
 EOF
       ;;
+    phone) cat <<EOF
+vmagents phone [--new] [--lan|--tailscale] [--port N] [--json]
+vmagents phone off
+vmagents phone ssh NAME KEY|FILE|off
+
+Your VMs on the phone. "vmagents phone" starts a small web server on this
+computer and shows a QR code: scan it with the phone's camera, and its
+browser lists the VMs; tap one for its agent (Claude Code, or the one you
+chose for it) or a shell, in a terminal on the phone. It is the same session
+as on the computer (tmux on the VM): start a task here, look at it from the
+couch. A VM that is off is started. A bar on the phone gives Esc, Tab,
+Shift+Tab, Ctrl, the arrows; the box below it sends a whole message at once
+(the phone's own keyboard and dictation work there).
+
+Where the phone reaches it: over Tailscale (default; tailscale.com, free):
+encrypted, from anywhere, and nothing opens to the internet. Install it on
+this computer (curl -fsSL https://tailscale.com/install.sh | sh; sudo
+tailscale up) and the app on the phone, with the same account. --lan: on the
+local network instead (the phone on the same Wi-Fi; not encrypted, and
+networks of schools or hotels often keep devices apart). The choice and
+--port (default 7700) are remembered.
+
+The link (in the QR code) holds a random key; without it the server answers
+nothing. --new makes a new one: the old link stops working. It runs until
+"vmagents phone off" or until this computer restarts. Log of who connected:
+~/.cache/vmagents/phone.log. The page loads its terminal (xterm.js) from
+cdn.jsdelivr.net, so the phone needs the internet.
+
+SSH apps (Termius, Blink, JuiceSSH, ...): "phone ssh NAME KEY" puts the app's
+public key on the VM and gives the VM a port here (7701, 7702, ...) that
+leads to its SSH server, starting the VM when needed (connect again if the
+app gives up while it boots). With autostart on, Claude Code opens on login.
+"phone ssh NAME off" takes the key off the VM again.
+
+--json: the address, link, QR code rows and SSH ports, for scripts and the UI.
+
+Examples:
+  vmagents phone
+  vmagents phone --lan
+  vmagents phone ssh dev "ssh-ed25519 AAAAC3Nza... termius"
+  vmagents phone ssh dev ~/Downloads/termius.pub
+  vmagents phone off
+EOF
+      ;;
     run) cat <<EOF
 vmagents run NAME [--claude|--codex|--gemini|--opencode|--aider] [--wait] [--] TASK...
 
@@ -561,6 +610,10 @@ shutdown of an older VM, run "vmagents idle NAME MINUTES" again once).
 
 Claude Code runs with -p (its steps are shown one per line), Codex with exec,
 Gemini CLI with -p, OpenCode with run --auto, aider with --message.
+
+Windows VMs (Claude Code only): no tmux there; the task runs in a Windows
+process of its own (started through WMI), which goes on as well when the
+connection ends. "vmagents runs" shows, follows and stops it the same way.
 
 Examples:
   vmagents run dev "fix the failing tests"
@@ -3337,11 +3390,12 @@ sftp_path() {
   printf '%s' "$p"
 }
 
-run_scp() { # SRC DST (one of them remote, as host:path)
+run_scp() { # [-r] SRC... DST (remote ones as host:path)
   local -a scp_opts=(-q -s -P "$C_PORT" -o "HostKeyAlias=vmagents-$NAME" -o "UserKnownHostsFile=$KNOWN_HOSTS"
     -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15)
   [[ -f $C_KEY ]] && scp_opts+=(-i "$C_KEY" -o IdentitiesOnly=yes)
-  scp "${scp_opts[@]}" -- "$1" "$2"
+  [[ $1 == -r ]] && { scp_opts+=(-r); shift; }
+  scp "${scp_opts[@]}" -- "$@"
 }
 
 scp_host() { # user@host, with IPv6 addresses in brackets
@@ -4192,12 +4246,13 @@ project_load() { # NAME: the profile and its project here (PROJ)
 }
 
 # Starts the VM when needed; project_done shuts it down again if it was off.
+# (Runs come here too, with or without a project.)
 project_connect() {
   WAS_OFF=0
   [[ -n $C_DOMAIN && $(domstate 2>/dev/null) != running ]] && WAS_OFF=1
   resolve_target
   build_ssh_opts
-  [[ $C_OS != windows ]] || die "projects work with Linux VMs only"
+  [[ $C_OS != windows || -z ${P[PROJECT]:-} ]] || die "projects work with Linux VMs only"
 }
 project_done() {
   if ((WAS_OFF)) && [[ ${P[AUTOSTOP]:-on} == on ]]; then
@@ -4479,6 +4534,208 @@ done
 echo "$n"
 '
 
+# The same on Windows VMs, in PowerShell, with the same files. Windows
+# has no tmux, and OpenSSH ends what a session started when it closes, so a
+# run starts through WMI (Win32_Process.Create): its own process, outside the
+# SSH session. The task goes to Claude Code on stdin.
+# shellcheck disable=SC2016
+WIN_RUNS_PS='$r = "$env:USERPROFILE\.config\vmagents\runs"
+function Put($f, $v) { [IO.File]::WriteAllText($f, "$v`n") }
+function Get1($f) { if (Test-Path -LiteralPath $f) { ([IO.File]::ReadAllText($f)).Trim() } }
+function Now { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+function Alive($d) {
+  if (Test-Path -LiteralPath "$d\rc") { return $false }
+  $p = Get1 "$d\pid"
+  if (-not $p) { return $false }
+  $x = Get-Process -Id $p -ErrorAction SilentlyContinue
+  return [bool]($x -and $x.ProcessName -eq "powershell")
+}
+function RunDir($i) {
+  $d = Join-Path $r $i
+  if (-not (Test-Path -LiteralPath $d)) { Err "no run $i"; exit 4 }
+  $d
+}
+'
+
+# The script that runs in the run's own process (run.ps1 in its folder,
+# with the command line in cmd).
+# shellcheck disable=SC2016
+WIN_RUNNER_PS=$WIN_RUNS_PS'$d = Split-Path -Parent $MyInvocation.MyCommand.Path
+Put "$d\pid" $PID
+# This process and all it starts go into a job that ends them all when it
+# closes, as this process ends (or is stopped): nothing outlives the run.
+try {
+  Add-Type -Namespace VmAgents -Name Job -MemberDefinition ("[DllImport(`"kernel32.dll`")] public static extern IntPtr CreateJobObject(IntPtr a, IntPtr n);" +
+    "[DllImport(`"kernel32.dll`")] public static extern bool SetInformationJobObject(IntPtr j, int c, byte[] i, uint n);" +
+    "[DllImport(`"kernel32.dll`")] public static extern bool AssignProcessToJobObject(IntPtr j, IntPtr p);" +
+    "[DllImport(`"kernel32.dll`")] public static extern IntPtr GetCurrentProcess();")
+  $job = [VmAgents.Job]::CreateJobObject([IntPtr]::Zero, [IntPtr]::Zero)
+  $info = New-Object byte[] $(if ([IntPtr]::Size -eq 8) { 144 } else { 112 })
+  $info[17] = 0x20  # LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)
+  [void][VmAgents.Job]::SetInformationJobObject($job, 9, $info, $info.Length)
+  [void][VmAgents.Job]::AssignProcessToJobObject($job, [VmAgents.Job]::GetCurrentProcess())
+} catch { }
+$tf = "$env:USERPROFILE\.config\vmagents\claude-env"
+if (Test-Path -LiteralPath $tf) {
+  foreach ($l in Get-Content -LiteralPath $tf) {
+    if ($l -match "^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=(\S+)$") { Set-Item "env:$($Matches[1])" $Matches[2] }
+  }
+}
+$si = New-Object Diagnostics.ProcessStartInfo $env:ComSpec, ("/d /s /c `"" + (Get1 "$d\cmd") + " <`"$d\task`" >`"$d\log`" 2>&1`"")
+$si.UseShellExecute = $false
+$si.CreateNoWindow = $true
+$si.WorkingDirectory = Get1 "$d\dir"
+$p = [Diagnostics.Process]::Start($si)
+$p.WaitForExit()
+Put "$d\rc" $p.ExitCode
+Put "$d\ended" (Now)
+Remove-Item -LiteralPath "$d\pid" -ErrorAction SilentlyContinue
+'
+
+# Starts a run from the folder UPLOAD in the home folder (sent before with
+# scp: task and run.ps1). Prints the run's ID.
+win_run_start_ps() { # DIR UPLOAD CLAUDE_ARGS...
+  local dir=$1 up=$2 a args=''
+  shift 2
+  for a in "$@"; do args+=" $a"; done  # fixed options, no quoting needed
+  printf '%s' "$WIN_ENV_PS" "$WIN_RUNS_PS"
+  cat <<EOF
+\$up = Join-Path \$env:USERPROFILE $(psq "$up")
+try {
+  \$dir = Resolve-Dir $(psq "$dir")
+  if (-not (Test-Path -LiteralPath \$dir)) { New-Item -ItemType Directory -Force -Path \$dir | Out-Null }
+  \$dir = (Resolve-Path -LiteralPath \$dir).Path
+  \$c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not \$c) { Err "Claude Code is not installed on the VM (vmagents setup installs it)"; exit 127 }
+  New-Item -ItemType Directory -Force -Path \$r | Out-Null
+  \$i = 1
+  while (\$true) {
+    try { New-Item -ItemType Directory -Path (Join-Path \$r \$i) -ErrorAction Stop | Out-Null; break } catch { \$i++ }
+    if (\$i -gt 99999) { exit 1 }
+  }
+  \$d = Join-Path \$r \$i
+  Move-Item -LiteralPath "\$up\task", "\$up\run.ps1" -Destination \$d
+  Put "\$d\agent" "claude"
+  Put "\$d\started" (Now)
+  Put "\$d\dir" \$dir
+  \$line = '"' + \$c.Source + '"'
+  \$s = "\$env:USERPROFILE\.config\vmagents\claude-settings.json"
+  if (Test-Path -LiteralPath \$s) { \$line += ' --settings "' + \$s + '"' }
+  Put "\$d\cmd" (\$line + $(psq "$args"))
+} finally { Remove-Item -LiteralPath \$up -Recurse -Force -ErrorAction SilentlyContinue }
+\$cl = 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + "\$d\run.ps1" + '"'
+\$x = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$cl; CurrentDirectory = \$dir }
+if (\$x.ReturnValue -ne 0) { Err "could not start the run (Win32_Process.Create: \$(\$x.ReturnValue))"; exit 1 }
+# Until the run notes its process, it would look interrupted.
+for (\$n = 0; \$n -lt 50 -and -not (Test-Path -LiteralPath "\$d\pid") -and -not (Test-Path -LiteralPath "\$d\rc"); \$n++) { Start-Sleep -Milliseconds 100 }
+"\$i"
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+WIN_RUN_LIST_PS='if (-not (Test-Path -LiteralPath $r)) { exit 0 }
+$o = [Console]::OpenStandardOutput()
+Get-ChildItem -LiteralPath $r -Directory | Where-Object { $_.Name -match "^\d+$" } | Sort-Object { [int]$_.Name } | ForEach-Object {
+  $d = $_.FullName
+  $s = if (Test-Path -LiteralPath "$d\rc") { Get1 "$d\rc" } elseif (Alive $d) { "running" } else { "lost" }
+  $t = (("" + (Get1 "$d\task")) -split "`n")[0].TrimEnd("`r")
+  if ($t.Length -gt 200) { $t = $t.Substring(0, 200) }
+  $b = [Text.Encoding]::UTF8.GetBytes((@($_.Name, (Get1 "$d\agent"), $s, (Get1 "$d\started"), (Get1 "$d\ended"), $t) -join [char]31) + "`n")
+  $o.Write($b, 0, $b.Length)
+}
+$o.Flush()
+exit 0
+'
+
+# shellcheck disable=SC2016
+win_run_log_ps() { # ID FOLLOW
+  printf '%s' "$WIN_ENV_PS" "$WIN_RUNS_PS"
+  cat <<EOF
+\$d = RunDir $(psq "$1")
+\$follow = $(psq "$2")
+EOF
+  cat <<'EOF'
+$o = [Console]::OpenStandardOutput()
+function W($s) { $b = [Text.Encoding]::UTF8.GetBytes($s); $o.Write($b, 0, $b.Length); $o.Flush() }
+$a = Get1 "$d\agent"
+W ($(if ($a) { $a } else { "unknown" }) + "`n")
+$pos = 0
+function More {
+  if (-not (Test-Path -LiteralPath "$d\log")) { return }
+  $f = [IO.File]::Open("$d\log", "Open", "Read", "ReadWrite")
+  try { [void]$f.Seek($script:pos, "Begin"); $f.CopyTo($o); $script:pos = $f.Position } finally { $f.Close() }
+  $o.Flush()
+}
+if ($follow -eq "1") { while (Alive $d) { More; Start-Sleep 1 } }
+More
+if (Test-Path -LiteralPath "$d\rc") { W ("-- vmagents: the run ended, exit code " + (Get1 "$d\rc") + "`n") }
+elseif (-not (Alive $d)) { W "-- vmagents: the run was interrupted (the VM restarted?)`n" }
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+win_run_state_ps() { # ID
+  printf '%s' "$WIN_RUNS_PS"
+  printf '$d = Join-Path $r %s\n' "$(psq "$1")"
+  cat <<'EOF'
+if (-not (Test-Path -LiteralPath $d)) { "none" }
+elseif (Test-Path -LiteralPath "$d\rc") { "done " + (Get1 "$d\rc") }
+elseif (Alive $d) { "running" }
+else { "lost" }
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+win_run_stop_ps() { # ID
+  printf '%s' "$WIN_ENV_PS" "$WIN_RUNS_PS"
+  printf '$d = RunDir %s\n' "$(psq "$1")"
+  cat <<'EOF'
+# The run's process with everything it started (cmd, Claude, its tools).
+if (Alive $d) { & taskkill.exe /T /F /PID (Get1 "$d\pid") 2>&1 | Out-Null }
+if (-not (Test-Path -LiteralPath "$d\rc")) { Put "$d\rc" 143; Put "$d\ended" (Now) }
+Remove-Item -LiteralPath "$d\pid" -ErrorAction SilentlyContinue
+exit 0
+EOF
+}
+
+# shellcheck disable=SC2016
+WIN_RUN_CLEAN_PS='$n = 0
+if (Test-Path -LiteralPath $r) {
+  Get-ChildItem -LiteralPath $r -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "rc") } | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Recurse -Force
+    $n++
+  }
+}
+"$n"
+exit 0
+'
+
+# Runs one of the scripts above on the VM: sh on Linux, PowerShell on
+# Windows. (Windows: every exit code but 0 arrives as 1.)
+run_script() { # list|log|state|stop|clean ARGS...
+  local kind=$1
+  shift
+  if [[ $C_OS == windows ]]; then
+    case $kind in
+      list) win_run "$WIN_RUNS_PS$WIN_RUN_LIST_PS" ;;
+      log) win_run "$(win_run_log_ps "$@")" ;;
+      state) win_run "$(win_run_state_ps "$@")" | tr -d '\r' ;;
+      stop) win_run "$(win_run_stop_ps "$@")" ;;
+      clean) win_run "$WIN_RUNS_PS$WIN_RUN_CLEAN_PS" | tr -d '\r' ;;
+    esac
+    return
+  fi
+  local s
+  case $kind in
+    list) s=$RUN_LIST_SH ;; log) s=$RUN_LOG_SH ;; state) s=$RUN_STATE_SH ;;
+    stop) s=$RUN_STOP_SH ;; clean) s=$RUN_CLEAN_SH ;;
+  esac
+  run_ssh -T -- "$TARGET" "$(remote_cmd "$s" "$@")" </dev/null
+}
+
 # Claude Code's stream-json, readable: its text, and a line per tool it uses.
 RUN_FORMAT_PY='import json, sys
 def short(v, n=110):
@@ -4533,17 +4790,34 @@ notify_here() { # TITLE BODY
 }
 
 show_run_log() { # ID FOLLOW(0|1)
-  local cmd
-  cmd=$(remote_cmd "$RUN_LOG_SH" "$1" "$2")
-  run_ssh -T -- "$TARGET" "$cmd" </dev/null | {
+  run_script log "$1" "$2" | {
     local agent
     IFS= read -r agent || exit 4
+    agent=${agent%$'\r'}
     if [[ $agent == claude ]] && command -v python3 >/dev/null; then python3 -u -c "$RUN_FORMAT_PY"; else cat; fi
   }
 }
 
 run_state() { # ID: running, done RC, lost, none (or empty when the VM cannot be asked)
-  run_ssh -o BatchMode=yes -T -- "$TARGET" "$(remote_cmd "$RUN_STATE_SH" "$1")" </dev/null 2>/dev/null || true
+  local -a SSH_OPTS=("${SSH_OPTS[@]}" -o BatchMode=yes)
+  run_script state "$1" 2>/dev/null || true
+}
+
+# Windows: the task and the runner go over scp (a command line there holds
+# at most 8191 characters), then the start script moves them in. Sets id.
+win_start_run() { # TASK CLAUDE_ARGS...
+  local task=$1 tmp up rc=0
+  shift
+  tmp=$(mktemp -d) || return 1
+  up=vmagents-run-$$-$RANDOM
+  mkdir "$tmp/$up"
+  printf '%s\n' "$task" >"$tmp/$up/task"
+  printf '%s' "$WIN_RUNNER_PS" >"$tmp/$up/run.ps1"
+  run_scp -r "$tmp/$up" "$(scp_host):$up" || { rm -rf "$tmp"; die "could not send the task to $NAME (scp)"; }
+  rm -rf "$tmp"
+  id=$(win_run "$(win_run_start_ps "$C_DIR" "$up" "$@")") || rc=$?
+  id=${id//$'\r'/}
+  return "$rc"
 }
 
 cmd_run() {
@@ -4566,12 +4840,18 @@ cmd_run() {
   [[ -n ${task//[[:space:]]/} ]] || usage_error "run: give the task, e.g. $PROG run $name \"fix the failing tests\""
   load "$name"
   agent=${agent:-$C_AGENT}
-  [[ -n $C_SESSION ]] || die "runs need tmux on the VM; $NAME has no tmux session set (SESSION=)"
+  [[ -n $C_SESSION || $C_OS == windows ]] || die "runs need tmux on the VM; $NAME has no tmux session set (SESSION=)"
+  [[ $C_OS == windows && $agent != claude ]] && die "only Claude Code runs on Windows VMs for now"
   mapfile -t args < <(run_args "$agent")
   project_connect
   local cmd
-  cmd=$(remote_cmd "$RUN_START_SH" "$C_DIR" "$agent" "${args[@]}")
-  id=$(printf '%s\n' "$task" | run_ssh -T -- "$TARGET" "$cmd") || rc=$?
+  if [[ $C_OS == windows ]]; then
+    [[ $agent == claude ]] || { project_done; die "only Claude Code runs on Windows VMs for now"; }
+    win_start_run "$task" "${args[@]}" || rc=$?
+  else
+    cmd=$(remote_cmd "$RUN_START_SH" "$C_DIR" "$agent" "${args[@]}")
+    id=$(printf '%s\n' "$task" | run_ssh -T -- "$TARGET" "$cmd") || rc=$?
+  fi
   if ((rc == 120)); then
     info "$agent is not installed on the VM yet; installing it."
     run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$AGENT_INSTALL_SH" "$agent")" </dev/null ||
@@ -4582,7 +4862,11 @@ cmd_run() {
   fi
   if ((rc != 0)) || ! [[ $id =~ ^[0-9]+$ ]]; then project_done; die "could not start the run on $NAME (exit code $rc)"; fi
   [[ $agent == claude ]] || note_agent "$agent"
-  say "Run $id on $NAME: $(agent_label "$agent") works on it, without asking (in tmux session run-$id)."
+  if [[ $C_OS == windows ]]; then
+    say "Run $id on $NAME: $(agent_label "$agent") works on it, without asking (in a process of its own)."
+  else
+    say "Run $id on $NAME: $(agent_label "$agent") works on it, without asking (in tmux session run-$id)."
+  fi
   ((${RUN_STOP_AFTER:-0})) && WAS_OFF=1
   if ((!wait)); then
     local notify=0
@@ -4636,7 +4920,7 @@ cmd___runwait() {
     esac
     break
   done
-  task=$(run_ssh -o BatchMode=yes -T -- "$TARGET" "head -n 1 .config/vmagents/runs/$id/task" </dev/null 2>/dev/null) || task=''
+  task=$(run_script list 2>/dev/null | awk -F '\037' -v id="$id" '$1 == id { print $6 }') || task=''
   if [[ $state == "done 0" ]]; then
     notify_here "vmagents: $NAME" "Run $id finished: $task"
   else
@@ -4671,14 +4955,13 @@ cmd_runs() {
   fi
   resolve_target
   build_ssh_opts
-  [[ $C_OS != windows ]] || die "runs work with Linux VMs only"
   if ((clean)); then
-    say "Deleted $(run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_CLEAN_SH")" </dev/null) run(s) that ended."
+    say "Deleted $(run_script clean) run(s) that ended."
     return 0
   fi
   if [[ -n $id ]]; then
     if ((stop)); then
-      run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_STOP_SH" "$id")" </dev/null || die "no run $id on $NAME"
+      run_script stop "$id" || die "no run $id on $NAME"
       say "Run $id on $NAME stopped."
       return 0
     fi
@@ -4691,7 +4974,7 @@ cmd_runs() {
   fi
   ((stop)) && usage_error "runs: --stop needs the run's ID"
   local out
-  out=$(run_ssh -T -- "$TARGET" "$(remote_cmd "$RUN_LIST_SH")" </dev/null) || die "could not list the runs of $NAME"
+  out=$(run_script list) || die "could not list the runs of $NAME"
   if ((json)); then
     printf '['
     while IFS=$'\037' read -r i a s st en t; do
@@ -5614,6 +5897,1021 @@ print("%-3s %-17s %-5s %-22s %s" % (sys.argv[2], time.strftime("%Y-%m-%d %H:%M",
   say "Read one: $PROG history $NAME N    go on with one: $PROG $NAME --resume ID ($PROG history $NAME N shows it)"
 }
 
+# ------------------------------------------------------------------ phone
+
+# The phone opens the VMs in its browser: a small web server here (PHONE_PY)
+# lists them and gives each a terminal on the page, which runs "vmagents
+# NAME" (or "vmagents shell NAME") on this computer. It listens on this
+# computer's Tailscale address (encrypted end to end, nothing open to the
+# internet), or with --lan on the local network, and answers only who has
+# its key (in the link and the QR code). SSH apps get a port per VM, which
+# leads to the VM's SSH server and starts the VM when it is off.
+
+PHONE_DIR=$CONF_DIR/phone
+PHONE_PORT=7700
+
+phone_conf() { # LISTEN (tailscale|lan) and PORT, from the phone folder
+  PHONE_LISTEN=tailscale
+  local k v
+  [[ -f $PHONE_DIR/conf ]] || return 0
+  while IFS='=' read -r k v; do
+    case $k in
+      LISTEN) [[ $v == lan || $v == tailscale ]] && PHONE_LISTEN=$v ;;
+      PORT) [[ $v =~ ^[0-9]+$ ]] && ((v > 0 && v < 65536)) && PHONE_PORT=$v ;;
+    esac
+  done <"$PHONE_DIR/conf"
+}
+
+phone_save() {
+  mkdir -p "$PHONE_DIR"
+  printf 'LISTEN=%s\nPORT=%s\n' "$PHONE_LISTEN" "$PHONE_PORT" >"$PHONE_DIR/conf"
+}
+
+PHONE_ADDR=''
+phone_addr() { # sets PHONE_ADDR, this computer's address the phone reaches
+  if [[ -n ${VMAGENTS_PHONE_ADDR:-} ]]; then  # tests
+    PHONE_ADDR=$VMAGENTS_PHONE_ADDR
+    return 0
+  fi
+  if [[ $PHONE_LISTEN == lan ]]; then
+    PHONE_ADDR=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p') || PHONE_ADDR=''
+    [[ -n $PHONE_ADDR ]] || die "this computer has no local network address (is it on a network?)"
+    return 0
+  fi
+  local hint="the phone reaches this computer over Tailscale (free; encrypted; works from anywhere):
+  this computer: curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
+  the phone:     the Tailscale app, signed in with the same account
+Only on the same Wi-Fi, without Tailscale: $PROG phone --lan"
+  command -v tailscale >/dev/null || die "Tailscale is not installed; $hint"
+  PHONE_ADDR=$(tailscale ip -4 2>/dev/null | head -n 1) || PHONE_ADDR=''
+  [[ $PHONE_ADDR =~ ^[0-9.]+$ ]] || die "Tailscale is not connected on this computer (sudo tailscale up); $hint"
+}
+
+phone_pid_file() { printf '%s/vmagents-phone-%s.lock.pid' "${XDG_RUNTIME_DIR:-/tmp}" "$(id -u)"; }
+
+PHONE_RUNNING=''
+phone_running() { # 0 when the server runs; PHONE_RUNNING: its "ADDRESS PORT"
+  local f pid addr port
+  f=$(phone_pid_file)
+  [[ -f $f ]] || return 1
+  read -r pid addr port <"$f" || return 1
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  PHONE_RUNNING="$addr $port"
+}
+
+phone_stop() {
+  local f pid
+  f=$(phone_pid_file)
+  [[ -f $f ]] || return 0
+  read -r pid _ <"$f" || true
+  [[ $pid =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
+  rm -f -- "${f:?}"
+  return 0
+}
+
+# Starts the server (again, when its address or port changed).
+phone_ensure() {
+  if phone_running; then
+    [[ $PHONE_RUNNING == "$PHONE_ADDR $PHONE_PORT" ]] && return 0
+    phone_stop
+    sleep 0.3
+  fi
+  local self i
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  setsid -f "$self" __phone "$PHONE_ADDR" "$PHONE_PORT" </dev/null >/dev/null 2>&1 || die "could not start the phone server"
+  for ((i = 0; i < 50; i++)); do
+    (exec 3<>"/dev/tcp/$PHONE_ADDR/$PHONE_PORT") 2>/dev/null && return 0
+    sleep 0.1
+  done
+  die "the phone server does not answer on $PHONE_ADDR:$PHONE_PORT (port taken? another one: $PROG phone --port N; log: $CACHE_DIR/phone.log)"
+}
+
+cmd___phone() { # ADDRESS PORT
+  command -v flock >/dev/null || die "the phone server needs flock (util-linux)"
+  local lock self
+  lock=$(phone_pid_file)
+  lock=${lock%.pid}
+  exec 9>>"$lock"
+  flock -n 9 || return 0  # one at a time
+  printf '%s %s %s\n' "$$" "$1" "$2" >"$lock.pid"
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  mkdir -p "$CACHE_DIR"
+  VMAGENTS_CACHE=$CACHE_DIR exec python3 -c "$PHONE_PY" "$self" "$PHONE_DIR" "$1" "$2"
+}
+
+# __addr NAME: the VM's SSH address and port (started first when needed).
+cmd___addr() {
+  load "$1"
+  resolve_target >/dev/null
+  printf '%s %s\n' "$TARGET" "$C_PORT"
+}
+
+phone_token() { # [new]: prints the key, made when there is none (or new)
+  if [[ ${1:-} == new || ! -s $PHONE_DIR/token ]]; then
+    (umask 077 && mkdir -p "$PHONE_DIR" && head -c 24 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' >"$PHONE_DIR/token") ||
+      die "could not write $PHONE_DIR/token"
+  fi
+  chmod 700 "$PHONE_DIR"
+  cat "$PHONE_DIR/token"
+}
+
+# shellcheck disable=SC2016
+RMKEY_SH='umask 077
+k=$(cat)
+f=$HOME/.ssh/authorized_keys
+[ -f "$f" ] || exit 0
+grep -vxF "$k" "$f" >"$f.vmagents"
+mv "$f.vmagents" "$f" && chmod 600 "$f"
+'
+
+win_rmkey_ps() { # PUBKEY
+  cat <<EOF
+\$k = $(psq "$1")
+foreach (\$f in @("\$env:USERPROFILE\.ssh\authorized_keys", "\$env:ProgramData\ssh\administrators_authorized_keys")) {
+  if (Test-Path -LiteralPath \$f) {
+    \$lines = @(Get-Content -LiteralPath \$f | Where-Object { \$_ -ne "" -and \$_ -ne \$k })
+    try { Set-Content -LiteralPath \$f -Value \$lines -Encoding Ascii } catch { }
+  }
+}
+exit 0
+EOF
+}
+
+phone_ssh_lines() { [[ -f $PHONE_DIR/ssh ]] && cat "$PHONE_DIR/ssh"; return 0; }
+
+phone_user() { # NAME: the VM's user
+  read_profile "$1" 2>/dev/null
+  printf '%s' "${P[USER]:-$(id -un)}"
+}
+
+phone_ssh() { # NAME KEY|FILE|off
+  local name=${1:-} what=${2:-} key port used
+  [[ -n $name && -n $what && $# -eq 2 ]] ||
+    usage_error "phone ssh: give NAME and the SSH app's public key (or a file with it), or off"
+  load "$name"
+  phone_conf
+  if [[ $what == off ]]; then
+    [[ -f $PHONE_DIR/$NAME.pub ]] || die "no SSH app is let into $NAME"
+    key=$(<"$PHONE_DIR/$NAME.pub")
+    project_connect
+    if [[ $C_OS == windows ]]; then
+      run_ssh -T -- "$TARGET" "$(win_cmd "$(win_rmkey_ps "$key")")" </dev/null || warn "could not remove the key from the VM"
+    else
+      printf '%s\n' "$key" | run_ssh -T -- "$TARGET" "$(remote_cmd "$RMKEY_SH")" || warn "could not remove the key from the VM"
+    fi
+    project_done
+    phone_ssh_lines | awk -v n="$NAME" '$1 != n' >"$PHONE_DIR/ssh.new" && mv "$PHONE_DIR/ssh.new" "$PHONE_DIR/ssh"
+    rm -f -- "${PHONE_DIR:?}/${NAME:?}.pub"
+    say "The SSH app's key is removed from $NAME, and its port closed."
+    return 0
+  fi
+  key=$what
+  [[ -f $what ]] && key=$(<"$what")
+  key=$(printf '%s' "$key" | tr -d '\r' | sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}')
+  [[ $key =~ ^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+)\ [A-Za-z0-9+/]+=*(\ .*)?$ ]] ||
+    die "not an SSH public key (it starts with ssh-ed25519, ssh-rsa, ...; the SSH app shows it, often under Keys)"
+  phone_addr
+  project_connect
+  if [[ $C_OS == windows ]]; then
+    run_ssh -T -- "$TARGET" "$(win_cmd "$(win_addkey_ps "$key")")" </dev/null >/dev/null || die "could not add the key on the VM"
+  else
+    printf '%s\n' "$key" | run_ssh -T -- "$TARGET" "$(remote_cmd "$ADDKEY_SH")" || die "could not add the key on the VM"
+  fi
+  project_done
+  mkdir -p "$PHONE_DIR"
+  printf '%s\n' "$key" >"$PHONE_DIR/$NAME.pub"
+  port=$(phone_ssh_lines | awk -v n="$NAME" '$1 == n { print $2; exit }')
+  if [[ -z $port ]]; then
+    used=" $(phone_ssh_lines | awk '{ printf "%s ", $2 }')"
+    for ((port = PHONE_PORT + 1; port < 65536; port++)); do
+      [[ $used == *" $port "* ]] || break
+    done
+    printf '%s %s\n' "$NAME" "$port" >>"$PHONE_DIR/ssh"
+  fi
+  phone_token >/dev/null
+  phone_ensure
+  say "The SSH app can go into $NAME now. In the app:"
+  say "  host $PHONE_ADDR   port $port   user $C_USER   key: the app's own"
+  say "  (ssh -p $port $C_USER@$PHONE_ADDR)"
+  say "A VM that is off starts when the app connects (that takes a minute: connect again if the app gives up)."
+  say "Claude Code opens on login when autostart is on ($PROG autostart $NAME on)."
+}
+
+cmd_phone() {
+  local new=0 json=0 listen='' port='' url token rows line sep='' name
+  case ${1:-} in
+    ssh) shift; phone_ssh "$@"; return ;;
+    off)
+      (($# == 1)) || usage_error "phone off: no more arguments"
+      phone_stop
+      say "Phone access is off. (On again: $PROG phone; the link stays the same.)"
+      return 0 ;;
+    on) shift ;;
+  esac
+  while (($#)); do
+    case $1 in
+      --new) new=1 ;;
+      --lan) listen=lan ;;
+      --tailscale) listen=tailscale ;;
+      --port)
+        if ! [[ ${2:-} =~ ^[0-9]+$ ]] || ((10#$2 < 1 || 10#$2 > 65535)); then usage_error "phone: --port needs a port number"; fi
+        port=$((10#$2)); shift ;;
+      --json) json=1 ;;
+      *) usage_error "phone: unknown argument $1" ;;
+    esac
+    shift
+  done
+  command -v python3 >/dev/null || die "phone access needs python3 on this computer"
+  phone_conf
+  [[ -n $listen ]] && PHONE_LISTEN=$listen
+  [[ -n $port ]] && PHONE_PORT=$port
+  [[ -n $listen$port ]] && phone_save
+  phone_addr
+  if ((new)); then token=$(phone_token new); else token=$(phone_token); fi
+  phone_ensure
+  url="http://$PHONE_ADDR:$PHONE_PORT/#t=$token"
+  mapfile -t rows < <(python3 -c "$QR_PY" "$url")
+  if ((json)); then
+    printf '{"on": true, "listen": %s, "address": %s, "port": %d, "url": %s, "qr": [' "$(json_str "$PHONE_LISTEN")" \
+      "$(json_str "$PHONE_ADDR")" "$PHONE_PORT" "$(json_str "$url")"
+    for line in "${rows[@]}"; do printf '%s%s' "$sep" "$(json_str "$line")"; sep=', '; done
+    printf '], "ssh": ['
+    sep=''
+    while read -r name port; do
+      [[ -n $name ]] || continue
+      printf '%s{"name": %s, "port": %d, "user": %s}' "$sep" "$(json_str "$name")" "$port" "$(json_str "$(phone_user "$name")")"
+      sep=', '
+    done < <(phone_ssh_lines)
+    printf ']}\n'
+    return 0
+  fi
+  if [[ $PHONE_LISTEN == lan ]]; then
+    say "Phone access is on, on the local network ($PHONE_ADDR): the phone must be on the same Wi-Fi."
+    say "(Others on that network could read along; over Tailscale it is encrypted: $PROG phone --tailscale)"
+  else
+    say "Phone access is on, over Tailscale: the phone needs the Tailscale app, with the same account."
+  fi
+  say "Scan the code with the phone's camera, or open the link there:"
+  say ""
+  if [[ -t 1 ]]; then
+    for line in "${rows[@]}"; do printf '  \e[97;40m%s\e[0m\n' "$line"; done
+  else
+    printf '  %s\n' "${rows[@]}"
+  fi
+  say ""
+  say "  $url"
+  say ""
+  say "There: your VMs; tap one for its agent (or a shell), in a terminal on the phone."
+  say "The link is the key: share it with no one. A new one (the old one stops working): $PROG phone --new"
+  while read -r name port; do
+    [[ -n $name ]] && say "SSH app into $name: ssh -p $port $(phone_user "$name")@$PHONE_ADDR"
+  done < <(phone_ssh_lines)
+  say "An SSH app instead of the browser: $PROG phone ssh NAME \"its public key\"    off: $PROG phone off"
+}
+
+QR_PY=$(cat <<'QR_END'
+import sys
+
+# QR code (ISO 18004), byte mode, error correction level M, versions 1-9.
+# (version: (EC codewords per block, [(blocks, data codewords per block)]))
+BLOCKS = {1: (10, [(1, 16)]), 2: (16, [(1, 28)]), 3: (26, [(1, 44)]), 4: (18, [(2, 32)]),
+          5: (24, [(2, 43)]), 6: (16, [(4, 27)]), 7: (18, [(4, 31)]), 8: (22, [(2, 38), (2, 39)]),
+          9: (22, [(3, 36), (2, 37)])}
+ALIGN = {2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42],
+         9: [6, 26, 46]}
+
+EXP, LOG = [0] * 512, [0] * 256
+x = 1
+for i in range(255):
+    EXP[i] = x
+    LOG[x] = i
+    x <<= 1
+    if x & 0x100:
+        x ^= 0x11D
+for i in range(255, 512):
+    EXP[i] = EXP[i - 255]
+
+
+def rs_ec(data, n):
+    """The n error correction codewords of data (Reed-Solomon over GF(256))."""
+    gen = [1]
+    for i in range(n):
+        nxt = [0] * (len(gen) + 1)
+        for j, g in enumerate(gen):
+            nxt[j] ^= g
+            if g:
+                nxt[j + 1] ^= EXP[LOG[g] + i]
+        gen = nxt
+    rem = list(data) + [0] * n
+    for i in range(len(data)):
+        c = rem[i]
+        if c:
+            for j in range(1, len(gen)):
+                if gen[j]:
+                    rem[i + j] ^= EXP[LOG[gen[j]] + LOG[c]]
+    return rem[len(data):]
+
+
+def codewords(data):
+    for ver in range(1, 10):
+        ec, groups = BLOCKS[ver]
+        cap = sum(b * k for b, k in groups)
+        if 4 + 8 + 8 * len(data) <= cap * 8:
+            break
+    else:
+        raise ValueError("too long for a QR code here")
+    bits = [0, 1, 0, 0] + [int(b) for b in format(len(data), "08b")]
+    for c in data:
+        bits += [int(b) for b in format(c, "08b")]
+    bits += [0] * min(4, cap * 8 - len(bits))
+    bits += [0] * (-len(bits) % 8)
+    cw = [int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8)]
+    for i in range(cap - len(cw)):
+        cw.append((0xEC, 0x11)[i % 2])
+    blocks, pos = [], 0
+    for b, k in groups:
+        for _ in range(b):
+            blocks.append(cw[pos:pos + k])
+            pos += k
+    out = []
+    for i in range(max(len(b) for b in blocks)):
+        out += [b[i] for b in blocks if i < len(b)]
+    ecs = [rs_ec(b, ec) for b in blocks]
+    for i in range(ec):
+        out += [e[i] for e in ecs]
+    return ver, out
+
+
+def bch(value, poly, bits):
+    v = value << bits
+    while v.bit_length() > bits:
+        v ^= poly << (v.bit_length() - poly.bit_length())
+    return (value << bits) | v
+
+
+MASKS = [lambda r, c: (r + c) % 2 == 0, lambda r, c: r % 2 == 0, lambda r, c: c % 3 == 0,
+         lambda r, c: (r + c) % 3 == 0, lambda r, c: (r // 2 + c // 3) % 2 == 0,
+         lambda r, c: r * c % 2 + r * c % 3 == 0, lambda r, c: (r * c % 2 + r * c % 3) % 2 == 0,
+         lambda r, c: ((r + c) % 2 + r * c % 3) % 2 == 0]
+
+
+def matrix(text, mask=None):
+    """The QR code of text as rows of 0/1 (1: dark), without the quiet zone."""
+    ver, cw = codewords(text.encode())
+    n = 17 + 4 * ver
+    m = [[0] * n for _ in range(n)]
+    fn = [[False] * n for _ in range(n)]
+
+    def put(r, c, v):
+        m[r][c] = v
+        fn[r][c] = True
+
+    for r0, c0 in ((0, 0), (0, n - 7), (n - 7, 0)):
+        for r in range(-1, 8):
+            for c in range(-1, 8):
+                if 0 <= r0 + r < n and 0 <= c0 + c < n:
+                    d = max(abs(r - 3), abs(c - 3))
+                    put(r0 + r, c0 + c, int(d != 2 and d != 4))
+    for i in range(8, n - 8):
+        put(6, i, int(i % 2 == 0))
+        put(i, 6, int(i % 2 == 0))
+    al = ALIGN.get(ver, [])
+    for r in al:
+        for c in al:
+            if (r == 6 and c == 6) or (r == 6 and c == al[-1]) or (r == al[-1] and c == 6):
+                continue  # the finders' corners
+            for dr in range(-2, 3):
+                for dc in range(-2, 3):
+                    put(r + dr, c + dc, int(max(abs(dr), abs(dc)) != 1))
+    for i in range(9):  # format information, written per mask below
+        for r, c in ((8, i), (i, 8)):
+            if not fn[r][c]:
+                put(r, c, 0)
+    for i in range(8):
+        put(8, n - 1 - i, 0)
+        put(n - 1 - i, 8, 0)
+    put(n - 8, 8, 1)  # the dark module
+    if ver >= 7:
+        v = bch(ver, 0x1F25, 12)
+        for i in range(18):
+            b = (v >> i) & 1
+            put(n - 11 + i % 3, i // 3, b)
+            put(i // 3, n - 11 + i % 3, b)
+    bits = [(c >> (7 - i)) & 1 for c in cw for i in range(8)]
+    bits += [0] * (7 if 2 <= ver <= 6 else 0)
+    k, up = 0, True
+    c = n - 1
+    while c > 0:
+        if c == 6:
+            c -= 1
+        for i in range(n):
+            r = n - 1 - i if up else i
+            for cc in (c, c - 1):
+                if not fn[r][cc]:
+                    m[r][cc] = bits[k] if k < len(bits) else 0
+                    k += 1
+        up = not up
+        c -= 2
+
+    def masked(p):
+        out = [row[:] for row in m]
+        for r in range(n):
+            for cc in range(n):
+                if not fn[r][cc] and MASKS[p](r, cc):
+                    out[r][cc] ^= 1
+        f = bch((0 << 3) | p, 0x537, 10) ^ 0x5412  # level M: 00
+        for i in range(15):
+            b = (f >> i) & 1
+            r, cc = (i, 8) if i < 6 else (7, 8) if i == 6 else (8, 8) if i == 7 else (8, 7) if i == 8 else (8, 14 - i)
+            out[r][cc] = b
+            r, cc = (8, n - 1 - i) if i < 8 else (n - 15 + i, 8)
+            out[r][cc] = b
+        return out
+
+    def penalty(g):
+        s = 0
+        for lines in (g, list(zip(*g))):
+            for row in lines:
+                run, prev = 0, None
+                for v in row:
+                    if v == prev:
+                        run += 1
+                    else:
+                        if run >= 5:
+                            s += run - 2
+                        run, prev = 1, v
+                if run >= 5:
+                    s += run - 2
+                t = "".join(map(str, row))
+                s += 40 * (t.count("10111010000") + t.count("00001011101"))
+        for r in range(n - 1):
+            for cc in range(n - 1):
+                if g[r][cc] == g[r][cc + 1] == g[r + 1][cc] == g[r + 1][cc + 1]:
+                    s += 3
+        dark = sum(map(sum, g))
+        s += abs(dark * 20 - n * n * 10) // (n * n) * 10
+        return s
+
+    if mask is not None:
+        return masked(mask)
+    return min((masked(p) for p in range(8)), key=penalty)
+
+
+def text_rows(text, quiet=2):
+    """Rows of half blocks, two modules per character: light modules drawn,
+    dark ones left as background (show them white on black)."""
+    g = matrix(text)
+    n = len(g)
+    full = [[0] * (n + 2 * quiet) for _ in range(quiet)]
+    full += [[0] * quiet + row + [0] * quiet for row in g]
+    full += [[0] * (n + 2 * quiet) for _ in range(quiet + 1)]
+    out = []
+    for r in range(0, n + 2 * quiet, 2):
+        line = ""
+        for c in range(n + 2 * quiet):
+            top, bottom = not full[r][c], not full[r + 1][c]  # light?
+            line += " ▀▄█"[top + 2 * bottom]
+        out.append(line)
+    return out
+
+
+if __name__ == "__main__":
+    for line in text_rows(sys.argv[1]):
+        print(line)
+QR_END
+)
+
+PHONE_PY=$(cat <<'PHONE_END'
+import asyncio, base64, fcntl, hashlib, json, os, secrets, signal, struct, subprocess, sys, termios, time
+from urllib.parse import parse_qs, urlsplit
+
+# vmagents's phone access: a web page with the VMs and a terminal for each
+# (vmagents NAME, or a shell, in a terminal of this computer), and plain TCP
+# forwards for SSH apps, one port per VM, that start the VM when needed.
+# Arguments: vmagents itself, its phone folder (token, ssh), address, port.
+SELF, DIR, ADDR, PORT = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+LOG = os.path.join(os.environ.get("VMAGENTS_CACHE", DIR), "phone.log")
+MAX_SESSIONS = 8
+sessions = 0
+
+
+def log(msg):
+    try:
+        with open(LOG, "a") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
+def token():
+    try:
+        with open(os.path.join(DIR, "token")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def allowed(q):
+    t = token()
+    return bool(t) and secrets.compare_digest(q.get("t", [""])[0].encode(), t.encode())
+
+
+async def respond(w, status, body, ctype="text/plain; charset=utf-8", extra=""):
+    if isinstance(body, str):
+        body = body.encode()
+    w.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
+            f"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+            f"{extra}Connection: close\r\n\r\n".encode() + body)
+    await w.drain()
+
+
+async def vms():
+    p = await asyncio.create_subprocess_exec(SELF, "list", "--json", stdout=subprocess.PIPE,
+                                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    out, _ = await p.communicate()
+    try:
+        items = json.loads(out or b"[]")
+    except ValueError:
+        items = []
+    keep = ("name", "state", "os", "agent", "domain", "default")
+    return [{k: v.get(k) for k in keep} for v in items if isinstance(v, dict) and not v.get("try")]
+
+
+# --- WebSocket (RFC 6455), what a browser needs
+
+async def ws_read(r):
+    """One message: (opcode, payload). Fragments are joined."""
+    data, first = b"", None
+    while True:
+        b1, b2 = await r.readexactly(2)
+        op, n = b1 & 15, b2 & 127
+        if not b2 & 128:
+            raise ConnectionError("unmasked frame")
+        if n == 126:
+            n = struct.unpack(">H", await r.readexactly(2))[0]
+        elif n == 127:
+            n = struct.unpack(">Q", await r.readexactly(8))[0]
+        if n > 1 << 20:
+            raise ConnectionError("frame too big")
+        mask = await r.readexactly(4)
+        p = bytearray(await r.readexactly(n))
+        for i in range(n):
+            p[i] ^= mask[i % 4]
+        if op >= 8:  # control frames come between fragments
+            return op, bytes(p)
+        if first is None:
+            first = op
+        data += p
+        if b1 & 128:
+            return first, data
+
+
+def ws_frame(op, data):
+    n = len(data)
+    head = bytes([128 | op])
+    if n < 126:
+        head += bytes([n])
+    elif n < 1 << 16:
+        head += bytes([126]) + struct.pack(">H", n)
+    else:
+        head += bytes([127]) + struct.pack(">Q", n)
+    return head + data
+
+
+async def terminal(r, w, q):
+    """vmagents NAME (the agent) or vmagents shell NAME in a terminal here,
+    over the WebSocket: output as binary messages; from the page "i" + keys,
+    "r" + {"cols", "rows"}; at the end "x" + the exit code."""
+    global sessions
+    name, kind = q.get("vm", [""])[0], q.get("kind", ["agent"])[0]
+    try:
+        cols = max(20, min(500, int(q.get("cols", ["80"])[0])))
+        rows = max(5, min(300, int(q.get("rows", ["24"])[0])))
+    except ValueError:
+        cols, rows = 80, 24
+    argv = [SELF, "shell", name] if kind == "shell" else [SELF, "connect", name]
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", VMAGENTS_PHONE="1")
+
+    def ctty():
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True,
+                            preexec_fn=ctty, close_fds=True)
+    os.close(slave)
+    os.set_blocking(master, False)
+    sessions += 1
+    log(f"{w.get_extra_info('peername')[0]} opened {kind} on {name}")
+    loop = asyncio.get_running_loop()
+    out = asyncio.Queue()
+
+    def readable():
+        try:
+            data = os.read(master, 65536)
+        except BlockingIOError:
+            return
+        except OSError:
+            data = b""
+        if not data:
+            loop.remove_reader(master)
+        out.put_nowait(data)
+
+    loop.add_reader(master, readable)
+
+    async def pump_out():
+        while True:
+            data = await out.get()
+            if not data:
+                return
+            w.write(ws_frame(2, data))
+            await w.drain()
+
+    async def pump_in():
+        while True:
+            op, data = await ws_read(r)
+            if op == 8:
+                return
+            if op == 9:
+                w.write(ws_frame(10, data))
+                continue
+            if op != 1 or not data:
+                continue
+            if data[:1] == b"i":
+                os.write(master, data[1:])
+            elif data[:1] == b"r":
+                try:
+                    s = json.loads(data[1:])
+                    fcntl.ioctl(master, termios.TIOCSWINSZ,
+                                struct.pack("HHHH", max(5, min(300, int(s["rows"]))), max(20, min(500, int(s["cols"]))), 0, 0))
+                except (ValueError, KeyError, TypeError, OSError):
+                    pass
+
+    tasks = [asyncio.ensure_future(pump_out()), asyncio.ensure_future(pump_in())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except Exception:
+        pass
+    finally:
+        for t in tasks:
+            t.cancel()
+        loop.remove_reader(master)
+        if proc.poll() is None:
+            # The page went away: the agent goes on in tmux on the VM.
+            try:
+                os.killpg(proc.pid, signal.SIGHUP)
+            except OSError:
+                pass
+            for _ in range(30):
+                if proc.poll() is not None:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait()
+        os.close(master)
+        sessions -= 1
+        log(f"{w.get_extra_info('peername')[0]} closed {kind} on {name} ({proc.returncode})")
+        try:
+            w.write(ws_frame(1, b"x%d" % (proc.returncode or 0)) + ws_frame(8, struct.pack(">H", 1000)))
+            await w.drain()
+        except (ConnectionError, RuntimeError):
+            pass
+
+
+async def http(r, w):
+    try:
+        head = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), 20)
+    except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+        w.close()
+        return
+    try:
+        lines = head.decode("latin-1").split("\r\n")
+        method, target, _ = lines[0].split(" ", 2)
+        h = {k.strip().lower(): v.strip() for k, v in (l.split(":", 1) for l in lines[1:] if ":" in l)}
+        u = urlsplit(target)
+        q = parse_qs(u.query)
+        if method != "GET":
+            await respond(w, "405 Method Not Allowed", "")
+        elif u.path == "/":
+            await respond(w, "200 OK", PAGE, "text/html; charset=utf-8",
+                          "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+                          "style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src data:\r\n")
+        elif u.path in ("/api/vms", "/ws") and not allowed(q):
+            await asyncio.sleep(1)  # slows down guessing
+            log(f"{w.get_extra_info('peername')[0]} wrong key")
+            await respond(w, "403 Forbidden", "wrong key: open the link from vmagents phone again")
+        elif u.path == "/api/vms":
+            await respond(w, "200 OK", json.dumps(await vms()), "application/json")
+        elif u.path == "/ws" and h.get("upgrade", "").lower() == "websocket" and "sec-websocket-key" in h:
+            if sessions >= MAX_SESSIONS:
+                await respond(w, "503 Service Unavailable", "too many terminals open")
+                return
+            acc = base64.b64encode(hashlib.sha1((h["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
+            w.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                    b"Sec-WebSocket-Accept: " + acc + b"\r\n\r\n")
+            await w.drain()
+            await terminal(r, w, q)
+        else:
+            await respond(w, "404 Not Found", "not found")
+    except (ConnectionError, asyncio.IncompleteReadError, ValueError):
+        pass
+    finally:
+        try:
+            w.close()
+        except RuntimeError:
+            pass
+
+
+# --- SSH apps: a port per VM, forwarded to its SSH server
+
+async def forward(name, r, w):
+    peer = w.get_extra_info("peername")[0]
+    log(f"{peer} SSH to {name}")
+    p = await asyncio.create_subprocess_exec(SELF, "__addr", name, stdout=subprocess.PIPE,
+                                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    try:
+        out, _ = await asyncio.wait_for(p.communicate(), 600)
+        host, port = out.decode().split()
+        vr, vw = await asyncio.wait_for(asyncio.open_connection(host, int(port)), 30)
+    except Exception as e:
+        log(f"{peer} SSH to {name} failed: {e!r}")
+        w.close()
+        return
+
+    async def pipe(a, b):
+        try:
+            while data := await a.read(65536):
+                b.write(data)
+                await b.drain()
+        except (ConnectionError, RuntimeError):
+            pass
+        finally:
+            try:
+                b.close()
+            except RuntimeError:
+                pass
+
+    await asyncio.gather(pipe(r, vw), pipe(vr, w))
+
+
+def ssh_ports():
+    out = {}
+    try:
+        with open(os.path.join(DIR, "ssh")) as f:
+            for line in f:
+                p = line.split()
+                if len(p) == 2 and p[1].isdigit():
+                    out[int(p[1])] = p[0]
+    except OSError:
+        pass
+    return out
+
+
+async def main():
+    server = await asyncio.start_server(http, ADDR, PORT, limit=16384)
+    log(f"listening on {ADDR}:{PORT}")
+    forwards = {}
+    while True:  # follows the ssh file: ports come and go
+        want = ssh_ports()
+        for port in list(forwards):
+            if forwards[port][0] != want.get(port):
+                s = forwards.pop(port)[1]
+                if s:
+                    s.close()
+        for port, name in want.items():
+            if port not in forwards:
+                try:
+                    s = await asyncio.start_server(lambda r, w, n=name: forward(n, r, w), ADDR, port)
+                except OSError as e:
+                    s = None  # not again until the file changes
+                    log(f"cannot listen on {ADDR}:{port} for {name}: {e}")
+                forwards[port] = (name, s)
+        await asyncio.sleep(2)
+
+
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0d1014">
+<title>vmagents</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" integrity="sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js" integrity="sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js" integrity="sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn" crossorigin="anonymous"></script>
+<style>
+:root { --bg: #0d1014; --panel: #161b22; --line: #2a313b; --text: #e6e9ee; --dim: #8b949e; --accent: #d97757; --ok: #3fb950; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; min-height: 40px; touch-action: manipulation; }
+button:active { background: var(--line); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.hidden { display: none !important; }
+#list { max-width: 640px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
+#list h1 { font-size: 20px; margin: 4px 0 2px; }
+#list .sub { color: var(--dim); font-size: 14px; margin-bottom: 16px; }
+.vm { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.vm .top { display: flex; align-items: baseline; gap: 8px; }
+.vm .name { font-weight: 600; font-size: 17px; overflow-wrap: anywhere; }
+.vm .state { color: var(--dim); font-size: 13px; }
+.vm .state.on { color: var(--ok); }
+.vm .acts { display: flex; gap: 8px; margin-top: 10px; }
+.vm .acts button { flex: 1; }
+.msg { color: var(--dim); padding: 24px 0; }
+#term-view { position: fixed; left: 0; top: 0; width: 100%; display: flex; flex-direction: column; height: 100%; }
+#bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line); }
+#bar .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#bar button { min-height: 34px; padding: 4px 10px; }
+#term { flex: 1; min-height: 0; padding: 4px 0 0 4px; background: #0b0d10; }
+#keys { display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto; border-top: 1px solid var(--line); scrollbar-width: none; }
+#keys button { flex: none; min-width: 44px; min-height: 36px; padding: 4px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+#keys button.on { background: var(--accent); border-color: var(--accent); }
+#compose { display: flex; gap: 6px; padding: 0 8px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+#compose textarea { flex: 1; min-width: 0; resize: none; height: 40px; max-height: 120px; font: inherit; font-size: 16px;
+  color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+#over { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; background: rgba(13, 16, 20, .88); text-align: center; padding: 16px; }
+</style>
+</head>
+<body>
+<div id="list">
+  <h1>vmagents</h1>
+  <div class="sub" id="sub"></div>
+  <div id="vms"><div class="msg" id="loading"></div></div>
+</div>
+<div id="term-view" class="hidden">
+  <div id="bar">
+    <button id="back"></button>
+    <div class="title" id="title"></div>
+    <button id="smaller" aria-label="smaller">A-</button>
+    <button id="bigger" aria-label="bigger">A+</button>
+  </div>
+  <div id="term"></div>
+  <div id="keys"></div>
+  <div id="compose">
+    <textarea id="text" rows="1" autocapitalize="sentences"></textarea>
+    <button class="primary" id="send"></button>
+  </div>
+  <div id="over" class="hidden"><div id="over-text"></div><button class="primary" id="over-btn"></button></div>
+</div>
+<script>
+"use strict";
+const TR = (navigator.language || "").toLowerCase().startsWith("tr");
+const S = TR ? {
+  sub: "Telefondan VM'lerin", loading: "Yükleniyor...", none: "Henüz VM yok.", shell: "Kabuk", back: "VM'ler",
+  send: "Gönder", type: "Yaz, Gönder'e bas (Enter da olur)", off: "kapalı", running: "açık", lost: "Bağlantı koptu.",
+  again: "Yeniden bağlan", ended: "Oturum bitti.", list: "Listeye dön", badkey: "Anahtar geçersiz. Bilgisayarda \"vmagents phone\" ile çıkan bağlantıyı yeniden aç.",
+  noload: "Liste alınamadı. Bilgisayar açık ve vmagents phone çalışıyor mu?", starts: "kapalıysa açılır",
+  nolib: "Terminal kitaplığı yüklenemedi: telefonun internete çıkabilmesi gerekiyor."
+} : {
+  sub: "Your VMs, from the phone", loading: "Loading...", none: "No VMs yet.", shell: "Shell", back: "VMs",
+  send: "Send", type: "Type, then Send (or Enter)", off: "off", running: "running", lost: "The connection dropped.",
+  again: "Reconnect", ended: "The session ended.", list: "Back to the list", badkey: "Wrong key. Open the link from \"vmagents phone\" on the computer again.",
+  noload: "Could not get the list. Is the computer on and vmagents phone running?", starts: "starts it when off",
+  nolib: "The terminal library did not load: the phone needs to reach the internet."
+};
+const AGENTS = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", aider: "aider" };
+const $ = id => document.getElementById(id);
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); return v; } catch (e) { return null; } }
+
+let key = new URLSearchParams(location.hash.slice(1)).get("t") || store("vmagents-key") || "";
+if (location.hash && store("vmagents-key", key) === key) history.replaceState(null, "", location.pathname);
+
+$("sub").textContent = S.sub; $("loading").textContent = S.loading;
+$("back").textContent = "‹ " + S.back; $("send").textContent = S.send; $("text").placeholder = S.type;
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+async function load() {
+  let r;
+  try { r = await fetch("/api/vms?t=" + encodeURIComponent(key), { cache: "no-store" }); }
+  catch (e) { $("vms").replaceChildren(el("div", "msg", S.noload)); return; }
+  if (r.status === 403) { $("vms").replaceChildren(el("div", "msg", S.badkey)); return; }
+  const vms = await r.json();
+  if (!vms.length) { $("vms").replaceChildren(el("div", "msg", S.none)); return; }
+  $("vms").replaceChildren(...vms.map(vm => {
+    const card = el("div", "vm"), top = el("div", "top"), acts = el("div", "acts");
+    const on = !vm.domain || vm.state === "running";
+    top.append(el("span", "name", vm.name),
+      el("span", "state" + (on && vm.domain ? " on" : ""), vm.domain ? (on ? S.running : S.off + " · " + S.starts) : (vm.os || "")));
+    const a = el("button", "primary", AGENTS[vm.agent] || AGENTS.claude), sh = el("button", "", S.shell);
+    a.onclick = () => open(vm.name, "agent", a.textContent);
+    sh.onclick = () => open(vm.name, "shell", S.shell);
+    acts.append(a, sh); card.append(top, acts);
+    return card;
+  }));
+}
+
+let term, fit, ws, cur, ended = false, ctrl = false, size = +(store("vmagents-font") || 14);
+
+function sendRaw(s) { if (ws && ws.readyState === 1) ws.send(s); }
+function input(d) {
+  if (ctrl && d.length === 1) {
+    const c = d.toUpperCase().charCodeAt(0);
+    if (c >= 64 && c <= 95) d = String.fromCharCode(c - 64);
+    ctrl = false; $("ctrl").classList.remove("on");
+  }
+  sendRaw("i" + d);
+}
+function fitNow() {
+  const v = window.visualViewport;
+  $("term-view").style.height = (v ? v.height : window.innerHeight) + "px";
+  if (fit) try { fit.fit(); } catch (e) { }
+}
+
+function open(name, kind, label) {
+  if (!window.Terminal || !window.FitAddon) { alert(S.nolib); return; }
+  cur = { name, kind };
+  $("title").textContent = name + " · " + label;
+  $("list").classList.add("hidden"); $("term-view").classList.remove("hidden");
+  if (!term) {
+    term = new Terminal({ fontSize: size, fontFamily: "ui-monospace, Menlo, Consolas, monospace", cursorBlink: true,
+      scrollback: 5000, theme: { background: "#0b0d10" } });
+    fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open($("term"));
+    const ta = $("term").querySelector("textarea");
+    if (ta) { ta.setAttribute("autocapitalize", "off"); ta.setAttribute("autocorrect", "off"); ta.spellcheck = false; }
+    term.onData(input);
+    term.onResize(({ cols, rows }) => sendRaw("r" + JSON.stringify({ cols, rows })));
+  }
+  term.reset();
+  fitNow();
+  connect();
+}
+
+function connect() {
+  ended = false; $("over").classList.add("hidden");
+  if (ws) { ws.onclose = null; ws.close(); }
+  const q = new URLSearchParams({ t: key, vm: cur.name, kind: cur.kind, cols: term.cols, rows: term.rows });
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?" + q);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = e => {
+    if (typeof e.data === "string") { if (e.data[0] === "x") ended = true; return; }
+    term.write(new Uint8Array(e.data));
+  };
+  ws.onclose = () => over(ended ? S.ended : S.lost, ended ? S.list : S.again, ended ? close : connect);
+  if (!matchMedia("(pointer: coarse)").matches) term.focus();
+}
+
+function over(text, btn, fn) { $("over-text").textContent = text; $("over-btn").textContent = btn; $("over-btn").onclick = fn; $("over").classList.remove("hidden"); }
+
+function close() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  $("term-view").classList.add("hidden"); $("list").classList.remove("hidden");
+  load();
+}
+
+const KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["Ctrl", null], ["^C", "\x03"],
+  ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["Enter", "\r"], ["^D", "\x04"]];
+for (const [label, seq] of KEYS) {
+  const b = el("button", "", label);
+  if (seq === null) { b.id = "ctrl"; b.onclick = () => { ctrl = !ctrl; b.classList.toggle("on", ctrl); }; }
+  else b.onclick = () => sendRaw("i" + seq);
+  b.addEventListener("mousedown", e => e.preventDefault());  // keeps the keyboard where it is
+  $("keys").append(b);
+}
+
+function sendText() {
+  const t = $("text").value;
+  if (!t) { sendRaw("i\r"); return; }
+  // Several lines as one paste, so the first line break does not send it early.
+  sendRaw("i" + (t.includes("\n") ? "\x1b[200~" + t + "\x1b[201~" : t));
+  setTimeout(() => sendRaw("i\r"), 50);
+  $("text").value = ""; $("text").style.height = "";
+}
+$("send").onclick = sendText;
+$("send").addEventListener("mousedown", e => e.preventDefault());
+$("text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); } });
+$("text").addEventListener("input", () => { const t = $("text"); t.style.height = ""; t.style.height = Math.min(120, t.scrollHeight) + "px"; });
+$("back").onclick = close;
+function font(d) { size = Math.max(9, Math.min(24, size + d)); store("vmagents-font", String(size)); if (term) { term.options.fontSize = size; fitNow(); } }
+$("smaller").onclick = () => font(-1); $("bigger").onclick = () => font(1);
+window.addEventListener("resize", fitNow);
+if (window.visualViewport) visualViewport.addEventListener("resize", fitNow);
+document.addEventListener("visibilitychange", () => {
+  // Phones drop the connection in the background: back, it comes again by itself.
+  if (document.visibilityState === "visible" && cur && !ended && (!ws || ws.readyState > 1) && !$("term-view").classList.contains("hidden")) connect();
+});
+load();
+</script>
+</body>
+</html>"""
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+PHONE_END
+)
+
 # ------------------------------------------------------------------ ui
 
 # The terminal UI: a Textual app (UI_PY below) that runs this script.
@@ -5697,10 +6995,22 @@ TEXTS = {"tr": {
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
     "[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · c: changes · "
-    "H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · L: language · q: quit[/]":
+    "H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · m: phone · L: language · q: quit[/]":
         "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · "
         "c: değişiklikler · H: geçmiş · i: ağ · o: portlar · t: başlat/durdur · u: anlık görüntüler · Y: sormadan · "
-        "L: dil · q: çık[/]",
+        "m: telefon · L: dil · q: çık[/]",
+    "Phone": "Telefon", "[b]Your VMs on the phone[/b]": "[b]Telefonda VM'lerin[/b]",
+    "Starting phone access...": "Telefon erişimi açılıyor...", "New link (n)": "Yeni bağlantı (n)",
+    "Turn off (o)": "Kapat (o)", "Same Wi-Fi (w)": "Aynı Wi-Fi (w)",
+    "Phone access did not start.": "Telefon erişimi açılamadı.", "Phone access is off.": "Telefon erişimi kapandı.",
+    "Scan it with the phone's camera. [dim]On the local network: the phone must be on the same Wi-Fi.[/]":
+        "Telefonun kamerasıyla okut. [dim]Yerel ağda: telefon aynı Wi-Fi'da olmalı.[/]",
+    "Scan it with the phone's camera. [dim]Over Tailscale: the phone needs the Tailscale app, with the same "
+    "account.[/]": "Telefonun kamerasıyla okut. [dim]Tailscale üzerinden: telefonda aynı hesapla Tailscale "
+                   "uygulaması olmalı.[/]",
+    "There: your VMs; tap one for its agent or a shell. The link is the key: share it with no one.":
+        "Orada VM'lerin var; birine dokun, asistanı ya da kabuğu açılsın. Bağlantı anahtardır: kimseyle paylaşma.",
+    "SSH app into {n}: ssh -p {p} {u}@{a}": "{n} için SSH uygulaması: ssh -p {p} {u}@{a}",
     "[b]No VMs yet.[/b]\n\nPress [b]n[/b] to make one: choose the system, RAM, CPUs, disk, the AI assistants "
     "and the ports you want.\n\nOr add one you have: vmagents add NAME --host IP":
         "[b]Henüz VM yok.[/b]\n\n[b]n[/b] ile bir tane oluştur: sistemi, RAM'i, işlemciyi, diski, yapay zeka "
@@ -5828,7 +7138,7 @@ TEXTS = {"tr": {
         "kapanırlar.",
     "Copies": "Kopya", "Memory per copy, MB [dim]({free} MB free here)[/]": "Kopya başına bellek, MB [dim](burada "
     "{free} MB boş)[/]", "e.g. make the start page load faster": "ör. ana sayfayı hızlandır",
-    "Task": "Görev", "Tasks work with Linux VMs only.": "Görevler yalnızca Linux VM'lerinde çalışır.",
+    "Task": "Görev",
     "[b]Which agent[/b] does the task on {n}?": "{n} üzerindeki görevi [b]hangi asistan[/b] yapsın?",
     "[b]Task for {agent} on {n}[/b]\nIt works alone, in {dir}, without asking (it is a VM: undo takes it back). "
     "Follow it in a tab; a dot marks the tab when it ends.": "[b]{n} üzerinde {agent} için görev[/b]\n{dir} içinde "
@@ -6391,6 +7701,8 @@ class Creating(Vertical):
         self.run_create()
 
     def focus_default(self):
+        if self.app.current_pane() != self.id:  # a retry after you went to another tab
+            return
         b = [b for b in self.query(Button) if not b.disabled and b.id != "cancel"]
         try:
             (b[0] if b else self.query_one("#output", RichLog)).focus()
@@ -6425,7 +7737,8 @@ class Creating(Vertical):
             status.update(T("[green]Done.[/] {n} is ready.", n=self.v["name"]))
             for b in self.query(Button):
                 b.disabled = b.id == "cancel"
-            self.query_one("#open", Button).focus()
+            if self.app.current_pane() == self.id:
+                self.query_one("#open", Button).focus()
         else:
             status.update(T("[red]Creating {n} failed[/] (exit code {rc}); see above. If a half-made VM is left, "
                             "delete it in the list (d).", n=self.v["name"], rc=rc))
@@ -7066,6 +8379,77 @@ class OpenAs(ModalScreen):
     def selected(self, e):
         self.dismiss(e.option.id)
 
+class Phone(ModalScreen):
+    """vmagents phone: the QR code for the phone's browser. n: a new link,
+    o: off, w: the local network instead of Tailscale; h, Esc: back."""
+    BINDINGS = [Binding("escape", "dismiss(None)", show=False), Binding("h", "dismiss(None)", show=False),
+                Binding("n", "load('--new')", show=False), Binding("o", "off", show=False),
+                Binding("w", "load('--lan')", show=False)]
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static(T("[b]Your VMs on the phone[/b]"))
+            yield Static(T("Starting phone access..."), id="phone-text")
+            yield Static("", id="qr")
+            yield Static("", id="phone-more")
+            with Horizontal(classes="buttons"):
+                yield Button(T("New link (n)"), id="new")
+                yield Button(T("Turn off (o)"), id="off")
+                yield Button(T("Same Wi-Fi (w)"), id="lan", classes="hidden")
+
+    def on_mount(self):
+        self.action_load("")
+
+    @work(thread=True, exclusive=True)
+    def action_load(self, extra):
+        r = cli("phone", "--json", *([extra] if extra else []), timeout=30)
+        self.app.call_from_thread(self.shown, *r)
+
+    def shown(self, rc, out, err):
+        try:
+            info = json.loads(out) if rc == 0 else None
+        except ValueError:
+            info = None
+        text, qr, more = self.query_one("#phone-text", Static), self.query_one("#qr", Static), \
+            self.query_one("#phone-more", Static)
+        if not info:
+            msg = err.strip().replace("vmagents: ", "", 1) or T("Phone access did not start.")
+            text.update(Text(msg, style="red"))
+            qr.update("")
+            more.update("")
+            self.query_one("#lan").remove_class("hidden")
+            return
+        self.query_one("#lan").add_class("hidden")
+        if info["listen"] == "lan":
+            text.update(T("Scan it with the phone's camera. [dim]On the local network: the phone must be on the "
+                          "same Wi-Fi.[/]"))
+        else:
+            text.update(T("Scan it with the phone's camera. [dim]Over Tailscale: the phone needs the Tailscale app, "
+                          "with the same account.[/]"))
+        qr.update(Text("\n".join(info["qr"]), style="bright_white on black"))
+        lines = [Text(info["url"], style="dim"),
+                 Text(T("There: your VMs; tap one for its agent or a shell. The link is the key: share it with no "
+                        "one."))]
+        for s in info.get("ssh") or []:
+            lines.append(Text(T("SSH app into {n}: ssh -p {p} {u}@{a}", n=s["name"], p=s["port"], u=s["user"],
+                                a=info["address"])))
+        more.update(Text("\n").join(lines))
+
+    def action_off(self):
+        rc, _, err = cli("phone", "off", timeout=15)
+        self.app.notify(T("Phone access is off.") if rc == 0 else err.strip())
+        self.dismiss(None)
+
+    @on(Button.Pressed)
+    def pressed(self, e):
+        if e.button.id == "new":
+            self.action_load("--new")
+        elif e.button.id == "off":
+            self.action_off()
+        elif e.button.id == "lan":
+            self.action_load("--lan")
+
+
 # ------------------------------------------------------------------ the app: the VM list
 
 class VMTable(VimTable):
@@ -7086,7 +8470,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes", "yolo", "task", "try", "net", "history"}
+                "refresh", "project", "changes", "yolo", "task", "try", "net", "history", "phone"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -7101,7 +8485,9 @@ class VmAgentsUI(App):
     #side { width: 2fr; border-left: solid $primary; padding: 0 1; }
     #log { height: 8; border-top: solid $primary; }
     .dialog { width: 76; height: auto; max-height: 90%; border: thick $primary; background: $surface; padding: 1 2; }
-    Confirm, TypeName, Pick, Ask, Resize, OpenAs { align: center middle; }
+    Confirm, TypeName, Pick, Ask, Resize, OpenAs, Phone { align: center middle; }
+    #qr { width: auto; margin: 1 0; }
+    .hidden { display: none; }
     .buttons { height: auto; margin-top: 1; }
     .buttons Button { margin-right: 2; }
     .error { color: $error; height: auto; }
@@ -7162,6 +8548,7 @@ class VmAgentsUI(App):
                             show=more, priority=True),
                     Binding("Y", "yolo", T("Yolo"), show=False), Binding("i", "net", T("Network"), show=False),
                     Binding("H", "history", T("History"), show=False),
+                    Binding("m", "phone", T("Phone"), show=False),
                     Binding("L", "language", other), Binding("q", "quit", T("Quit")),
                     Binding("g", "refresh", show=False)] + [
                 Binding(str(i), f"goto_tab({i})", show=False) for i in range(1, 10)] + [
@@ -7217,7 +8604,7 @@ class VmAgentsUI(App):
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
                         "c: changes · H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · "
-                        "L: language · q: quit[/]"))
+                        "m: phone · L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -7549,7 +8936,7 @@ class VmAgentsUI(App):
                 last = self.pane(self.last) if self.last in self.pane_ids() else None
                 self.show(last.id if last in terms else terms[-1].id)
             return
-        if kind not in ("shell", "login", "claude") and vm.get("os") == "windows":
+        if kind not in ("shell", "login", "claude", "run") and vm.get("os") == "windows":
             self.notify(T("Only Claude Code runs on Windows VMs."))
             return
         for t in terms:
@@ -7701,9 +9088,6 @@ class VmAgentsUI(App):
         """A task for an agent, done alone on the VM (vmagents run), followed in a tab."""
         if not (vm := self.need_vm(busy_ok=True)):
             return
-        if vm.get("os") == "windows":
-            self.notify(T("Tasks work with Linux VMs only."))
-            return
         n = vm["name"]
         installed = vm.get("agents") or []
         default = vm.get("agent", "claude")
@@ -7724,7 +9108,13 @@ class VmAgentsUI(App):
                                    agent=AGENT_NAMES[agent], n=n, dir=where),
                                  [("task", T("Task"), "", T("e.g. make the failing tests pass"))],
                                  lambda v: "" if v["task"].strip() else T("Write the task.")), chosen_task)
+        if vm.get("os") == "windows":  # only Claude Code there
+            chosen_agent("claude")
+            return
         self.push_screen(Pick(T("[b]Which agent[/b] does the task on {n}?", n=n), options), chosen_agent)
+
+    def action_phone(self):
+        self.push_screen(Phone())
 
     def action_history(self):
         if not (vm := self.need_vm(busy_ok=True)):
@@ -8294,8 +9684,8 @@ main() {
     help | -h | --help)
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
-    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | templates | history | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy | __phone | __addr) shift; "cmd_$cmd" "$@" ;;
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | templates | history | phone | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

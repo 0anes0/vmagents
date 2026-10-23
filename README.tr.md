@@ -12,7 +12,7 @@
   ![Diller](https://img.shields.io/badge/aray%C3%BCz-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Projeler](#projeler) · [Komutlar](#komutlar)
+  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Telefon](#telefondan) · [Projeler](#projeler) · [Komutlar](#komutlar)
 </div>
 
 ---
@@ -52,6 +52,7 @@ arayüzünden** yap: `vmagents ui`
 | **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
 | **Bir görev, birkaç deneme** | `vmagents try dev 3 "görev"`: VM'in saniyeler içinde üç kopyası, her biri görevi yapar (istersen farklı asistanlarla); en iyisini alırsın. |
 | **Kısa tasmalı ağ** | `vmagents net dev restricted`: VM yalnızca listesindeki adreslere (asistanların servisleri, paket depoları, GitHub) ulaşır; senin bilgisayarında uygulanır. |
+| **Telefondan** | `vmagents phone` bir QR kod gösterir: okut, telefonun tarayıcısında VM'lerin listelenir ve asistanları bir terminalde açılır (Tailscale ile her yerden). SSH uygulamaları için de her VM'e bir port. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
 | **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust ya da kendi şablonun) onu bir iş türüne göre hazırlar. |
@@ -241,6 +242,11 @@ iş bitince yine kapatılır; görev sürerken otomatik kapanma ve boşta kapanm
 açık bırakır. Bir [projeyle](#projeler) birlikte `vmagents changes` ve `take`
 sonucu dal olarak geri getirir. Arayüzde `a` görev verir ve onu bir sekmede izler.
 
+Görevler Windows VM'lerinde de çalışır (yalnızca Claude Code): orada tmux
+olmadığı için görev WMI ile başlatılan kendi Windows sürecini alır ve bağlantı
+kopunca da sürer. `runs` onu aynı şekilde gösterir, izler ve durdurur; durdurunca
+başlattığı her şey de kapanır.
+
 ## Bir görevi birkaç kez dene
 
 ```sh
@@ -286,6 +292,38 @@ pacman'ın onu kullanmasını sağlar. VM'in libvirt ağı ve diğer VM'lerin
 değişmez. Burada python3 gerekir; ufw gibi bir güvenlik duvarı varsa VM ağının
 bu bilgisayara vekilin portundan (18080 ve sonrası) ulaşmasına izin ver.
 Arayüzde `i` kısıtlar, bir adrese izin verir ya da açar.
+
+## Telefondan
+
+```sh
+vmagents phone                         # bir QR kod: telefonun kamerasıyla okut
+vmagents phone ssh dev "ssh-ed25519 AAAA... termius"   # ya da bir SSH uygulaması (açık anahtarıyla)
+vmagents phone off                     # yeniden kapat
+```
+
+Telefonun tarayıcısında VM'lerinin olduğu bir sayfa açılır; birine dokun,
+asistanı ya da bir kabuk telefonda bir terminalde (xterm.js) açılsın. Bu,
+bilgisayarındaki oturumun aynısıdır: asistan VM'de tmux'ta çalışır, yani masada
+bir şey başlat, koltuktan bak. Kapalı bir VM başlatılır. Bir çubuk telefon
+klavyesinde olmayan tuşları verir (Esc, Tab, Shift+Tab, Ctrl, oklar); altındaki
+kutu bütün bir mesajı tek seferde gönderir, böylece telefonun kendi klavyesi,
+otomatik düzeltmesi ve sesle yazması çalışır. Telefon uyanınca sayfa kendiliğinden
+yeniden bağlanır.
+
+Sayfa senin bilgisayarında çalışan küçük bir web sunucusudur ve
+[Tailscale](https://tailscale.com) (ücretsiz) üzerinden erişilir: şifreli, her
+yerden, internete hiçbir şey açılmaz. Bilgisayara kur
+(`curl -fsSL https://tailscale.com/install.sh | sh`, sonra `sudo tailscale up`),
+telefona da uygulamasını aynı hesapla kur. Yalnızca aynı Wi-Fi'da mı?
+`vmagents phone --lan` (o zaman şifresizdir; okul ve otel ağları cihazların
+birbirini görmesini çoğu zaman engeller). QR koddaki bağlantı rastgele bir anahtar
+taşır, sunucu onsuz hiçbir şeye cevap vermez; `--new` yenisini yapar. Kimin
+bağlandığı `~/.cache/vmagents/phone.log`'a yazılır. Arayüzde: `m`.
+
+SSH uygulamaları (Termius, Blink, JuiceSSH) da çalışır: `phone ssh AD ANAHTAR`
+uygulamanın açık anahtarını VM'e koyar ve ona bilgisayarında bir port verir
+(7701, ...); bu port VM'in SSH sunucusuna gider, VM kapalıysa önce başlatır.
+Otomatik başlatma açıksa girişte Claude Code açılır.
 
 ## Projeler
 
@@ -618,6 +656,8 @@ vmagents take AD [--branch DAL] [--pr]   o iş burada dal olarak (ya da pull req
 
 vmagents open [AD] [PORT...]     VM'in portu burada, tarayıcında ([YEREL:]PORT; --lan)
 vmagents ports AD 3000,5173      her bağlantıda yönlendirilen portlar (off: hiçbiri)
+vmagents phone [--lan] [--new] [--port N] | phone off   telefonda VM'lerin: okutulacak bir QR kod
+vmagents phone ssh AD ANAHTAR|off  telefondaki SSH uygulaması VM'e (burada VM başına bir port)
 vmagents undo AD [GÖRÜNTÜ]       bu oturumdan önceye (ya da GÖRÜNTÜ'ye) dön
 vmagents snapshot AD [--name GÖRÜNTÜ] [ETİKET]   anlık görüntü al; snapshots AD listeler
 vmagents snapshot AD --label GÖRÜNTÜ ETİKET      etiketini değiştir
@@ -698,8 +738,8 @@ Testler vmagents'ı sahte `ssh`, `virsh`, `virt-install` ve `curl`'e karşı
 klasöründe çalışır. CI her gönderimde bunları shellcheck ile birlikte çalıştırır.
 Her test dosyasının neyi kapsadığı ve gerçek VM'lerde elle nelerin denendiği
 [İngilizce README'de](README.md#tests) ayrıntılı olarak yazıyor: Debian, Ubuntu
-ve Arch VM'leri, Windows 10, Claude Code kancaları, arayüz, projeler, görevler,
-kopyalar, kısıtlı ağ ve AUR paketi.
+ve Arch VM'leri, Windows 10 (görevler dahil), Claude Code kancaları, arayüz,
+projeler, görevler, kopyalar, kısıtlı ağ, telefon sayfası ve AUR paketi.
 
 ## Sınırlar
 
@@ -708,7 +748,8 @@ kopyalar, kısıtlı ağ ve AUR paketi.
   çalışır: bağlantı, port açma, pano, bildirimler, boşta kapanma; onları kendin başlat.
 - Windows VM'lerinde tmux yoktur, oturumlar bağlantıyla biter;
   `LC_VMAGENTS=off` ile otomatik başlatmayı atlamak yalnızca Linux VM'lerinde çalışır.
-- Pano, diğer asistanlar, projeler, görevler ve kısıtlı ağ Linux VM'i ister. Kopyalar (`try`)
+- Pano, diğer asistanlar, projeler ve kısıtlı ağ Linux VM'i ister; Windows'ta görevler
+  yalnızca Claude Code ile çalışır. Kopyalar (`try`)
   vmagents ile kurulmuş bir VM, kısıtlı ağ bir libvirt ağındaki bir libvirt VM'i ister.
 - Düz bir `ssh` girişi VM'i hiç kapatmaz (o sırada vmagents çalışmıyordur; boşta
   kapanma sonra kapatır). Boşta kapanma, az işlemci kullanan uzun işleri (bir
