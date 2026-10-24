@@ -57,8 +57,8 @@ class DepsTests(SandboxTest):
         self.assertIn("To install with apt (sudo asks for your password): python3 git libvirt-daemon-system "
                       "libvirt-clients virtinst qemu-system-x86 qemu-utils xorriso dnsmasq-base", r.stdout)
         calls = self.calls()
-        self.assertIn("sudo apt-get update -qq", calls)
-        self.assertIn("apt-get install -y python3 git libvirt-daemon-system libvirt-clients virtinst qemu-system-x86 "
+        self.assertIn("sudo apt-get -o DPkg::Lock::Timeout=600 update -qq", calls)
+        self.assertIn("apt-get -o DPkg::Lock::Timeout=600 install -y python3 git libvirt-daemon-system libvirt-clients virtinst qemu-system-x86 "
                       "qemu-utils xorriso dnsmasq-base\n", calls)
         self.assertIn("curl -LsSf https://astral.sh/uv/install.sh", calls)
         self.assertTrue((self.sb.home / ".local" / "bin" / "uv").exists())
@@ -89,9 +89,19 @@ class DepsTests(SandboxTest):
     def test_desktop_and_all(self):
         write_exe(self.sb.bin / "apt-get", RECORD)
         self.sb.run("deps", "--yes", "--all", "--no-libvirt")
-        line = [l for l in self.calls().splitlines() if l.startswith("apt-get install")][0]
+        line = [l for l in self.calls().splitlines() if l.startswith("apt-get -o DPkg::Lock::Timeout=600 install")][0]
         self.assertTrue(line.endswith("python3 git libnotify-bin xclip sshfs"), line)
         self.assertNotIn("systemctl", self.calls())  # no libvirt: its service left alone
+
+    def test_waits_for_apt(self):
+        # apt busy at first (a computer updating itself just after it started): tried again.
+        write_exe(self.sb.bin / "apt-get", RECORD + 'f="$LOG.busy"; [ "$3" = update ] && [ ! -e "$f" ] && '
+                  '{ : >"$f"; echo "E: Could not get lock" >&2; exit 100; }\nexit 0\n')
+        write_exe(self.sb.bin / "sleep", "#!/bin/sh\n")
+        r = self.sb.run("deps", "--yes")
+        self.assertIn("apt is busy", r.stderr)
+        self.assertEqual(self.calls().count("update -qq"), 4)  # (sudo and apt-get, twice)
+        self.assertIn("install -y", self.calls())
 
     def test_asks_first(self):
         write_exe(self.sb.bin / "apt-get", RECORD)
@@ -112,7 +122,7 @@ class DepsTests(SandboxTest):
         env.pop("VMAGENTS_NO_DEPS")
         out = run_in_pty([str(VMAGENTS), "list"], env, self.sb.tmp)
         self.assertRegex(out, r"First run: vmagents puts what it uses on this computer:.* git ")
-        self.assertIn("apt-get install -y", self.calls())
+        self.assertIn("apt-get -o DPkg::Lock::Timeout=600 install -y", self.calls())
         self.assertTrue((self.sb.conf / "deps-checked").exists())
         self.log.write_text("")
         out = run_in_pty([str(VMAGENTS), "list"], env, self.sb.tmp)

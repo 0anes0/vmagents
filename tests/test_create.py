@@ -39,6 +39,13 @@ if cmd == "pool-info" and st.get("nopool"):
     print("error: failed to get pool 'default'", file=sys.stderr); sys.exit(1)
 if cmd == "pool-define-as":
     st.pop("nopool", None); save(); sys.exit(0)
+if cmd == "net-info" and rest[0] == "vmagents" and "vmagents-net" not in st:
+    print("error: failed to get network 'vmagents'", file=sys.stderr); sys.exit(1)
+if cmd == "net-start" and rest[0] == "default" and st.get("netbusy"):
+    print("error: Failed to start network default\nerror: internal error: Network is already in use by interface enp1s0",
+          file=sys.stderr); sys.exit(1)
+if cmd == "net-define":
+    st["vmagents-net"] = open(args[1]).read(); save(); sys.exit(0)
 if cmd in ("pool-info", "net-info", "net-start", "net-autostart", "pool-refresh", "pool-build", "pool-start",
            "pool-autostart", "uri"):
     sys.exit(0)
@@ -178,6 +185,24 @@ class CreateTests(CreateBase):
         calls = [c["argv"] for c in self.sb.calls() if c["prog"] == "virsh"]
         self.assertIn(["pool-define-as", "default", "dir", "--target", "/var/lib/libvirt/images"], calls)
         self.assertIn(["pool-autostart", "default"], calls)
+
+    def test_own_network_when_the_default_cannot_start(self):
+        # This computer itself on 192.168.122.0/24 (a VM in a VM, or such a LAN): new VMs get "vmagents".
+        st = self.state(); st["netbusy"] = True; self.lv.write_text(json.dumps(st))
+        r = self.create("a")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("new VMs get a network of their own: vmagents, 192.168.", r.stderr)
+        xml = self.state()["vmagents-net"]
+        self.assertIn("<name>vmagents</name>", xml)
+        self.assertIn("<forward mode='nat'/>", xml)
+        argv = self.sb.calls("virt-install")[-1]["argv"]
+        self.assertIn("network=vmagents,model=virtio", argv)
+        calls = [c["argv"] for c in self.sb.calls() if c["prog"] == "virsh"]
+        self.assertIn(["net-autostart", "vmagents"], calls)
+        self.assertNotIn(["net-autostart", "default"], calls)  # the default network is left alone
+        self.sb.clear_log()
+        self.create("b")  # the second one finds it there
+        self.assertNotIn("net-define", [c["argv"][0] for c in self.sb.calls() if c["prog"] == "virsh"])
 
     def test_run_from_the_ui_under_uv(self):
         # uv puts a venv python3 without the system modules first in PATH;

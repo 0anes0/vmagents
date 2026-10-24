@@ -1363,6 +1363,47 @@ stop_vm() { # 0|1 (1: pull the plug)
   fi
 }
 
+# The libvirt network for new VMs, started. When the default one cannot start
+# because its addresses are in use here (this computer is itself a VM on
+# 192.168.122.0/24, or its LAN is), new VMs get a network of their own,
+# "vmagents", on free addresses; the default network is left as it is.
+ensure_network() {
+  local err n sub='' tmp
+  vsh net-info "$CREATE_NETWORK" >/dev/null 2>&1 || die "libvirt network '$CREATE_NETWORK' not found (set VMAGENTS_NETWORK)"
+  if [[ $(vsh net-info "$CREATE_NETWORK" 2>/dev/null | awk '$1 == "Active:" { print $2 }') != yes ]] &&
+    ! err=$(vsh net-start "$CREATE_NETWORK" 2>&1); then
+    err=${err//$'\n'/ }
+    [[ $CREATE_NETWORK == default && $err == *"already in use"* ]] ||
+      die "libvirt network '$CREATE_NETWORK' does not start: ${err#error: }"
+    if ! vsh net-info vmagents >/dev/null 2>&1; then
+      for ((n = 150; n < 250; n++)); do
+        ip -4 route 2>/dev/null | grep -q "192\.168\.$n\." || { sub=$n; break; }
+      done
+      [[ -n $sub ]] || die "libvirt's default network does not start (its addresses are in use here), and no free 192.168.N.0/24 was found"
+      info "libvirt's default network cannot start here (its addresses, 192.168.122.0/24, are in use);"
+      info "new VMs get a network of their own: vmagents, 192.168.$sub.0/24."
+      tmp=$(mktemp)
+      cat >"$tmp" <<XML
+<network>
+  <name>vmagents</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-vmagents' stp='on' delay='0'/>
+  <ip address='192.168.$sub.1' netmask='255.255.255.0'>
+    <dhcp><range start='192.168.$sub.2' end='192.168.$sub.254'/></dhcp>
+  </ip>
+</network>
+XML
+      err=$(vsh net-define "$tmp" 2>&1) || { rm -f "$tmp"; die "libvirt: $err"; }
+      rm -f "$tmp"
+    fi
+    CREATE_NETWORK=vmagents
+    if [[ $(vsh net-info vmagents 2>/dev/null | awk '$1 == "Active:" { print $2 }') != yes ]]; then
+      err=$(vsh net-start vmagents 2>&1) || die "libvirt network 'vmagents' does not start: ${err#error: }"
+    fi
+  fi
+  vsh net-autostart "$CREATE_NETWORK" >/dev/null 2>&1 || true
+}
+
 # Sets FOUND_IP to the first IPv4 address of the domain (not on lo).
 FOUND_IP=
 find_ip() {
@@ -2969,7 +3010,8 @@ deps_have() { # KEY
     libvirt) command -v virsh >/dev/null && { command -v libvirtd >/dev/null || command -v virtqemud >/dev/null ||
       [[ -x $DEPS_SBIN/libvirtd || -x $DEPS_SBIN/virtqemud ]]; } ;;
     virtinst) command -v virt-install >/dev/null ;;
-    qemu) command -v qemu-img >/dev/null ;;
+    qemu) command -v qemu-img >/dev/null && { command -v qemu-system-x86_64 >/dev/null || command -v qemu-system-aarch64 >/dev/null ||
+      command -v qemu-kvm >/dev/null || [[ -x /usr/libexec/qemu-kvm ]]; } ;;
     xorriso) iso_tool >/dev/null ;;
     dnsmasq) command -v dnsmasq >/dev/null || [[ -x $DEPS_SBIN/dnsmasq ]] ;;
     notify) command -v notify-send >/dev/null ;;
@@ -3020,7 +3062,15 @@ deps_install() { # MANAGER SUDO PACKAGES...
   local m=$1 su=$2
   shift 2
   case $m in
-    apt) $su apt-get update -qq && $su env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    apt)
+      # A computer that just started may be updating itself: wait for apt's lock (up to 10 minutes).
+      local lock=(-o DPkg::Lock::Timeout=600) i
+      for ((i = 0; i < 60; i++)); do
+        $su apt-get "${lock[@]}" update -qq && break
+        ((i == 0)) && info "apt is busy (updates?); waiting for it..."
+        sleep 10
+      done
+      $su env DEBIAN_FRONTEND=noninteractive apt-get "${lock[@]}" install -y "$@" ;;
     dnf) $su dnf install -y "$@" ;;
     pacman) $su pacman -S --needed --noconfirm "$@" || $su pacman -Syu --needed --noconfirm "$@" ;;
     zypper) $su zypper --non-interactive install "$@" ;;
@@ -3341,9 +3391,7 @@ cmd_create() {
   vsh dominfo "$name" >/dev/null 2>&1 && die "libvirt already has a VM named '$name'"
   ensure_default_pool
   vsh pool-info "$CREATE_POOL" >/dev/null 2>&1 || die "libvirt storage pool '$CREATE_POOL' not found (set VMAGENTS_POOL)"
-  vsh net-info "$CREATE_NETWORK" >/dev/null 2>&1 || die "libvirt network '$CREATE_NETWORK' not found (set VMAGENTS_NETWORK)"
-  vsh net-start "$CREATE_NETWORK" >/dev/null 2>&1 || true
-  vsh net-autostart "$CREATE_NETWORK" >/dev/null 2>&1 || true
+  ensure_network
 
   C_KEY=$DEFAULT_KEY
   ensure_key
