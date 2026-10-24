@@ -57,11 +57,11 @@ class HistoryTests(Base):
         self.assertIn("* Bash(npm test)\n", shown)
         self.assertIn("Done: GET /health answers ok.", shown)
         self.assertNotIn("/clear", shown)
-        self.assertIn("Go on with it: vmagents vm --resume aaaa-old", shown)
+        self.assertIn("Go on with it: vmforai vm --resume aaaa-old", shown)
         self.assertIn("> fix the\n  failing tests", self.sb.run("history", "vm", "bbbb-new", check=0).stdout)
         self.assertIn("no session 7 on vm", self.sb.run("history", "vm", "7").stderr)
         self.assertIn("no session nope on vm", self.sb.run("history", "vm", "nope").stderr)
-        self.assertIn("vmagents history NAME", self.sb.run("help", "history", check=0).stdout)
+        self.assertIn("vmforai history NAME", self.sb.run("help", "history", check=0).stdout)
 
     def test_none_yet(self):
         shutil.rmtree(self.sb.remote_home / ".claude")

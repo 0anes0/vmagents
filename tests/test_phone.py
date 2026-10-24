@@ -1,5 +1,5 @@
 """phone: the QR code, the web server (page, list, WebSocket terminal, wrong
-keys) and the SSH forwards, against fake VMs and a fake vmagents."""
+keys) and the SSH forwards, against fake VMs and a fake vmforai."""
 import base64
 import hashlib
 import json
@@ -67,7 +67,7 @@ class QRTests(unittest.TestCase):
         self.assertEqual(rows[0], "█" * 25)  # the quiet zone is light
 
 
-# A fake vmagents for the server: "list --json", a terminal that says what
+# A fake vmforai for the server: "list --json", a terminal that says what
 # it is and echoes lines, and "__addr NAME" for the SSH forwards.
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -89,8 +89,8 @@ elif a[:1] == ["runs"] and a[-1] == "--stop":
     print(f"Run {a[2]} on {a[1]} stopped.")
 elif a[:2] == ["phone", "notify"]:
     sent = "true" if "test" in a or "--status" not in a else "null"
-    print('{"on": true, "server": "https://ntfy.sh", "topic": "vmagents-x", "url": "https://ntfy.sh/vmagents-x", '
-          '"app": "ntfy://ntfy.sh/vmagents-x", "sent": %s}' % sent)
+    print('{"on": true, "server": "https://ntfy.sh", "topic": "vmforai-x", "url": "https://ntfy.sh/vmforai-x", '
+          '"app": "ntfy://ntfy.sh/vmforai-x", "sent": %s}' % sent)
 elif a[:1] == ["run"]:
     print(f"Run 7 on {a[1]}: Claude Code works on it, without asking (in tmux session run-7).")
 elif a[:1] in (["start"], ["stop"]):
@@ -162,12 +162,12 @@ class ServerTests(SandboxTest):
         self.dir = self.sb.tmp / "phone"
         self.dir.mkdir()
         (self.dir / "token").write_text("sekret-key\n")
-        fake = write_exe(self.sb.tmp / "fake-vmagents", FAKE)
+        fake = write_exe(self.sb.tmp / "fake-vmforai", FAKE)
         self.port = free_port()
         self.ssh_srv, ssh_port = listening_port()
         self.addCleanup(self.ssh_srv.close)
         self.fake_log = self.sb.tmp / "fake.log"
-        env = dict(os.environ, VMAGENTS_CACHE=str(self.sb.tmp), FAKE_SSH_PORT=str(ssh_port), VMAGENTS_PHONE_FETCH="0",
+        env = dict(os.environ, VMFORAI_CACHE=str(self.sb.tmp), FAKE_SSH_PORT=str(ssh_port), VMFORAI_PHONE_FETCH="0",
                    FAKE_LOG=str(self.fake_log))
         self.proc = subprocess.Popen(["python3", "-c", PHONE, str(fake), str(self.dir), "127.0.0.1", str(self.port)],
                                      env=env, stdin=subprocess.DEVNULL)
@@ -259,7 +259,7 @@ class ServerTests(SandboxTest):
         self.assertEqual(self.get("/lib/other.js")[0], 404)
         self.assertEqual(self.get("/lib/../token")[0], 404)
         manifest = json.loads(self.get("/manifest.webmanifest")[2])
-        self.assertEqual((manifest["name"], manifest["display"], manifest["start_url"]), ("vmagents", "standalone", "/"))
+        self.assertEqual((manifest["name"], manifest["display"], manifest["start_url"]), ("vmforai", "standalone", "/"))
         self.assertIn("<svg", self.get("/icon.svg")[2])
         status, headers, png = self.get("/icon.png", raw=True)
         self.assertEqual(headers["Content-Type"], "image/png")
@@ -288,7 +288,7 @@ class ServerTests(SandboxTest):
         self.assertEqual(self.get("/api/power?t=sekret-key&vm=--help&do=start", b"{}")[0], 400)
         self.assertNotIn("--help", json.dumps(self.calls()))
         self.assertIn("stop dev", (self.sb.tmp / "phone.log").read_text())
-        self.assertEqual(json.loads(self.get("/api/notify?t=sekret-key")[2])["topic"], "vmagents-x")
+        self.assertEqual(json.loads(self.get("/api/notify?t=sekret-key")[2])["topic"], "vmforai-x")
         self.assertIn(["phone", "notify", "--status", "--json"], self.calls())
         self.assertTrue(json.loads(self.get("/api/notify?t=sekret-key&do=test", b"{}")[2])["sent"])
         self.assertIn(["phone", "notify", "test", "--json"], self.calls())
@@ -326,7 +326,7 @@ class CommandTests(SandboxTest):
     def setUp(self):
         super().setUp()
         self.sb.env["XDG_RUNTIME_DIR"] = str(self.sb.tmp)  # its own server, not this computer's
-        self.sb.env["VMAGENTS_PHONE_FETCH"] = "0"  # no downloads in tests
+        self.sb.env["VMFORAI_PHONE_FETCH"] = "0"  # no downloads in tests
         self.port = free_port()
         self.addCleanup(lambda: self.sb.run("phone", "off"))
 
@@ -342,7 +342,7 @@ class CommandTests(SandboxTest):
         r = self.sb.run("phone")
         self.assertEqual(r.returncode, 1)
         self.assertIn("Tailscale is not installed", r.stderr)
-        self.assertIn("vmagents phone --lan", r.stderr)
+        self.assertIn("vmforai phone --lan", r.stderr)
         write_exe(self.sb.bin / "tailscale", "#!/bin/sh\nexit 1\n")
         self.assertIn("Tailscale is not connected", self.sb.run("phone").stderr)
 
@@ -365,7 +365,7 @@ class CommandTests(SandboxTest):
         self.assertIn("Phone access is off", self.sb.run("phone", "off", check=0).stdout)
         with self.assertRaises(OSError):
             urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=3)
-        self.assertIn("vmagents phone ssh NAME", self.sb.run("help", "phone", check=0).stdout)
+        self.assertIn("vmforai phone ssh NAME", self.sb.run("help", "phone", check=0).stdout)
 
     def test_notifications(self):
         sent = self.sb.tmp / "curl.log"
@@ -374,14 +374,14 @@ class CommandTests(SandboxTest):
         r = self.sb.run("phone", "notify", check=0)
         conf = (self.sb.conf / "phone" / "ntfy").read_text()
         topic = conf.split("TOPIC=")[1].split()[0]
-        self.assertRegex(topic, r"^vmagents-[A-Za-z0-9_-]{20}$")
+        self.assertRegex(topic, r"^vmforai-[A-Za-z0-9_-]{20}$")
         self.assertIn("SERVER=https://ntfy.sh\n", conf)
         self.assertEqual(oct((self.sb.conf / "phone" / "ntfy").stat().st_mode & 0o777), "0o600")
         self.assertIn(f"https://ntfy.sh/{topic}", r.stdout)
         self.assertIn("A test notification was sent.", r.stdout)
         line = sent.read_text().splitlines()[-1]
         body = json.loads(line[line.index("{"):line.rindex("}") + 1])
-        self.assertEqual((body["topic"], body["title"]), (topic, "vmagents"))
+        self.assertEqual((body["topic"], body["title"]), (topic, "vmforai"))
         self.assertTrue(line.endswith(" https://ntfy.sh"))
         self.assertNotIn("Authorization", line)
         # Again: the same topic. Own server and token; the app's link.
@@ -401,7 +401,7 @@ class CommandTests(SandboxTest):
         curl.unlink()
 
     def test_ssh_key(self):
-        self.sb.env["VMAGENTS_PHONE_ADDR"] = "127.0.0.1"
+        self.sb.env["VMFORAI_PHONE_ADDR"] = "127.0.0.1"
         self.sb.env["STUB_SSH_EXEC"] = "1"
         self.sb.run("add", "vm", "--host", "192.0.2.9", "--user", "me", "--os", "linux", check=0)
         key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPhone termius"

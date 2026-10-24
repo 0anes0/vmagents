@@ -92,15 +92,15 @@ class TryTests(CreateBase):
         self.listener, self.port = listening_port()
         self.addCleanup(self.listener.close)
         self.lv.write_text(json.dumps({
-            "domains": {"src": {"desc": "created by vmagents", "state": "shut off", "kib": 2097152,
+            "domains": {"src": {"desc": "created by vmforai", "state": "shut off", "kib": 2097152,
                                 "disks": {"vda": "/pool/src.qcow2", "vdb": "/pool/src-seed.iso"}}},
-            "volumes": {"src.qcow2": {"backing": "vmagents-base-debian13.qcow2"}, "src-seed.iso": {}}}))
+            "volumes": {"src.qcow2": {"backing": "vmforai-base-debian13.qcow2"}, "src-seed.iso": {}}}))
         self.sb.run("add", "src", "--domain", "src", "--port", str(self.port), "--os", "linux", check=0)
         with open(self.sb.conf / "hosts" / "src.conf", "a") as f:
             f.write("CREATED=1\nAGENTS=claude,codex\n")
         self.sb.env["STUB_SSH_HOSTNAME_FROM_ALIAS"] = "1"
-        (self.sb.conf / "known_hosts").write_text("vmagents-src ssh-ed25519 AAAAkey\nvmagents-src-t1 ssh-ed25519 OLD\n")
-        key = self.sb.home / ".ssh" / "vmagents_ed25519"
+        (self.sb.conf / "known_hosts").write_text("vmforai-src ssh-ed25519 AAAAkey\nvmforai-src-t1 ssh-ed25519 OLD\n")
+        key = self.sb.home / ".ssh" / "vmforai_ed25519"
         key.parent.mkdir(parents=True, exist_ok=True)
         key.write_text("private")
         key.with_suffix(".pub").write_text("ssh-ed25519 AAAApub me@here")
@@ -115,29 +115,29 @@ class TryTests(CreateBase):
         for n in ("src-t1", "src-t2"):
             d = st["domains"][n]
             self.assertEqual(d["state"], "running")
-            self.assertEqual(d["desc"], "created by vmagents (try of src)")
+            self.assertEqual(d["desc"], "created by vmforai (try of src)")
             self.assertEqual(d["disks"], {"vda": f"/pool/{n}.qcow2", "vdb": f"/pool/{n}-seed.iso"})
             self.assertNotIn("<uuid>", d["xml"])  # libvirt makes new ones
             self.assertNotIn("<mac address", d["xml"])
-            self.assertEqual(st["volumes"][f"{n}.qcow2"], {"backing": "vmagents-base-debian13.qcow2"})
+            self.assertEqual(st["volumes"][f"{n}.qcow2"], {"backing": "vmforai-base-debian13.qcow2"})
             # Its own cloud-init seed: a new instance (new network settings and host keys), named after it.
             seed = st["volumes"][f"{n}-seed.iso"]["uploaded"]
             self.assertIn(f"instance-id: {n}-", seed)
             self.assertIn(f"hostname: {n}\n", seed)
             self.assertIn("ssh-ed25519 AAAApub me@here", seed)
             self.assertNotIn("packages:", seed)
-            self.assertIn("[cloud-init-per, instance, vmagents-copy, sh, -c, \"rm -f /etc/machine-id", seed)
+            self.assertIn("[cloud-init-per, instance, vmforai-copy, sh, -c, \"rm -f /etc/machine-id", seed)
             self.assertIn("DUIDType=link-layer", seed)
             self.assertNotIn("network-config", seed)
             p = self.profile(n)
             for line in (f"DOMAIN={n}", "TRY=src", "AUTOSNAP=0", "CREATED=1", "AGENT=claude"):
                 self.assertIn(line + "\n", p)
-            self.assertNotIn(f"vmagents-{n} ", (self.sb.conf / "known_hosts").read_text())  # new host keys
+            self.assertNotIn(f"vmforai-{n} ", (self.sb.conf / "known_hosts").read_text())  # new host keys
         self.assertEqual(st["domains"]["src"]["state"], "shut off")
         # Started one after the other, each checked by its hostname, without keeping its first host key.
         checks = [c["argv"] for c in self.sb.calls("ssh") if "cloud-init status --wait" in c["argv"][-1]]
         self.assertEqual([next(a for a in c if a.startswith("HostKeyAlias=")) for c in checks],
-                         ["HostKeyAlias=vmagents-src-t1", "HostKeyAlias=vmagents-src-t2"])
+                         ["HostKeyAlias=vmforai-src-t1", "HostKeyAlias=vmforai-src-t2"])
         self.assertIn("UserKnownHostsFile=/dev/null", checks[0][:4])
         self.assertIn("Made 1 copies of src: src-t3", self.sb.run("try", "src", "1", check=0).stdout)  # the next free
         out = self.sb.run("tries", "src", check=0).stdout
@@ -158,7 +158,7 @@ class TryTests(CreateBase):
                         ["2026-10-18 18:00:07", "52:54:00:00:00:09", "192.0.2.46"],
                         ["2026-10-18 18:09:00", "52:54:00:00:00:77", "192.0.2.99"]]
         self.lv.write_text(json.dumps(st))
-        r = self.sb.run("shell", "src", "true", env={"VMAGENTS_BOOT_TIMEOUT": "1"})
+        r = self.sb.run("shell", "src", "true", env={"VMFORAI_BOOT_TIMEOUT": "1"})
         self.assertIn("on 192.0.2.25:", r.stderr)  # not the old .46
 
     def test_a_new_address_while_it_boots(self):
@@ -167,7 +167,7 @@ class TryTests(CreateBase):
         st["leases"] = [["2026-10-18 18:00:07", "52:54:00:00:00:09", "192.0.2.46"]]  # old: nobody answers there
         st["later_leases"] = [["2026-10-18 18:09:00", "52:54:00:00:00:09", "127.0.0.1"]]
         self.lv.write_text(json.dumps(st))
-        r = self.sb.run("start", "src", env={"VMAGENTS_BOOT_TIMEOUT": "40"}, check=0)
+        r = self.sb.run("start", "src", env={"VMFORAI_BOOT_TIMEOUT": "40"}, check=0)
         self.assertIn("Waiting for SSH on 192.0.2.46:", r.stderr)
         self.assertIn("Its address is 127.0.0.1 now.", r.stderr)
         self.assertIn("VM src is running: ", r.stdout)
@@ -185,9 +185,9 @@ class TryTests(CreateBase):
         self.lv.write_text(json.dumps(st))
         self.assertIn("src is running", self.sb.run("try", "src", "1").stderr)
         self.sb.run("add", "other", "--domain", "src", check=0)
-        self.assertIn("made with \"vmagents create\" only", self.sb.run("try", "other", "1").stderr)
+        self.assertIn("made with \"vmforai create\" only", self.sb.run("try", "other", "1").stderr)
         for cmd in ("try", "tries"):
-            self.assertIn(f"vmagents {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
+            self.assertIn(f"vmforai {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
 
     def test_stop_first(self):
         st = self.state()
@@ -210,10 +210,10 @@ class TryTests(CreateBase):
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q",
                         "--allow-empty", "-m", "one"], check=True)
-        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/vmagents/src/base", "HEAD"], check=True)
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/vmforai/src/base", "HEAD"], check=True)
         with open(self.sb.conf / "hosts" / "src.conf", "a") as f:
             f.write(f"PROJECT={repo}\n")
-        env = {"STUB_SSH_EXEC": "1", "DISPLAY": "", "VMAGENTS_WATCH_INTERVAL": "0.2"}
+        env = {"STUB_SSH_EXEC": "1", "DISPLAY": "", "VMFORAI_WATCH_INTERVAL": "0.2"}
         r = self.sb.run("try", "src", "2", "--agents", "claude,codex", "--", "make it faster", env=env, check=0)
         self.assertIn("Run 1 on src-t1: Claude Code works on it", r.stdout)
         self.assertIn("Run 2 on src-t2: Codex works on it", r.stdout)
@@ -228,11 +228,11 @@ class TryTests(CreateBase):
             time.sleep(0.05)
         self.assertEqual([self.state()["domains"][n]["state"] for n in ("src-t1", "src-t2")], ["shut off"] * 2)
         self.assertIn("codex exec --skip-git-repo-check", (self.sb.remote_home / "agent-args").read_text())
-        refs = subprocess.run(["git", "-C", str(repo), "for-each-ref", "--format=%(refname)", "refs/vmagents/"],
+        refs = subprocess.run(["git", "-C", str(repo), "for-each-ref", "--format=%(refname)", "refs/vmforai/"],
                               capture_output=True, text=True).stdout.split()
-        self.assertEqual(refs, ["refs/vmagents/src-t1/base", "refs/vmagents/src-t2/base", "refs/vmagents/src/base"])
+        self.assertEqual(refs, ["refs/vmforai/src-t1/base", "refs/vmforai/src-t2/base", "refs/vmforai/src/base"])
         self.sb.run("try", "src", "--clean", check=0)
-        refs = subprocess.run(["git", "-C", str(repo), "for-each-ref", "--format=%(refname)", "refs/vmagents/"],
+        refs = subprocess.run(["git", "-C", str(repo), "for-each-ref", "--format=%(refname)", "refs/vmforai/"],
                               capture_output=True, text=True).stdout.split()
-        self.assertEqual(refs, ["refs/vmagents/src/base"])
+        self.assertEqual(refs, ["refs/vmforai/src/base"])
         self.assertTrue(re.search(r"PROJECT=", self.profile("src")))

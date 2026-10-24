@@ -1,11 +1,11 @@
-"""Snapshots: one automatically each time vmagents boots a VM, snapshot,
+"""Snapshots: one automatically each time vmforai boots a VM, snapshot,
 snapshots, undo and autosnap. Against the fake virsh, which keeps snapshots
 in a JSON file; the real thing was tried on the Arch and Windows 10 VMs."""
 import json
 
 from tests.ptyrun import run_in_pty
 from tests.test_stop import Base
-from tests.helpers import VMAGENTS
+from tests.helpers import VMFORAI
 
 
 class SnapshotTests(Base):
@@ -22,10 +22,10 @@ class SnapshotTests(Base):
     def test_boot_takes_a_snapshot(self):
         self.sb.set_vm("shut off")
         r = self.sb.run("vm", "--keep", check=0)
-        self.assertRegex(r.stderr, r"Snapshot auto-\d{8}-\d{6} taken \(\"vmagents undo vm\" goes back to it\)\.")
+        self.assertRegex(r.stderr, r"Snapshot auto-\d{8}-\d{6} taken \(\"vmforai undo vm\" goes back to it\)\.")
         cmds = self.virsh_cmds()
         self.assertLess(cmds.index("snapshot-create-as"), cmds.index("start"))
-        self.assertEqual(self.snaps()[0][2:], ["shutoff", "taken by vmagents before starting the VM"])
+        self.assertEqual(self.snaps()[0][2:], ["shutoff", "taken by vmforai before starting the VM"])
 
     def test_running_vm_gets_none(self):
         self.sb.run("vm", "--keep", check=0)
@@ -61,14 +61,14 @@ class SnapshotTests(Base):
         self.sb.set_vm("shut off")
         r = self.sb.run("vm", "--keep", env={"STUB_VIRSH_SNAPSHOT_FAILS": "1"}, check=0)
         self.assertIn("warning: no automatic snapshot: error: internal snapshots", r.stderr)
-        self.assertIn("vmagents autosnap vm off", r.stderr)
+        self.assertIn("vmforai autosnap vm off", r.stderr)
         self.assertIn("start", self.virsh_cmds())
 
     def test_snapshot_and_list(self):
         self.assertIn("No snapshots of vm yet", self.sb.run("snapshots", "vm", check=0).stdout)
         r = self.sb.run("snapshot", "vm", "before the refactor", check=0)
         self.assertIn("its memory is saved too", r.stderr)  # the VM is running
-        self.assertRegex(r.stdout, r"Snapshot (snap-\d{8}-\d{6}) taken\. Back to it later: vmagents undo vm snap-")
+        self.assertRegex(r.stdout, r"Snapshot (snap-\d{8}-\d{6}) taken\. Back to it later: vmforai undo vm snap-")
         snap = self.names()[0]
         out = self.sb.run("snapshots", "vm", check=0).stdout
         self.assertRegex(out, rf"{snap}\s+2026-10-16 10:00:00\s+VM running\s+before the refactor")
@@ -88,7 +88,7 @@ class SnapshotTests(Base):
         self.sb.clear_log()
         r = self.sb.run("undo", "vm", "--yes", check=0)
         self.assertIn("VM vm is back at auto-2 (2026-10-16 10:00:00).", r.stdout)
-        self.assertIn("Open Claude in it again: vmagents vm", r.stdout)
+        self.assertIn("Open Claude in it again: vmforai vm", r.stdout)
         cmds = self.virsh_cmds()
         self.assertLess(cmds.index("destroy"), cmds.index("snapshot-revert"))  # was running
         self.assertEqual(self.sb.calls("virsh")[-1]["argv"][2:], ["snapshot-revert", "testvm", "auto-2"])
@@ -107,11 +107,11 @@ class SnapshotTests(Base):
 
     def test_undo_asks(self):
         self.set_snaps([["auto-1", "2026-10-16 09:00:00 +0300", "shutoff", ""]])
-        out = run_in_pty([str(VMAGENTS), "undo", "vm"], self.sb.env, str(self.sb.tmp), answers=[("[y/N] ", "n\r")])
+        out = run_in_pty([str(VMFORAI), "undo", "vm"], self.sb.env, str(self.sb.tmp), answers=[("[y/N] ", "n\r")])
         self.assertIn("Everything changed in the VM since then is lost", out)
         self.assertIn("nothing changed", out)
         self.assertNotIn("snapshot-revert", self.virsh_cmds())
-        out = run_in_pty([str(VMAGENTS), "undo", "vm"], self.sb.env, str(self.sb.tmp), answers=[("[y/N] ", "y\r")])
+        out = run_in_pty([str(VMFORAI), "undo", "vm"], self.sb.env, str(self.sb.tmp), answers=[("[y/N] ", "y\r")])
         self.assertIn("VM vm is back at auto-1", out)
 
     def test_doctor_counts_snapshots(self):

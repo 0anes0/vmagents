@@ -1,4 +1,4 @@
-"""`vmagents create` / `delete` against fake curl, virsh and virt-install.
+"""`vmforai create` / `delete` against fake curl, virsh and virt-install.
 A real run on libvirt is described in the README."""
 import hashlib
 import json
@@ -39,13 +39,13 @@ if cmd == "pool-info" and st.get("nopool"):
     print("error: failed to get pool 'default'", file=sys.stderr); sys.exit(1)
 if cmd == "pool-define-as":
     st.pop("nopool", None); save(); sys.exit(0)
-if cmd == "net-info" and rest[0] == "vmagents" and "vmagents-net" not in st:
-    print("error: failed to get network 'vmagents'", file=sys.stderr); sys.exit(1)
+if cmd == "net-info" and rest[0] == "vmforai" and "vmforai-net" not in st:
+    print("error: failed to get network 'vmforai'", file=sys.stderr); sys.exit(1)
 if cmd == "net-start" and rest[0] == "default" and st.get("netbusy"):
     print("error: Failed to start network default\nerror: internal error: Network is already in use by interface enp1s0",
           file=sys.stderr); sys.exit(1)
 if cmd == "net-define":
-    st["vmagents-net"] = open(args[1]).read(); save(); sys.exit(0)
+    st["vmforai-net"] = open(args[1]).read(); save(); sys.exit(0)
 if cmd in ("pool-info", "net-info", "net-start", "net-autostart", "pool-refresh", "pool-build", "pool-start",
            "pool-autostart", "uri"):
     sys.exit(0)
@@ -144,11 +144,11 @@ class CreateBase(SandboxTest):
 class CreateTests(CreateBase):
     def test_create(self):
         r = self.create("box", "--memory", "2048", "--cpus", "3", "--disk", "30", "--user", "dev")
-        self.assertIn("Created. Next: vmagents setup box", r.stdout)
-        key = (self.sb.home / ".ssh" / "vmagents_ed25519.pub").read_text().strip()
-        cached = self.sb.home / ".cache" / "vmagents" / "images" / "debian-13-genericcloud-amd64.qcow2"
+        self.assertIn("Created. Next: vmforai setup box", r.stdout)
+        key = (self.sb.home / ".ssh" / "vmforai_ed25519.pub").read_text().strip()
+        cached = self.sb.home / ".cache" / "vmforai" / "images" / "debian-13-genericcloud-amd64.qcow2"
         self.assertEqual(cached.read_bytes(), IMAGE)
-        base = f"vmagents-base-debian13-{hashlib.sha512(IMAGE).hexdigest()[:12]}.qcow2"
+        base = f"vmforai-base-debian13-{hashlib.sha512(IMAGE).hexdigest()[:12]}.qcow2"
         vols = self.state()["volumes"]
         self.assertEqual(vols[base]["uploaded"].encode("latin-1"), IMAGE)
         self.assertEqual(vols["box.qcow2"], {"size": "30G", "backing": base})
@@ -156,12 +156,12 @@ class CreateTests(CreateBase):
         seed = vols["box-seed.iso"]["uploaded"]
         self.assertTrue(seed.startswith("LABEL=cidata\n"), seed)
         self.assertIn("== meta-data\ninstance-id: box-", seed)
-        self.assertIn("path: /etc/systemd/networkd.conf.d/50-vmagents.conf", seed)  # copies get their own address
+        self.assertIn("path: /etc/systemd/networkd.conf.d/50-vmforai.conf", seed)  # copies get their own address
         user_data = seed.split("== user-data\n")[1].split("== ")[0]
         for a, b in [("--memory", "2048"), ("--vcpus", "3"), ("--osinfo", "debian13"),
                      ("--disk", "vol=default/box.qcow2,bus=virtio")]:
             self.assertEqual(argv[argv.index(a) + 1], b)
-        self.assertIn("description=created by vmagents", argv)
+        self.assertIn("description=created by vmforai", argv)
         # Without a video device the Debian cloud image's GRUB resets in a loop.
         self.assertEqual(argv[argv.index("--video") + 1], "vga")
         self.assertTrue(user_data.startswith("#cloud-config\n"))
@@ -187,18 +187,18 @@ class CreateTests(CreateBase):
         self.assertIn(["pool-autostart", "default"], calls)
 
     def test_own_network_when_the_default_cannot_start(self):
-        # This computer itself on 192.168.122.0/24 (a VM in a VM, or such a LAN): new VMs get "vmagents".
+        # This computer itself on 192.168.122.0/24 (a VM in a VM, or such a LAN): new VMs get "vmforai".
         st = self.state(); st["netbusy"] = True; self.lv.write_text(json.dumps(st))
         r = self.create("a")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("new VMs get a network of their own: vmagents, 192.168.", r.stderr)
-        xml = self.state()["vmagents-net"]
-        self.assertIn("<name>vmagents</name>", xml)
+        self.assertIn("new VMs get a network of their own: vmforai, 192.168.", r.stderr)
+        xml = self.state()["vmforai-net"]
+        self.assertIn("<name>vmforai</name>", xml)
         self.assertIn("<forward mode='nat'/>", xml)
         argv = self.sb.calls("virt-install")[-1]["argv"]
-        self.assertIn("network=vmagents,model=virtio", argv)
+        self.assertIn("network=vmforai,model=virtio", argv)
         calls = [c["argv"] for c in self.sb.calls() if c["prog"] == "virsh"]
-        self.assertIn(["net-autostart", "vmagents"], calls)
+        self.assertIn(["net-autostart", "vmforai"], calls)
         self.assertNotIn(["net-autostart", "default"], calls)  # the default network is left alone
         self.sb.clear_log()
         self.create("b")  # the second one finds it there
@@ -210,7 +210,7 @@ class CreateTests(CreateBase):
         venv = self.sb.tmp / "venv"
         write_exe(venv / "python3", "#!/bin/sh\necho 'No module named gi' >&2; exit 1\n")
         path = self.sb.env["PATH"]
-        r = self.create("a", env={"PATH": f"{venv}:{path}", "VIRTUAL_ENV": str(venv), "VMAGENTS_HOST_PATH": path})
+        r = self.create("a", env={"PATH": f"{venv}:{path}", "VIRTUAL_ENV": str(venv), "VMFORAI_HOST_PATH": path})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("a", self.state()["domains"])
 
@@ -238,7 +238,7 @@ class CreateTests(CreateBase):
         self.create("a")
         self.sb.clear_log()
         r = self.create("b")
-        self.assertIn("Using base volume vmagents-base-debian13-", r.stderr)
+        self.assertIn("Using base volume vmforai-base-debian13-", r.stderr)
         self.assertEqual([c for c in self.sb.calls("curl") if "-o" in c["argv"]], [])
         uploads = [c["argv"][3] for c in self.sb.calls("virsh") if c["argv"][0] == "vol-upload"]
         self.assertEqual(uploads, ["b-seed.iso"])  # the base volume is not uploaded again
@@ -246,7 +246,7 @@ class CreateTests(CreateBase):
     def test_checksum_mismatch(self):
         r = self.create("box", check=1, env={"FAKE_SUM": "0" * 128})
         self.assertIn("checksum mismatch", r.stderr)
-        self.assertEqual(os.listdir(self.sb.home / ".cache" / "vmagents" / "images"), [])
+        self.assertEqual(os.listdir(self.sb.home / ".cache" / "vmforai" / "images"), [])
         self.assertFalse((self.sb.conf / "hosts" / "box.conf").exists())
 
     def test_refuses_existing_names_and_bad_numbers(self):
@@ -285,12 +285,12 @@ class CreateTests(CreateBase):
         self.sb.run("add", "win10", "--domain", "win10", "--os", "windows", check=0)
         r = self.sb.run("delete", "win10", "--yes")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("was not created by vmagents", r.stderr)
+        self.assertIn("was not created by vmforai", r.stderr)
         # Even a profile claiming CREATED=1 needs libvirt's own marker.
         conf = self.sb.conf / "hosts" / "win10.conf"
         conf.write_text(conf.read_text() + "CREATED=1\n")
         r = self.sb.run("delete", "win10", "--yes")
-        self.assertIn("not marked as created by vmagents", r.stderr)
+        self.assertIn("not marked as created by vmforai", r.stderr)
         self.assertIn("win10", self.state()["domains"])
         self.assertEqual(self.state()["domains"]["win10"]["state"], "running")
         self.assertEqual([c for c in self.sb.calls("virsh") if c["argv"][0] in ("destroy", "undefine")], [])
@@ -301,9 +301,9 @@ class CreateTests(CreateBase):
         self.create("b")
         self.sb.run("delete", "a", "--yes", check=0)
         r = self.sb.run("prune", check=0)
-        self.assertRegex(r.stdout, r"Kept vmagents-base-debian13-\w+\.qcow2 \(a VM uses it\)")
+        self.assertRegex(r.stdout, r"Kept vmforai-base-debian13-\w+\.qcow2 \(a VM uses it\)")
         self.assertIn("Removed downloaded images", r.stdout)
-        self.assertFalse((self.sb.home / ".cache" / "vmagents" / "images").exists())
+        self.assertFalse((self.sb.home / ".cache" / "vmforai" / "images").exists())
         # The base volume is still there, so a new VM needs no download.
         self.sb.clear_log()
         self.create("c")
@@ -311,7 +311,7 @@ class CreateTests(CreateBase):
         for name in ("b", "c"):
             self.sb.run("delete", name, "--yes", check=0)
         r = self.sb.run("prune", check=0)
-        self.assertRegex(r.stdout, r"Removed vmagents-base-debian13-\w+\.qcow2")
+        self.assertRegex(r.stdout, r"Removed vmforai-base-debian13-\w+\.qcow2")
         self.assertEqual(self.state()["volumes"], {})
         self.assertIn("No unused base volumes.", self.sb.run("prune", check=0).stdout)
 
@@ -323,6 +323,6 @@ class CreateTests(CreateBase):
         r = self.sb.run("images", check=0)
         self.assertRegex(r.stdout, r"debian13 +Debian 13 .* +\S+ +325.69MiB \(a, b\)\n")
         self.assertRegex(r.stdout, r"arch +Arch Linux \(rolling release\) +- +-\n")
-        self.assertIn("/pool/vmagents-base-IMAGE-CHECKSUM.qcow2", r.stdout)
-        self.assertIn(str(self.sb.home / ".cache" / "vmagents" / "images") + "/", r.stdout)
-        self.assertRegex(r.stdout, r"\n      vmagents-base-debian13-\w{12}\.qcow2\n")
+        self.assertIn("/pool/vmforai-base-IMAGE-CHECKSUM.qcow2", r.stdout)
+        self.assertIn(str(self.sb.home / ".cache" / "vmforai" / "images") + "/", r.stdout)
+        self.assertRegex(r.stdout, r"\n      vmforai-base-debian13-\w{12}\.qcow2\n")

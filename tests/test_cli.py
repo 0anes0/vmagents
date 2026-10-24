@@ -11,22 +11,22 @@ from tests import stubs
 from tests.helpers import SandboxTest, free_port, listening_port, write_exe
 from tests.ptyrun import run_in_pty
 
-# How vmagents starts claude: through a wrapper that adds the "vmagents login" token.
+# How vmforai starts claude: through a wrapper that adds the "vmforai login" token.
 WRAP = ('[sh] [-c] [p=${1%/*}/proxy-env; [ -r "$p" ] && { set -a; . "$p"; set +a; }; [ -r "$1" ] && { set -a; . "$1"; set +a; }; s=${1%/*}/claude-settings.json; shift; c=$1; shift; '
-        'case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"] [vmagents] ')
+        'case ${c##*/} in claude) [ -r "$s" ] && exec "$c" --settings "$s" "$@" ;; esac; exec "$c" "$@"] [vmforai] ')
 
 
 def settings(home):
-    """The arguments with which vmagents's launcher passes its hooks to Claude."""
-    return f" [--settings] [{home}/.config/vmagents/claude-settings.json]"
+    """The arguments with which vmforai's launcher passes its hooks to Claude."""
+    return f" [--settings] [{home}/.config/vmforai/claude-settings.json]"
 
 
 class ProfileTests(SandboxTest):
     def test_help_and_version(self):
         r = self.sb.run("help", check=0)
         self.assertIn("GET STARTED", r.stdout)
-        self.assertIn("vmagents help COMMAND", r.stdout)
-        self.assertRegex(self.sb.run("--version", check=0).stdout, r"^vmagents \d+\.\d+\.\d+\n$")
+        self.assertIn("vmforai help COMMAND", r.stdout)
+        self.assertRegex(self.sb.run("--version", check=0).stdout, r"^vmforai \d+\.\d+\.\d+\n$")
 
     def test_add_writes_profile(self):
         r = self.sb.run("add", "dev", "--host", "192.168.122.10", "--user", "ubuntu", "--port", "2222",
@@ -113,7 +113,7 @@ class ProfileTests(SandboxTest):
                     "autostart", "list", "default", "desktop", "edit", "forget", "rm"):
             with self.subTest(cmd=cmd):
                 r = self.sb.run("help", cmd, check=0)
-                self.assertTrue(r.stdout.startswith(f"vmagents {cmd}") or cmd == "list", r.stdout[:80])
+                self.assertTrue(r.stdout.startswith(f"vmforai {cmd}") or cmd == "list", r.stdout[:80])
                 self.assertEqual(self.sb.run(cmd, "--help", check=0).stdout, r.stdout)
         self.assertIn("Examples:", self.sb.run("help", "create", check=0).stdout)
         r = self.sb.run("help", "bogus")
@@ -123,12 +123,12 @@ class ProfileTests(SandboxTest):
     def test_help_flag_placement(self):
         self.sb.run("add", "vm", "--host", "192.0.2.7", "--os", "linux", check=0)
         # anywhere among a command's own options
-        self.assertIn("vmagents create NAME", self.sb.run("create", "x", "--help", check=0).stdout)
-        self.assertIn("vmagents add NAME", self.sb.run("add", "vm", "--port", "22", "-h", check=0).stdout)
+        self.assertIn("vmforai create NAME", self.sb.run("create", "x", "--help", check=0).stdout)
+        self.assertIn("vmforai add NAME", self.sb.run("add", "vm", "--port", "22", "-h", check=0).stdout)
         # but arguments after a VM name belong to Claude
         self.sb.run("vm", "--help", check=0)
         self.assertEqual(self.sb.calls("ssh")[-1]["argv"][-1].split()[-1], "'--help'")
-        self.assertIn("vmagents connect", self.sb.run("connect", "--help", check=0).stdout)
+        self.assertIn("vmforai connect", self.sb.run("connect", "--help", check=0).stdout)
         self.sb.run("connect", "vm", "--help", check=0)
         self.assertEqual(self.sb.calls("ssh")[-1]["argv"][-1].split()[-1], "'--help'")
         # and after -- nothing is help
@@ -150,10 +150,10 @@ class ProfileTests(SandboxTest):
         self.sb.run("add", "a", "--host", "10.0.0.1", check=0)
         kh = self.sb.conf / "known_hosts"
         key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-        kh.write_text(f"vmagents-a {key}\nvmagents-b {key}\n")
+        kh.write_text(f"vmforai-a {key}\nvmforai-b {key}\n")
         r = self.sb.run("forget", "a", check=0)
         self.assertIn("Forgot", r.stdout)
-        self.assertEqual(kh.read_text(), f"vmagents-b {key}\n")
+        self.assertEqual(kh.read_text(), f"vmforai-b {key}\n")
         self.assertFalse((self.sb.conf / "known_hosts.old").exists())
 
 
@@ -177,7 +177,7 @@ class ConnectTests(SandboxTest):
         self.assertTrue(cmd[0].startswith("sh -c '"))
         self.assertEqual(opts[opts.index("-l") + 1], "dev")
         self.assertEqual(opts[opts.index("-p") + 1], "2222")
-        self.assertIn("HostKeyAlias=vmagents-vm", opts)
+        self.assertIn("HostKeyAlias=vmforai-vm", opts)
         self.assertIn(f"UserKnownHostsFile={self.sb.conf}/known_hosts", opts)
         self.assertIn("StrictHostKeyChecking=accept-new", opts)
         self.assertIn("-T", opts)  # not a terminal here
@@ -185,7 +185,7 @@ class ConnectTests(SandboxTest):
 
     def test_key_is_used_when_present(self):
         (self.sb.home / ".ssh").mkdir()
-        key = self.sb.home / ".ssh" / "vmagents_ed25519"
+        key = self.sb.home / ".ssh" / "vmforai_ed25519"
         key.write_text("x")
         self.sb.run("connect", "vm", check=0)
         opts = self.ssh_argv()
@@ -220,7 +220,7 @@ class ConnectTests(SandboxTest):
         claude = self.sb.remote_bin / "claude"
         home = self.sb.remote_home
         self.assertEqual(self.sb.remote_calls(),
-                         [f"tmux [new-session] [-A] [-s] [claude] [-c] [{home}] {WRAP}[{home}/.config/vmagents/claude-env] "
+                         [f"tmux [new-session] [-A] [-s] [claude] [-c] [{home}] {WRAP}[{home}/.config/vmforai/claude-env] "
                           f"[{claude}] [--resume] cwd=[{home}]"])
         self.sb.clear_log()
         self.sb.run("add", "vm", "--session", "work", check=0)
@@ -234,7 +234,7 @@ class ConnectTests(SandboxTest):
 
     def test_missing_claude(self):
         r = self.run_remote("vm", check=127)
-        self.assertIn("Claude Code is not installed on the VM. Run: vmagents setup vm", r.stderr)
+        self.assertIn("Claude Code is not installed on the VM. Run: vmforai setup vm", r.stderr)
 
     def test_unknown_term_falls_back(self):
         self.sb.remote_tool("tput", "#!/bin/sh\n[ \"$2\" = xterm-256color ]\n")
@@ -245,14 +245,14 @@ class ConnectTests(SandboxTest):
     def test_ssh_failure_hint_and_hold_without_terminal(self):
         r = self.sb.run("connect", "--hold", "vm", env={"STUB_SSH_RC": "255"}, timeout=10)
         self.assertEqual(r.returncode, 255)
-        self.assertIn("SSH connection to dev@192.0.2.7:2222 failed. Try: vmagents doctor vm", r.stderr)
+        self.assertIn("SSH connection to dev@192.0.2.7:2222 failed. Try: vmforai doctor vm", r.stderr)
 
     def test_remote_exit_code_is_returned(self):
         self.assertEqual(self.sb.run("vm", env={"STUB_SSH_RC": "3"}).returncode, 3)
 
     def test_shell(self):
         self.sb.run("shell", "vm", check=0)
-        self.assertIn("VMAGENTS_NO_AUTOSTART=1 VMCLAUDE_NO_AUTOSTART=1 exec", self.ssh_argv()[-1])
+        self.assertIn("VMFORAI_NO_AUTOSTART=1 VMAGENTS_NO_AUTOSTART=1 VMCLAUDE_NO_AUTOSTART=1 exec", self.ssh_argv()[-1])
         self.sb.clear_log()
         self.sb.run("shell", "vm", "uname", "-a", check=0)
         self.assertEqual(self.sb.calls("ssh")[0]["argv"][-3:], ["192.0.2.7", "uname", "-a"])
@@ -287,7 +287,7 @@ class LibvirtTests(SandboxTest):
 
     def test_vm_that_stops_while_booting_fails_fast(self):
         self.sb.set_vm("shut off", ip="")
-        r = self.sb.run("vm", env={"STUB_VIRSH_START_DIES": "1", "VMAGENTS_BOOT_TIMEOUT": "60"}, timeout=20)
+        r = self.sb.run("vm", env={"STUB_VIRSH_START_DIES": "1", "VMFORAI_BOOT_TIMEOUT": "60"}, timeout=20)
         self.assertEqual(r.returncode, 1)
         self.assertIn("VM testvm stopped while booting (state: shut off)", r.stderr)
         self.assertIn("virsh -c qemu:///session console testvm", r.stderr)
@@ -312,7 +312,7 @@ class LibvirtTests(SandboxTest):
 
     def test_no_ip_times_out_and_loopback_is_ignored(self):
         self.sb.set_vm("running", ip="")
-        r = self.sb.run("vm", env={"VMAGENTS_BOOT_TIMEOUT": "2"})
+        r = self.sb.run("vm", env={"VMFORAI_BOOT_TIMEOUT": "2"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("has no IPv4 address after 2s", r.stderr)
         self.assertEqual(self.sb.calls("ssh"), [])
@@ -320,7 +320,7 @@ class LibvirtTests(SandboxTest):
     def test_no_ip_with_ufw_on_says_how_to_allow_it(self):
         write_exe(self.sb.bin / "systemctl", "#!/bin/sh\n[ \"$*\" = \"is-active --quiet ufw\" ]\n")
         self.sb.set_vm("running", ip="")
-        r = self.sb.run("vm", env={"VMAGENTS_BOOT_TIMEOUT": "2"})
+        r = self.sb.run("vm", env={"VMFORAI_BOOT_TIMEOUT": "2"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("has no IPv4 address after 2s", r.stderr)
         self.assertIn("sudo ufw allow in on virbr0 && sudo ufw route allow in on virbr0", r.stderr)
@@ -328,7 +328,7 @@ class LibvirtTests(SandboxTest):
     def test_closed_port_times_out(self):
         self.sb.run("add", "vm", "--port", str(free_port()), check=0)
         self.sb.set_vm("running")
-        r = self.sb.run("vm", env={"VMAGENTS_BOOT_TIMEOUT": "2"})
+        r = self.sb.run("vm", env={"VMFORAI_BOOT_TIMEOUT": "2"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("no SSH server answers on 127.0.0.1:", r.stderr)
         self.assertIn("after 2s", r.stderr)
@@ -338,7 +338,7 @@ class LibvirtTests(SandboxTest):
         self.addCleanup(silent.close)
         self.sb.run("add", "vm", "--port", str(port), check=0)
         self.sb.set_vm("running")
-        r = self.sb.run("vm", env={"VMAGENTS_BOOT_TIMEOUT": "2"})
+        r = self.sb.run("vm", env={"VMFORAI_BOOT_TIMEOUT": "2"})
         self.assertEqual(r.returncode, 1)
         self.assertIn(f"no SSH server answers on 127.0.0.1:{port}", r.stderr)
         self.assertEqual(self.sb.calls("ssh"), [])
@@ -376,10 +376,10 @@ class SetupTests(SandboxTest):
 
     def test_full_setup(self):
         r = self.setup()
-        key = self.sb.home / ".ssh" / "vmagents_ed25519"
+        key = self.sb.home / ".ssh" / "vmforai_ed25519"
         self.assertTrue(key.exists())
         self.assertEqual(oct(key.parent.stat().st_mode & 0o777), "0o700")
-        pub = (self.sb.home / ".ssh" / "vmagents_ed25519.pub").read_text().strip()
+        pub = (self.sb.home / ".ssh" / "vmforai_ed25519.pub").read_text().strip()
         ak = self.sb.remote_home / ".ssh" / "authorized_keys"
         self.assertEqual(ak.read_text(), pub + "\n")
         self.assertEqual(oct(ak.stat().st_mode & 0o777), "0o600")
@@ -389,9 +389,9 @@ class SetupTests(SandboxTest):
         self.assertTrue(calls[2].startswith("curl -fsSL https://claude.ai/install.sh"))
         self.assertTrue((self.sb.remote_home / ".local" / "bin" / "claude").exists())
         self.assertIn("Installed Claude Code: 9.9.9 (Claude Code)", r.stdout + r.stderr)
-        self.assertTrue((self.sb.remote_home / ".config" / "vmagents" / "autostart.sh").exists())
-        self.assertIn("# >>> vmagents autostart >>>", (self.sb.remote_home / ".bashrc").read_text())
-        self.assertIn("Done. Open Claude on the VM with:  vmagents vm", r.stdout)
+        self.assertTrue((self.sb.remote_home / ".config" / "vmforai" / "autostart.sh").exists())
+        self.assertIn("# >>> vmforai autostart >>>", (self.sb.remote_home / ".bashrc").read_text())
+        self.assertIn("Done. Open Claude on the VM with:  vmforai vm", r.stdout)
 
     def test_setup_is_idempotent(self):
         (self.sb.remote_home / ".bashrc").write_text("alias ll='ls -l'")  # no trailing newline
@@ -402,8 +402,8 @@ class SetupTests(SandboxTest):
         self.assertIn("Claude Code is already installed", r.stdout + r.stderr)
         self.assertEqual(len((self.sb.remote_home / ".ssh" / "authorized_keys").read_text().splitlines()), 1)
         rc = (self.sb.remote_home / ".bashrc").read_text()
-        self.assertTrue(rc.startswith("alias ll='ls -l'\n# >>> vmagents autostart >>>\n"), rc)
-        self.assertEqual(rc.count("vmagents autostart >>>"), 1)
+        self.assertTrue(rc.startswith("alias ll='ls -l'\n# >>> vmforai autostart >>>\n"), rc)
+        self.assertEqual(rc.count("vmforai autostart >>>"), 1)
         # ~/.local/bin (where Claude Code lives) is on PATH in every shell, not only for autostart.
         r = subprocess.run(["bash", "-c", f". {self.sb.remote_home}/.bashrc; echo $PATH"], capture_output=True, text=True,
                            env={"HOME": str(self.sb.remote_home), "PATH": "/usr/bin:/bin"}, stdin=subprocess.DEVNULL)
@@ -446,13 +446,13 @@ class SetupTests(SandboxTest):
         rc.write_text("export A=1\n" + rc.read_text() + "export B=2\n")
         self.sb.run("autostart", "vm", "off", env=self.env, check=0)
         self.assertEqual(rc.read_text(), "export A=1\nexport B=2\n")
-        self.assertFalse((self.sb.remote_home / ".config" / "vmagents" / "autostart.sh").exists())
+        self.assertFalse((self.sb.remote_home / ".config" / "vmforai" / "autostart.sh").exists())
         self.assertEqual(self.sb.run("autostart", "vm", "maybe").returncode, 2)
 
     def test_zshrc_gets_the_hook_too(self):
         (self.sb.remote_home / ".zshrc").write_text("# zsh\n")
         self.setup("--no-install")
-        self.assertIn("vmagents/autostart.sh", (self.sb.remote_home / ".zshrc").read_text())
+        self.assertIn("vmforai/autostart.sh", (self.sb.remote_home / ".zshrc").read_text())
 
 
 class AutostartHookTests(SandboxTest):
@@ -497,7 +497,7 @@ class AutostartHookTests(SandboxTest):
         self.assertEqual(len(calls), 1, calls)
         self.assertTrue(calls[0].startswith(
             f"tmux [new-session] [-A] [-s] [claude] [-c] [{code}] {WRAP}"
-            f"[{self.sb.remote_home}/.config/vmagents/claude-env] [{self.sb.remote_bin}/claude]"), calls)
+            f"[{self.sb.remote_home}/.config/vmforai/claude-env] [{self.sb.remote_bin}/claude]"), calls)
 
     def test_without_tmux_claude_runs_in_dir(self):
         calls, _ = self.login()
@@ -512,8 +512,8 @@ class AutostartHookTests(SandboxTest):
 
     def test_skipped_cases(self):
         cases = [
-            {"VMAGENTS_NO_AUTOSTART": "1"},
-            {"LC_VMAGENTS": "off"},
+            {"VMFORAI_NO_AUTOSTART": "1"},
+            {"LC_VMFORAI": "off"},
             {"TMUX": "/tmp/tmux-1/default,1,0"},
             {"SSH_CONNECTION": ""},
         ]
@@ -538,7 +538,7 @@ class DoctorAndDesktopTests(SandboxTest):
         self.addCleanup(listener.close)
         self.sb.run("add", "vm", "--host", "127.0.0.1", "--port", str(port), check=0)
         (self.sb.home / ".ssh").mkdir()
-        (self.sb.home / ".ssh" / "vmagents_ed25519").write_text("x")
+        (self.sb.home / ".ssh" / "vmforai_ed25519").write_text("x")
         batch = self.sb.tmp / "batch"
         batch.write_text("0")
         env = {"STUB_SSH_EXEC": "1", "STUB_SSH_BATCH_RC": str(batch)}
@@ -572,11 +572,11 @@ class DoctorAndDesktopTests(SandboxTest):
     def test_desktop_launcher(self):
         self.sb.run("add", "my-vm", "--host", "h", check=0)
         r = self.sb.run("desktop", "my-vm", check=0)
-        f = self.sb.home / ".local" / "share" / "applications" / "vmagents-my-vm.desktop"
+        f = self.sb.home / ".local" / "share" / "applications" / "vmforai-my-vm.desktop"
         text = f.read_text()
         self.assertIn(str(f), r.stdout)
         self.assertIn('Exec="%s" connect --hold my-vm\n' % Path(os.path.realpath(
-            Path(__file__).parent.parent / "vmagents")), text)
+            Path(__file__).parent.parent / "vmforai")), text)
         self.assertIn("Terminal=true\n", text)
         if shutil.which("desktop-file-validate"):
             v = subprocess.run(["desktop-file-validate", str(f)], capture_output=True, text=True)
@@ -586,7 +586,7 @@ class DoctorAndDesktopTests(SandboxTest):
 
     def test_desktop_escaping(self):
         r = subprocess.run(["bash", "-c", 'source <(sed "/^main \\"\\$@\\"; exit$/d" "$1"); desktop_escape "$2"',
-                            "_", str(Path(__file__).parent.parent / "vmagents"), 'a "b" $c `d` \\e 50%'],
+                            "_", str(Path(__file__).parent.parent / "vmforai"), 'a "b" $c `d` \\e 50%'],
                            capture_output=True, text=True, env={"HOME": str(self.sb.home), "PATH": "/usr/bin:/bin"})
         self.assertEqual(r.stdout, '"a \\"b\\" \\$c \\`d\\` \\\\e 50%%"')
 
@@ -597,7 +597,7 @@ class FirstRunTests(SandboxTest):
         port = free_port()  # refused at once, so OS detection does not wait
         env = dict(self.sb.env)
         out = run_in_pty(
-            [str(Path(__file__).parent.parent / "vmagents")], env, cwd=str(self.sb.tmp),
+            [str(Path(__file__).parent.parent / "vmforai")], env, cwd=str(self.sb.tmp),
             answers=[
                 ("Name for this VM", "box\n"),
                 ("libvirt VM to use", "\n"),

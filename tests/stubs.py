@@ -32,10 +32,10 @@ if "-N" in args:
     while True:
         for s in select.select(socks, [], [])[0]:
             c, _ = s.accept(); c.sendall(b"hello from the VM\n"); c.close()
-# A VM's hostname, for "vmagents try": the name in HostKeyAlias=vmagents-NAME.
+# A VM's hostname, for "vmforai try": the name in HostKeyAlias=vmforai-NAME.
 if os.environ.get("STUB_SSH_HOSTNAME_FROM_ALIAS") and "cat /etc/hostname" in args[-1]:
     alias = next(a.split("=", 1)[1] for a in args if a.startswith("HostKeyAlias="))
-    print(alias[len("vmagents-"):])
+    print(alias[len("vmforai-"):])
     sys.exit(0)
 if os.environ.get("STUB_SSH_OUTPUT") is not None:
     sys.stdout.write(os.environ["STUB_SSH_OUTPUT"])
@@ -163,7 +163,7 @@ if cmd == "snapshot-dumpxml":
     d = s[3].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     print(f"<domainsnapshot>\n  <name>{s[0]}</name>\n" + (f"  <description>{d}</description>\n" if d else "")
           + "  <state>shutoff</state>\n  <domain type='kvm'>\n    <name>testvm</name>\n"
-          "    <description>created by vmagents</description>\n  </domain>\n</domainsnapshot>"); sys.exit(0)
+          "    <description>created by vmforai</description>\n  </domain>\n</domainsnapshot>"); sys.exit(0)
 if cmd == "snapshot-revert":
     s = find_snap(args[2])
     open(path, "w").write(f"{'running' if s[2] == 'running' else 'shut off'}|{ip}|{polls}"); sys.exit(0)

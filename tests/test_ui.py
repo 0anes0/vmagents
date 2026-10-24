@@ -1,5 +1,5 @@
-"""The terminal UI (vmagents ui), driven with Textual's test pilot against a
-fake vmagents that answers --json, records what the UI runs, and in the
+"""The terminal UI (vmforai ui), driven with Textual's test pilot against a
+fake vmforai that answers --json, records what the UI runs, and in the
 UI's terminal tabs behaves like a small interactive program. Needs Textual
 and pyte (skipped otherwise): uv run --with 'textual>=8,<9' --with pyte
 python -m unittest tests.test_ui"""
@@ -38,7 +38,7 @@ elif a[:1] == ["create"]:
     time.sleep(float(os.environ.get("FAKE_CREATE_SLEEP", "0")))
     while os.environ.get("FAKE_CREATE_GATE") and not os.path.exists(os.environ["FAKE_CREATE_GATE"]):
         time.sleep(0.1)  # until the test lets it end
-    print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
+    print("Done. Open Claude on the VM with:  vmforai " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
 elif a[:1] == ["history"] and "--json" in a:
     print(json.dumps([{"id": "s-new", "time": 1760800000, "start": "", "dir": "/home/me", "messages": 2,
@@ -46,7 +46,7 @@ elif a[:1] == ["history"] and "--json" in a:
                       {"id": "s-old", "time": 1760700000, "start": "", "dir": "/home/me", "messages": 5,
                        "first": "add a health endpoint"}]))
 elif a[:1] == ["history"]:
-    print("> asked in " + a[2] + "\n\n* Bash(npm test)\nanswered " + a[2] + "\n\nGo on with it: vmagents dev --resume " + a[2])
+    print("> asked in " + a[2] + "\n\n* Bash(npm test)\nanswered " + a[2] + "\n\nGo on with it: vmforai dev --resume " + a[2])
 elif a[:1] == ["changes"]:
     show("changes.txt")
 elif a[:2] == ["phone", "notify"]:  # on once turned on
@@ -54,10 +54,10 @@ elif a[:2] == ["phone", "notify"]:  # on once turned on
     if a[2:3] not in (["--status"], ["off"]):
         open(flag, "w").close()
     on = os.path.exists(flag)
-    print(json.dumps({"on": True, "topic": "vmagents-t", "sent": True} if on else {"on": False}))
+    print(json.dumps({"on": True, "topic": "vmforai-t", "sent": True} if on else {"on": False}))
 elif a[:1] == ["phone"] and "--json" in a:
     if os.environ.get("FAKE_PHONE_ERR") and "--lan" not in a:
-        print("vmagents: Tailscale is not installed; ...", file=sys.stderr)
+        print("vmforai: Tailscale is not installed; ...", file=sys.stderr)
         sys.exit(1)
     print(json.dumps({"on": True, "listen": "lan" if "--lan" in a else "tailscale", "address": "100.64.0.7",
                       "port": 7700, "url": "http://100.64.0.7:7700/#t=" + ("NEW" if "--new" in a else "KEY"),
@@ -125,13 +125,13 @@ SNAPS = [{"name": "auto-1", "time": "2026-10-16 09:00:00", "state": "shutoff", "
 @unittest.skipUnless(HAVE_TEXTUAL, "needs Textual and pyte")
 class UITests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.d = Path(tempfile.mkdtemp(prefix="vmagents-ui-"))
+        self.d = Path(tempfile.mkdtemp(prefix="vmforai-ui-"))
         self.addCleanup(shutil.rmtree, self.d, True)
         self.write(list=[VM, dict(VM, name="srv", default=False, domain="", host="192.0.2.5", state=None,
                                   memory_mb=None, cpus=None, created=False, ports=[])])
         self.write(images=IMAGES, snaps=SNAPS)
-        fake = write_exe(self.d / "vmagents", FAKE)
-        self.env = {"FAKE_UI_DIR": str(self.d), "VMAGENTS_BIN": str(fake), "VMAGENTS_CONF_DIR": str(self.d / "conf"),
+        fake = write_exe(self.d / "vmforai", FAKE)
+        self.env = {"FAKE_UI_DIR": str(self.d), "VMFORAI_BIN": str(fake), "VMFORAI_CONF_DIR": str(self.d / "conf"),
                     "LANG": "C.UTF-8", "XDG_CACHE_HOME": str(self.d / "cache")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
@@ -139,7 +139,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         (self.d / "changes.txt").write_text(CHANGES)
         src = self.d / "ui.py"
         src.write_text(var("UI_PY"))
-        spec = importlib.util.spec_from_file_location("vmagents_ui", src)
+        spec = importlib.util.spec_from_file_location("vmforai_ui", src)
         self.ui = importlib.util.module_from_spec(spec)
         cwd = os.getcwd()
         os.chdir(self.d)  # not in a git repository: no project suggested
@@ -147,7 +147,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             spec.loader.exec_module(self.ui)
         finally:
             os.chdir(cwd)
-        self.app = self.ui.VmAgentsUI()
+        self.app = self.ui.VmforaiUI()
 
     def restore_env(self):
         for k, v in self.saved.items():
@@ -229,7 +229,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Opens: Claude Code", self.text("#details"))
         # the next start remembers it
         (self.d / "conf" / "ui.json").write_text(json.dumps({"lang": "tr"}))
-        app = self.ui.VmAgentsUI()
+        app = self.ui.VmforaiUI()
         async with app.run_test(size=(120, 40)) as pilot:
             await self.wait_for(pilot, lambda: app.vms)
             self.assertEqual(self.ui.LANG, "tr")
@@ -434,7 +434,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.3)
             self.assertEqual(len(self.calls("changes")), 2)
         (self.d / "changes.txt").write_text("No changes on dev since the project was sent.\n")
-        app = self.ui.VmAgentsUI()
+        app = self.ui.VmforaiUI()
         async with app.run_test(size=(120, 40)) as pilot:
             await self.wait_for(pilot, lambda: app.vms)
             await pilot.press("c")
@@ -456,7 +456,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await self.wait_for(pilot, lambda: self.calls("yolo"))
             self.assertEqual(self.calls("yolo"), [["yolo", "dev", "on"]])
         self.write(list=[dict(VM, yolo=True)])
-        app = self.ui.VmAgentsUI()
+        app = self.ui.VmforaiUI()
         async with app.run_test(size=(120, 40)) as pilot:
             await self.wait_for(pilot, lambda: app.vms)
             self.assertIn("act without asking", str(app.main.query_one("#details").render()))
@@ -522,7 +522,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         lst = json.loads((self.d / "list.json").read_text())
         lst[1]["try"] = lst[1].pop("try_")
         self.write(list=lst)
-        app = self.ui.VmAgentsUI()
+        app = self.ui.VmforaiUI()
         async with app.run_test(size=(120, 40)) as pilot:
             await self.wait_for(pilot, lambda: app.vms)
             await pilot.press("x")
@@ -545,9 +545,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await self.wait_for(pilot, lambda: self.calls("net"))
             self.assertEqual(self.calls("net"), [["net", "dev", "restricted"]])
         self.write(list=[dict(VM, net="restricted")])
-        (self.d / "cache" / "vmagents").mkdir(parents=True)
-        (self.d / "cache" / "vmagents" / "net-dev.log").write_text("1 old.example:443\n2 evil.example:443\n")
-        app = self.ui.VmAgentsUI()
+        (self.d / "cache" / "vmforai").mkdir(parents=True)
+        (self.d / "cache" / "vmforai" / "net-dev.log").write_text("1 old.example:443\n2 evil.example:443\n")
+        app = self.ui.VmforaiUI()
         async with app.run_test(size=(120, 40)) as pilot:
             await self.wait_for(pilot, lambda: app.vms)
             details = str(app.main.query_one("#details").render())
@@ -625,7 +625,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("m")
             await self.wait_for(pilot, lambda: "b turns them on" in self.text("#phone-notes"))
             await pilot.press("b")
-            self.assertTrue(await self.wait_for(pilot, lambda: "vmagents-t" in self.text("#phone-notes")))
+            self.assertTrue(await self.wait_for(pilot, lambda: "vmforai-t" in self.text("#phone-notes")))
             self.assertIn(["phone", "notify", "--json"], self.calls("phone"))
             await pilot.press("b")  # on: a test
             self.assertTrue(await self.wait_for(pilot, lambda: ["phone", "notify", "test", "--json"] in self.calls("phone")))
@@ -727,7 +727,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("is not a git repository", self.text("#error"))
             form.query_one("#project").value = ""
             await pilot.pause(0.2)
-            self.assertIn("vmagents create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,opencode "
+            self.assertIn("vmforai create web --image arch --memory 8192 --cpus 4 --disk 40 --agents claude,opencode "
                           "--idle off --ports 3000,5173", self.text("#command"))
             await pilot.press("ctrl+s")  # creating: a tab of its own
             await self.wait_for(pilot, lambda: self.app.creating() and self.app.creating()[0].rc is not None)
@@ -934,7 +934,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             await self.wait_for(pilot, lambda: self.calls("delete"))
             self.assertEqual(self.calls("delete"), [["delete", "dev", "--yes"]])
-            await pilot.press("j", "d")  # not made by vmagents: only the profile
+            await pilot.press("j", "d")  # not made by vmforai: only the profile
             await pilot.pause(0.2)
             await pilot.press("y")
             await self.wait_for(pilot, lambda: self.calls("rm"))

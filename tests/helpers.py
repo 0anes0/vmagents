@@ -11,7 +11,7 @@ from pathlib import Path
 from tests import stubs
 
 ROOT = Path(__file__).resolve().parent.parent
-VMAGENTS = ROOT / "vmagents"
+VMFORAI = ROOT / "vmforai"
 
 # Tools the remote scripts may use; the fake VM gets only these.
 REMOTE_TOOLS = ["sh", "bash", "cat", "grep", "mkdir", "touch", "tail", "wc", "chmod",
@@ -31,7 +31,7 @@ class Sandbox:
     """A throwaway $HOME with fake ssh/virsh on PATH and a fake remote VM home."""
 
     def __init__(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="vmagents-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="vmforai-test-"))
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.bin = self.tmp / "bin"
@@ -63,13 +63,13 @@ class Sandbox:
             "STUB_REMOTE_PATH": str(self.remote_bin),
             "STUB_REMOTE_LOG": str(self.remote_log),
             "STUB_RECORDER": str(self.recorder),
-            "VMAGENTS_BOOT_TIMEOUT": "10",
-            "VMAGENTS_NO_DEPS": "1",  # no installing on the first run (test_deps tries that)
+            "VMFORAI_BOOT_TIMEOUT": "10",
+            "VMFORAI_NO_DEPS": "1",  # no installing on the first run (test_deps tries that)
         }
 
     @property
     def conf(self):
-        return self.home / ".config" / "vmagents"
+        return self.home / ".config" / "vmforai"
 
     def remote_tool(self, name, text=None):
         """Put a recording stub (or a custom script) on the fake VM's PATH."""
@@ -85,7 +85,7 @@ class Sandbox:
         e = dict(self.env, **(env or {}))
         # Never inherit stdin: an open pipe there would block the fake ssh.
         stdin = None if input is not None else subprocess.DEVNULL
-        r = subprocess.run([str(VMAGENTS), *args], input=input, stdin=stdin, env=e, cwd=self.tmp,
+        r = subprocess.run([str(VMFORAI), *args], input=input, stdin=stdin, env=e, cwd=self.tmp,
                            capture_output=True, text=True, timeout=timeout)
         if check is not None and r.returncode != check:
             raise AssertionError(f"exit {r.returncode} != {check}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")

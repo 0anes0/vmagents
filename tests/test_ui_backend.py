@@ -1,10 +1,10 @@
-"""What the terminal UI (vmagents ui) builds on, and what scripts can use too:
+"""What the terminal UI (vmforai ui) builds on, and what scripts can use too:
 list/images/snapshots --json, ports, create/setup --agents/--ports, resize
 and open --lan. Against the fake ssh, virsh and VM."""
 import json
 import socket
 
-from tests.helpers import VMAGENTS
+from tests.helpers import VMFORAI
 from tests.ptyrun import run_in_pty
 from tests.test_create import CreateBase
 from tests.test_extras import free_pair
@@ -46,7 +46,7 @@ class ImagesJsonTests(CreateBase):
 
     def test_create_with_agents_and_ports(self):
         r = self.sb.run("create", "box", "--agents", "codex,claude", "--ports", "3000, 8080", "--no-setup", check=0)
-        self.assertIn("Next: vmagents setup box --agents codex,claude", r.stdout)
+        self.assertIn("Next: vmforai setup box --agents codex,claude", r.stdout)
         self.assertIn("PORTS=3000,8080\n", (self.sb.conf / "hosts" / "box.conf").read_text())
         self.assertIn("--agents takes", self.sb.run("create", "c", "--agents", "copilot", "--no-setup").stderr)
         self.assertIn("--ports takes", self.sb.run("create", "c", "--ports", "http", "--no-setup").stderr)
@@ -77,10 +77,10 @@ class PortsTests(Base):
         self.assertIn(f"port {p + 1} is in use on this computer; not forwarded this time", r.stderr)
 
     def test_open_uses_them_and_lan(self):
-        self.assertIn("or set some: vmagents ports vm 3000", self.sb.run("open", "vm").stderr)
+        self.assertIn("or set some: vmforai ports vm 3000", self.sb.run("open", "vm").stderr)
         p = free_pair()
         self.sb.run("ports", "vm", str(p), check=0)
-        out = run_in_pty([str(VMAGENTS), "open", "vm", "--lan", "--no-browser", "--keep"], self.sb.env,
+        out = run_in_pty([str(VMFORAI), "open", "vm", "--lan", "--no-browser", "--keep"], self.sb.env,
                          str(self.sb.tmp), answers=[("Stop with Ctrl-C.", "\x03")])
         self.assertIn(f"Port {p} of vm: http://localhost:{p}", out)
         self.assertIn("on your network too: http://", out)
@@ -122,5 +122,5 @@ class SetupAgentsTests(Base):
         self.assertTrue(any(s.endswith(" 'gemini'") for s in scripts))
         self.assertIn("AGENT=codex\n", self.profile())
         self.assertIn("AGENTS=codex,gemini\n", self.profile())
-        self.assertIn("Open codex on the VM with:  vmagents vm", r.stdout)
+        self.assertIn("Open codex on the VM with:  vmforai vm", r.stdout)
         self.assertEqual(self.sb.run("setup", "vm", "--agents", "codex,bard").returncode, 2)

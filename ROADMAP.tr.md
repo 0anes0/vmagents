@@ -1,6 +1,6 @@
 # Yol haritası
 
-vmagents için planlananlar, kabaca sırasıyla. Fikir ve istekler issue olarak
+vmforai için planlananlar, kabaca sırasıyla. Fikir ve istekler issue olarak
 gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Şimdi
@@ -12,7 +12,7 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 - [ ] **Maliyet**: her görevin maliyeti (Claude Code bildiriyor), VM ve ay
       başına toplam, görev başına sınır (`run --max-cost 2`)
 - [ ] **Görev kuyruğu**: bir VM için birkaç görev, art arda yapılır
-- [ ] **Etikete göre issue'lar**: `vmagents fix dev --label vmagents` o
+- [ ] **Etikete göre issue'lar**: `vmforai fix dev --label vmforai` o
       etiketli açık issue'ların hepsini sırayla ele alır
 - [ ] **Terminal arayüzünde görevler**: VM'in görevleri, durumları ve
       çıktılarıyla bir sekme (`runs` gibi)
@@ -22,20 +22,20 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 - [ ] Windows VM'lerinde projeler ve `fix`
 - [ ] Başka bir bilgisayarın VM'leri (SSH üzerinden bir libvirt sunucusu) aynı listede
 - [ ] AUR paketinin yayımlanması (bir AUR hesabı gerekiyor)
-- [ ] Gerçek kullanım turu: vmagents'ı gerçek bir projede baştan sona kullanıp
+- [ ] Gerçek kullanım turu: vmforai'ı gerçek bir projede baştan sona kullanıp
       takılan yerleri düzeltmek
 
 ## Son yapılanlar
 
-- [x] `vmagents deps` (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine), Windows
-      bilgisayar için `install.ps1`, VM'e araç kuran `vmagents tools` (Linux, Scoop ile Windows) (0.24.0)
-- [x] `vmagents update`: vmagents'ı son sürüme günceller (0.23.0)
+- [x] `vmforai deps` (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine), Windows
+      bilgisayar için `install.ps1`, VM'e araç kuran `vmforai tools` (Linux, Scoop ile Windows) (0.24.0)
+- [x] `vmforai update`: vmforai'ı son sürüme günceller (0.23.0)
 - [x] Telefona bildirimler, ntfy ile: biten görevler ve issue çözmeler,
       bekleyen yardımcılar, hazır olan yeni VM'ler (0.23.0)
 - [x] Telefon sayfası yenilendi: yeni görünüm (açık ve koyu), görev verip
       izleme, issue çözdürme, VM başlatıp kapatma, ana ekranda uygulama gibi,
       aynı Wi-Fi'da internet gerekmez (0.22.0)
-- [x] `vmagents fix`: GitHub issue'sundan pull request'e, testler VM'de
+- [x] `vmforai fix`: GitHub issue'sundan pull request'e, testler VM'de
       çalışarak (0.22.0)
 - [x] Telefon: VM'lerin telefonun tarayıcısında, SSH uygulamaları (0.21.0)
 - [x] Windows VM'lerinde görevler (0.21.0)

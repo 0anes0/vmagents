@@ -65,7 +65,7 @@ class RunTests(Base):
         write_exe(self.sb.remote_bin / "claude", CLAUDE)
         write_exe(self.sb.remote_bin / "codex", "#!/bin/sh\necho \"args: $*\" >>\"$HOME/agent-args\"\necho codex did it\n")
         self.sb.env.update(STUB_SSH_EXEC="1", DISPLAY="")
-        self.runs = self.sb.remote_home / ".config" / "vmagents" / "runs"
+        self.runs = self.sb.remote_home / ".config" / "vmforai" / "runs"
 
     def wait_rc(self, i, seconds=10):
         f = self.runs / str(i) / "rc"
@@ -78,7 +78,7 @@ class RunTests(Base):
     def test_run_and_its_log(self):
         r = self.sb.run("run", "vm", "fix the failing tests", check=0)
         self.assertIn("Run 1 on vm: Claude Code works on it, without asking", r.stdout)
-        self.assertIn("vmagents runs vm 1 -f", r.stdout)
+        self.assertIn("vmforai runs vm 1 -f", r.stdout)
         self.assertEqual(self.wait_rc(1), "0")
         self.assertEqual((self.runs / "1" / "task").read_text(), "fix the failing tests\n")
         args = (self.sb.remote_home / "agent-args").read_text()
@@ -88,7 +88,7 @@ class RunTests(Base):
         self.assertIn("I will run the tests.", log)
         self.assertIn("* Bash(npm test)", log)
         self.assertIn("-- finished: 3 turns, 4s, $0.12", log)
-        self.assertIn("-- vmagents: the run ended, exit code 0", log)
+        self.assertIn("-- vmforai: the run ended, exit code 0", log)
         listing = self.sb.run("runs", "vm", check=0).stdout
         self.assertRegex(listing, r"\n1 +Claude Code +done +\d{4}-\d\d-\d\d \d\d:\d\d +fix the failing tests\n")
         data = json.loads(self.sb.run("runs", "vm", "--json", check=0).stdout)
@@ -132,7 +132,7 @@ class RunTests(Base):
     def test_notifies_when_it_ends(self):
         log = self.sb.tmp / "notified"
         write_exe(self.sb.bin / "notify-send", f'#!/bin/sh\necho "$@" >>"{log}"\n')
-        r = self.sb.run("run", "vm", "ship it", env={"DISPLAY": ":9", "VMAGENTS_WATCH_INTERVAL": "0.2"}, check=0)
+        r = self.sb.run("run", "vm", "ship it", env={"DISPLAY": ":9", "VMFORAI_WATCH_INTERVAL": "0.2"}, check=0)
         self.assertIn("A notification comes when it ends.", r.stdout)
         for _ in range(200):
             if log.exists() and log.read_text():
@@ -145,9 +145,9 @@ class RunTests(Base):
         sent = self.sb.tmp / "ntfy"
         write_exe(self.sb.bin / "curl", f'#!/bin/sh\nprintf "%s\\n" "$*" >>"{sent}"\n')
         (self.sb.conf / "phone").mkdir(parents=True)
-        (self.sb.conf / "phone" / "ntfy").write_text("SERVER=https://ntfy.example\nTOPIC=vmagents-abc\nTOKEN=\n")
+        (self.sb.conf / "phone" / "ntfy").write_text("SERVER=https://ntfy.example\nTOPIC=vmforai-abc\nTOKEN=\n")
         write_exe(self.sb.remote_bin / "claude", CLAUDE.replace('exit "${AGENT_RC:-0}"', "exit 2"))
-        r = self.sb.run("run", "vm", "ship it", env={"VMAGENTS_WATCH_INTERVAL": "0.2"}, check=0)
+        r = self.sb.run("run", "vm", "ship it", env={"VMFORAI_WATCH_INTERVAL": "0.2"}, check=0)
         self.assertIn("A notification comes when it ends.", r.stdout)
         for _ in range(200):
             if sent.exists() and sent.read_text():
@@ -156,7 +156,7 @@ class RunTests(Base):
         line = sent.read_text()
         body = json.loads(line[line.index("{"):line.rindex("}") + 1])
         self.assertEqual((body["topic"], body["title"], body["message"], body["tags"], body["priority"]),
-                         ("vmagents-abc", "vm: task 1 failed (exit code 2)", "ship it", ["warning"], 4))
+                         ("vmforai-abc", "vm: task 1 failed (exit code 2)", "ship it", ["warning"], 4))
         self.assertTrue(line.rstrip().endswith("https://ntfy.example"))
 
     def test_problems(self):
@@ -168,11 +168,11 @@ class RunTests(Base):
         self.assertIn("vm is off", self.sb.run("runs", "vm").stderr)
         self.assertEqual(self.sb.run("runs", "vm", "--json", check=0).stdout, "[]\n")
         for cmd in ("run", "runs"):
-            self.assertIn(f"vmagents {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
+            self.assertIn(f"vmforai {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
 
 
 class IdleSeesRunsTests(Base):
     def test_idle_loop_counts_a_run(self):
         from tests.test_idle_notify import var
-        self.assertIn("/.config/vmagents/runs/*/pid", var("IDLE_LOOP_SH"))
-        self.assertIn('echo "vmagents run"', var("IDLE_LOOP_SH"))
+        self.assertIn("/.config/vmforai/runs/*/pid", var("IDLE_LOOP_SH"))
+        self.assertIn('echo "vmforai run"', var("IDLE_LOOP_SH"))

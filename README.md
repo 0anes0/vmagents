@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>vmagents</h1>
+  <h1>vmforai</h1>
   <p><i>Run AI coding agents inside a virtual machine, not on your computer</i></p>
 
   **English** · [Türkçe](README.tr.md)
@@ -10,25 +10,25 @@
   ![VMs](https://img.shields.io/badge/VMs-Linux%20%7C%20Windows-lightgrey.svg)
   ![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20aider-blueviolet.svg)
   ![Languages](https://img.shields.io/badge/UI-EN%20%7C%20TR-orange.svg)
-  [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
+  [![test](https://github.com/emincan2000/vmforai/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmforai/actions/workflows/test.yml)
 
-  [Install](#install) · [Why a VM?](#vmagents-a-container-or-the-cloud) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Issues](#from-an-issue-to-a-pull-request) · [Commands](#commands) · [Roadmap](ROADMAP.md)
+  [Install](#install) · [Why a VM?](#vmforai-a-container-or-the-cloud) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Issues](#from-an-issue-to-a-pull-request) · [Commands](#commands) · [Roadmap](ROADMAP.md)
 </div>
 
 ---
 
-![vmagents: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page](docs/demo.gif)
+![vmforai: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page](docs/demo.gif)
 
-**vmagents** runs Claude Code, Codex, Gemini CLI, OpenCode or aider **inside a
+**vmforai** runs Claude Code, Codex, Gemini CLI, OpenCode or aider **inside a
 virtual machine**, with one command: it starts the VM, connects over SSH and
 opens the agent there, in tmux. The agent may install, run and break whatever
 it likes. Your computer is not touched, and every start takes a snapshot first,
-so `vmagents undo` takes it all back.
+so `vmforai undo` takes it all back.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
-vmagents create dev      # a new Debian VM with Claude Code in it, in a minute or two
-vmagents dev             # Claude Code, running in the VM
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash
+vmforai create dev      # a new Debian VM with Claude Code in it, in a minute or two
+vmforai dev             # Claude Code, running in the VM
 ```
 
 **Why a VM?**
@@ -43,105 +43,106 @@ vmagents dev             # Claude Code, running in the VM
 - **It goes on without you.** Tasks run in the background; follow them in the
   terminal UI or on your phone, with a notification when they end.
 
-Or do it all from the **terminal UI**, `vmagents ui`:
+Or do it all from the **terminal UI**, `vmforai ui`:
 
-![vmagents ui](docs/ui.png)
+![vmforai ui](docs/ui.png)
 
-> vmagents was called **vmclaude** until 0.10. The old command still works,
-> and the first run moves its settings over by itself.
+> vmforai was called **vmagents** until 0.24 (and **vmclaude** before 0.11).
+> The old commands still work, `vmf` is short for `vmforai`, and the first
+> run moves the settings over by itself (on the VMs too).
 
 ## Features
 
 | | |
 |---|---|
-| **One command** | `vmagents` (or `vmagents NAME`) starts the VM, connects and opens the agent. |
-| **Terminal UI** | `vmagents ui`: make VMs (system, RAM, CPUs, disk, agents, ports), open shells and agents in tabs, snapshots, ports, projects. |
-| **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
-| **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
-| **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
-| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs, opens their agents in a terminal, gives them tasks and follows them, fixes issues, starts and stops them (over Tailscale, from anywhere). `phone notify`: a notification when a task ends or an agent waits. SSH apps get a port per VM too. |
-| **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
-| **From an issue to a pull request** | `vmagents fix dev 42 --test "npm test"`: the agent works on GitHub issue 42 in the VM, the tests run there (their output goes back to the agent when they fail), and a pull request opens when they pass. |
-| **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
-| **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust, your own) sets it up for a kind of work. |
-| **Undo** | Every start takes a snapshot first; `vmagents undo` puts the VM back to before the session. |
+| **One command** | `vmforai` (or `vmforai NAME`) starts the VM, connects and opens the agent. |
+| **Terminal UI** | `vmforai ui`: make VMs (system, RAM, CPUs, disk, agents, ports), open shells and agents in tabs, snapshots, ports, projects. |
+| **Give a task and go** | `vmforai run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
+| **One task, several tries** | `vmforai try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
+| **A network on a short leash** | `vmforai net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
+| **From the phone** | `vmforai phone` shows a QR code: scan it, and the phone's browser lists your VMs, opens their agents in a terminal, gives them tasks and follows them, fixes issues, starts and stops them (over Tailscale, from anywhere). `phone notify`: a notification when a task ends or an agent waits. SSH apps get a port per VM too. |
+| **Yolo, safely** | `vmforai yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
+| **From an issue to a pull request** | `vmforai fix dev 42 --test "npm test"`: the agent works on GitHub issue 42 in the VM, the tests run there (their output goes back to the agent when they fail), and a pull request opens when they pass. |
+| **Your project, back as a branch** | `vmforai project` sends a git repository to the VM, `vmforai take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
+| **New VMs on demand** | `vmforai create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust, your own) sets it up for a kind of work. |
+| **Undo** | Every start takes a snapshot first; `vmforai undo` puts the VM back to before the session. |
 | **Sessions survive disconnects** | The agent runs in tmux. Lose Wi-Fi, connect again: same session. |
 | **Shuts down when you are done** | Quit the agent and the VM powers off, unless something still uses it. Forgotten VMs shut themselves down after 30 idle minutes. |
 | **Notifications** | A desktop notification when Claude on the VM asks for permission or waits for you. |
-| **The VM's server in your browser** | `vmagents open dev 3000` makes the VM's port 3000 a port here. |
-| **Claude's past sessions** | `vmagents history dev` lists Claude Code's conversations on the VM, shows one readable, and `--resume` goes on with it. |
+| **The VM's server in your browser** | `vmforai open dev 3000` makes the VM's port 3000 a port here. |
+| **Claude's past sessions** | `vmforai history dev` lists Claude Code's conversations on the VM, shows one readable, and `--resume` goes on with it. |
 | **Shared clipboard** | What Claude (or you, in tmux) copies on the VM lands in your clipboard. |
 | **Five agents** | Claude Code, Codex, Gemini CLI, OpenCode, aider; installed on first use. |
-| **One-step setup** | `vmagents setup` installs the SSH key (you type the VM password once), tmux, git and Claude Code. |
+| **One-step setup** | `vmforai setup` installs the SSH key (you type the VM password once), tmux, git and Claude Code. |
 | **Any SSH login opens Claude** | A terminal, a phone SSH app, PuTTY, Termius; plus an app-menu launcher. |
-| **Claude Code here, working there** | `vmagents mcp NAME --add` gives the Claude Code on your computer tools to run and edit things in the VM. |
+| **Claude Code here, working there** | `vmforai mcp NAME --add` gives the Claude Code on your computer tools to run and edit things in the VM. |
 | **Windows VMs too** | Detected from the SSH banner; setup installs Git for Windows and Claude Code. |
-| **`vmagents doctor`** | Checks each step: VM state, IP, sshd, key login, Claude, tmux, autostart. |
+| **`vmforai doctor`** | Checks each step: VM state, IP, sshd, key login, Claude, tmux, autostart. |
 
 A single Bash script with no dependencies beyond OpenSSH (and virsh for
 libvirt VMs, Python for the UI). Several VMs, one default, plain-text profiles.
 
-## vmagents, a container, or the cloud?
+## vmforai, a container, or the cloud?
 
-| | vmagents | A container (Docker, devcontainer) | Cloud agents |
+| | vmforai | A container (Docker, devcontainer) | Cloud agents |
 |---|---|---|---|
 | Runs | in a VM on your computer (or any machine you reach over SSH) | on your computer, sharing its kernel | on the provider's servers |
-| Take it all back | `vmagents undo`, from snapshots | throw the container away and build it again | nothing to take back here |
+| Take it all back | `vmforai undo`, from snapshots | throw the container away and build it again | nothing to take back here |
 | The agent may use | sudo, systemd, Docker, a desktop, Windows | what the image and its rights allow | what the provider's machine allows |
 | Your files and keys | out of reach; a repository goes in as a copy | out of reach unless mounted | out of reach; it works on your GitHub repository |
 | Agents | Claude Code, Codex, Gemini CLI, OpenCode, aider | any | the provider's own |
 | Costs | your hardware | your hardware | the provider's prices |
 
 A container is lighter and starts in a second: when that is enough, use one.
-vmagents is for when the agent should have a whole machine to itself, and
+vmforai is for when the agent should have a whole machine to itself, and
 you want to be able to take back all it did.
 
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash
 ```
 
-or from a clone: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
-It puts `vmagents` in `~/.local/bin`; `./install.sh --uninstall` removes it.
+or from a clone: `git clone https://github.com/emincan2000/vmforai && cd vmforai && ./install.sh`.
+It puts `vmforai` in `~/.local/bin`, with `vmf` as a short name for it; `./install.sh --uninstall` removes it.
 What it uses (libvirt, QEMU, virt-install, ...) comes right after, by
 itself: with apt, dnf, pacman, zypper or apk, so on Debian, Ubuntu, Fedora,
 Arch, openSUSE and Alpine (sudo asks for your password); libvirt is started
 and you are added to its group. `--no-deps` leaves that out. Installed some
-other way, vmagents does the same on its first run in a terminal;
-`vmagents deps` does it again, `vmagents deps --check` only looks.
+other way, vmforai does the same on its first run in a terminal;
+`vmforai deps` does it again, `vmforai deps --check` only looks.
 
 Tried on fresh machines from start to end: Debian 13, Ubuntu 24.04 and Arch
 Linux. Fedora, openSUSE and Alpine: their package names are checked, but no
 one has tried them yet. The Windows computer installer below is new as well.
-Tell us how it goes: [issues](https://github.com/emincan2000/vmagents/issues).
-Later, `vmagents update` brings it to the latest release (checked against the
+Tell us how it goes: [issues](https://github.com/emincan2000/vmforai/issues).
+Later, `vmforai update` brings it to the latest release (checked against the
 release's checksums); the UI says when there is one.
 
 On a **Windows 10 or 11 computer**, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/emincan2000/vmforai/main/install.ps1 | iex
 ```
 
-It sets vmagents up in WSL (Ubuntu; it installs WSL first when needed, which
-wants an administrator and a restart) and adds a `vmagents` command to
-Windows. Windows 10's WSL cannot run VMs itself, so there vmagents works with
-VMs from Hyper-V, VirtualBox or VMware (`vmagents add dev --host ADDRESS`);
-on Windows 11 `vmagents deps` in WSL adds libvirt as well. In a Windows that
+It sets vmforai up in WSL (Ubuntu; it installs WSL first when needed, which
+wants an administrator and a restart) and adds a `vmforai` command to
+Windows. Windows 10's WSL cannot run VMs itself, so there vmforai works with
+VMs from Hyper-V, VirtualBox or VMware (`vmforai add dev --host ADDRESS`);
+on Windows 11 `vmforai deps` in WSL adds libvirt as well. In a Windows that
 itself runs in a VM it stops and says why: WSL 2 needs nested virtualization
 there, and without it Windows may not start again (`-Force` goes on anyway).
 
 As a package: on Debian and Ubuntu the `.deb` from the
-[releases](https://github.com/emincan2000/vmagents/releases)
-(`sudo apt install ./vmagents_*_all.deb`); on Arch Linux the PKGBUILD in
+[releases](https://github.com/emincan2000/vmforai/releases)
+(`sudo apt install ./vmforai_*_all.deb`); on Arch Linux the PKGBUILD in
 [packaging/aur](packaging/aur) (`cd packaging/aur && makepkg -si`). Both
 bring libvirt, QEMU and the rest along.
 
 **Requirements**
 
 - **Your computer:** Linux, bash 4+, the OpenSSH client. `virsh` for libvirt
-  VMs. The UI needs Python 3 with Textual and pyte, which `vmagents ui` fetches
+  VMs. The UI needs Python 3 with Textual and pyte, which `vmforai ui` fetches
   by itself when [uv](https://docs.astral.sh/uv/) is installed.
 - **A Linux VM:** an SSH server, `curl`, and a user that can log in with a
   password once (or already has your key). `sudo` only to install packages.
@@ -150,51 +151,51 @@ bring libvirt, QEMU and the rest along.
 
 Any VM works: libvirt/virt-manager/GNOME Boxes (qemu), VirtualBox, VMware,
 Proxmox, a cloud server. Only libvirt VMs are started, stopped and
-snapshotted by vmagents; start the others yourself and give their address.
+snapshotted by vmforai; start the others yourself and give their address.
 
 ## Quick start
 
 **From nothing** (Linux with libvirt):
 
 ```sh
-vmagents create dev         # new Debian VM + Claude Code, no password needed
-vmagents login dev          # log Claude in (your browser, on this computer)
-vmagents dev                # open Claude Code in it
+vmforai create dev         # new Debian VM + Claude Code, no password needed
+vmforai login dev          # log Claude in (your browser, on this computer)
+vmforai dev                # open Claude Code in it
 ```
 
-**With a VM you already have:** run `vmagents` with no arguments; the first
+**With a VM you already have:** run `vmforai` with no arguments; the first
 time it asks for the VM's details and offers to set it up. Or by hand:
 
 ```sh
-vmagents add dev --domain debian13 --user dev              # a libvirt VM: started on demand, IP found
-vmagents add dev --host 192.168.1.50 --user dev            # any other VM
-vmagents add vbox --host 127.0.0.1 --port 2222 --user dev  # VirtualBox NAT forward
-vmagents setup dev          # key, tmux, git, Claude Code, autostart
-vmagents                    # open Claude Code on the VM
+vmforai add dev --domain debian13 --user dev              # a libvirt VM: started on demand, IP found
+vmforai add dev --host 192.168.1.50 --user dev            # any other VM
+vmforai add vbox --host 127.0.0.1 --port 2222 --user dev  # VirtualBox NAT forward
+vmforai setup dev          # key, tmux, git, Claude Code, autostart
+vmforai                    # open Claude Code on the VM
 ```
 
-**Logging Claude in:** `vmagents login dev` runs `claude setup-token` on your
+**Logging Claude in:** `vmforai login dev` runs `claude setup-token` on your
 computer, where your browser is, and stores the long-lived token on the VM in
-`~/.config/vmagents/claude-env` (readable only by you there). Claude on the VM
+`~/.config/vmforai/claude-env` (readable only by you there). Claude on the VM
 then never shows its login screen, whose long link is hard to copy out of a
 terminal. It needs Claude Code here and a Claude subscription; an API key
-works too (`echo "$ANTHROPIC_API_KEY" | vmagents login dev`). These tokens are
+works too (`echo "$ANTHROPIC_API_KEY" | vmforai login dev`). These tokens are
 for chatting and coding; for other account features use `/login` in Claude.
-`vmagents login dev --remove` deletes it.
+`vmforai login dev --remove` deletes it.
 
 | Ways in | |
 |---|---|
-| Terminal | `vmagents` (default VM) or `vmagents dev` |
-| App menu | `vmagents desktop dev` adds **Claude Code (dev)** |
+| Terminal | `vmforai` (default VM) or `vmforai dev` |
+| App menu | `vmforai desktop dev` adds **Claude Code (dev)** |
 | Any SSH client | `ssh dev@VM` opens Claude (autostart) |
-| A shell, not Claude | `vmagents shell dev`, or quit Claude / `Ctrl-b d` |
+| A shell, not Claude | `vmforai shell dev`, or quit Claude / `Ctrl-b d` |
 
-Every command has its own help with examples: `vmagents help create`.
+Every command has its own help with examples: `vmforai help create`.
 
 ## Terminal UI
 
 ```sh
-vmagents ui
+vmforai ui
 ```
 
 The list shows your VMs with state, RAM, CPUs, load (CPU now), agents and
@@ -203,7 +204,7 @@ on this computer. Everything works from the keyboard, with
 Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 
 - **New VM** (`n`): choose the system, RAM, CPUs, disk, agents, ports and a
-  project. The form shows the `vmagents create` command it runs; the VM is
+  project. The form shows the `vmforai create` command it runs; the VM is
   then made in a tab of its own while the list stays usable.
 - **Opening a VM** (Enter) asks how: a shell or one of the agents. It opens
   **inside the UI**, in a terminal tab; F1 to F6 open the others next to it.
@@ -238,7 +239,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
 | `t` / `r` | start or stop / RAM and CPUs (shuts the VM down first) |
-| `d` | delete (type the name to confirm; VMs not made by vmagents lose only their profile) |
+| `d` | delete (type the name to confirm; VMs not made by vmforai lose only their profile) |
 | `L` | language: English, Türkçe (remembered) |
 | `1` … `9` | that tab (1 is the list) |
 | `Ctrl+]` | back to the tab you were in |
@@ -254,7 +255,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 
 </details>
 
-The UI only runs `vmagents` and reads its `--json` output, so everything it
+The UI only runs `vmforai` and reads its `--json` output, so everything it
 does works from the command line too. It is a
 [Textual](https://textual.textualize.io/) app inside the same script, with
 [pyte](https://github.com/selectel/pyte) as its terminal (or
@@ -264,17 +265,17 @@ does works from the command line too. It is a
 
 Agents ask before they run a command or change a file, because on your own
 computer a wrong step can hurt. In a VM it cannot: what they do stays there,
-and `vmagents undo` puts the VM back to the snapshot taken at its start. So
+and `vmforai undo` puts the VM back to the snapshot taken at its start. So
 let them work:
 
 ```sh
-vmagents yolo dev on                    # from now on, agents on dev act without asking first
-vmagents dev --yolo                     # or just this once (--ask: the other way round)
+vmforai yolo dev on                    # from now on, agents on dev act without asking first
+vmforai dev --yolo                     # or just this once (--ask: the other way round)
 
-vmagents run dev "fix the failing tests"         # a task: the agent works alone, in the background
-vmagents run dev --codex --wait -- "add a --verbose flag"   # another agent; follow it here
-vmagents runs dev                       # the tasks: running, done, failed
-vmagents runs dev 3 -f                  # one task's output, followed until it ends
+vmforai run dev "fix the failing tests"         # a task: the agent works alone, in the background
+vmforai run dev --codex --wait -- "add a --verbose flag"   # another agent; follow it here
+vmforai runs dev                       # the tasks: running, done, failed
+vmforai runs dev 3 -f                  # one task's output, followed until it ends
 ```
 
 | Agent | Yolo option | A task runs as |
@@ -290,7 +291,7 @@ computer disconnects or sleeps; a desktop notification comes when it ends.
 Nobody is there to answer questions, so tasks always run in yolo mode. A VM
 that was off is started and shut down again afterwards; while a task runs,
 autostop and the idle shutdown leave the VM on. With a [project](#projects),
-`vmagents changes` and `take` then bring the result back as a branch. In the
+`vmforai changes` and `take` then bring the result back as a branch. In the
 UI, `a` gives a task and follows it in a tab.
 
 Tasks run on Windows VMs too (Claude Code only): there is no tmux there, so
@@ -301,22 +302,22 @@ and stopping it ends everything it started.
 ## Try a task several times
 
 ```sh
-vmagents try dev 3 "make the start page load faster"        # 3 copies, each does the task
-vmagents try dev 2 --agents claude,codex -- "fix issue 42"   # Claude Code in one, Codex in the other
-vmagents tries dev                     # the copies and what they changed
-vmagents changes dev-t2                # look at one
-vmagents take dev-t2                   # the best one, as a branch of your project
-vmagents try dev --clean               # delete the copies (branches you took stay)
+vmforai try dev 3 "make the start page load faster"        # 3 copies, each does the task
+vmforai try dev 2 --agents claude,codex -- "fix issue 42"   # Claude Code in one, Codex in the other
+vmforai tries dev                     # the copies and what they changed
+vmforai changes dev-t2                # look at one
+vmforai take dev-t2                   # the best one, as a branch of your project
+vmforai try dev --clean               # delete the copies (branches you took stay)
 ```
 
 The copies (`dev-t1`, `dev-t2`, ...) take seconds: libvirt clones the VM's
 disk, which shares the downloaded base image, so only what changed in the
 VM is copied. Each starts once as a new cloud-init instance, so it gets its
 own name, machine ID, network address and SSH host keys, then does the task
-like [`vmagents run`](#tasks-and-yolo-mode) and shuts down when done. They
+like [`vmforai run`](#tasks-and-yolo-mode) and shuts down when done. They
 run at the same time, so their memory has to be free here (`--memory MB`
 gives each less). The VM itself has to be off while it is copied (`--stop`
-shuts it down first). Copies work from VMs made with `vmagents create`.
+shuts it down first). Copies work from VMs made with `vmforai create`.
 
 ## Restricted network
 
@@ -325,19 +326,19 @@ or fetch what it should not. Restrict the VM's network, and it reaches only
 the hosts on its list:
 
 ```sh
-vmagents net dev restricted          # only the hosts on the list, from now on
-vmagents net dev                     # the list, and what was refused lately
-vmagents net dev allow api.example.com *.internal.test   # more (HOST:PORT for other ports)
-vmagents net dev deny github.com     # fewer
-vmagents net dev open                # everything again
+vmforai net dev restricted          # only the hosts on the list, from now on
+vmforai net dev                     # the list, and what was refused lately
+vmforai net dev allow api.example.com *.internal.test   # more (HOST:PORT for other ports)
+vmforai net dev deny github.com     # fewer
+vmforai net dev open                # everything again
 ```
 
 The list starts with the agents' services and installers, the package
 registries (npm, PyPI, crates.io, Go, Debian, Ubuntu, Arch) and GitHub; it
-is a file too, `~/.config/vmagents/net/NAME.allow`. It is enforced on your
+is a file too, `~/.config/vmforai/net/NAME.allow`. It is enforced on your
 computer, where nothing in the VM can change it: a libvirt network filter on
 the VM's card lets through only SSH, DHCP, DNS and a small proxy that
-vmagents runs on this computer for the VM, and the proxy lets HTTP and HTTPS
+vmforai runs on this computer for the VM, and the proxy lets HTTP and HTTPS
 through to the hosts on the list. On the VM, proxy settings make the
 agents, git, npm, pip and apt or pacman use it. The VM's libvirt network and
 your other VMs are not changed. It needs python3 here; with a firewall such
@@ -347,10 +348,10 @@ as ufw, allow the VM network to reach this computer on the proxy's port
 ## From the phone
 
 ```sh
-vmagents phone                         # a QR code: scan it with the phone's camera
-vmagents phone ssh dev "ssh-ed25519 AAAA... termius"   # an SSH app instead (its public key)
-vmagents phone notify                  # notifications on the phone (the ntfy app)
-vmagents phone off                     # off again
+vmforai phone                         # a QR code: scan it with the phone's camera
+vmforai phone ssh dev "ssh-ed25519 AAAA... termius"   # an SSH app instead (its public key)
+vmforai phone notify                  # notifications on the phone (the ntfy app)
+vmforai phone off                     # off again
 ```
 
 The phone's browser gets a page with your VMs; tap one for its agent or a
@@ -365,15 +366,15 @@ wakes up.
 
 Tap a VM's name for the rest: give it a task and follow its output as it
 works (the earlier tasks are there too, and a running one can be stopped),
-fix a GitHub issue of its project ([`vmagents fix`](#from-an-issue-to-a-pull-request)),
+fix a GitHub issue of its project ([`vmforai fix`](#from-an-issue-to-a-pull-request)),
 or start and shut it down. Added to the home screen (from the browser's menu),
 the page opens like an app, with its icon and the whole screen. It is light or
 dark, like the phone.
 
-Notifications come to the phone with `vmagents phone notify` (or the switch
+Notifications come to the phone with `vmforai phone notify` (or the switch
 at the bottom of the page): when a task or a fix ends, when an agent waits
 for you (a permission, a question) and when a new VM is ready. They go
-through [ntfy](https://ntfy.sh), free and without an account: vmagents makes
+through [ntfy](https://ntfy.sh), free and without an account: vmforai makes
 a topic with a random name, which works like a password, and shows a code
 to subscribe to it in the ntfy app (Play Store, F-Droid, App Store). Tapping
 one opens that VM on the page. What they say (VM names, a task's first line)
@@ -389,10 +390,10 @@ The page is a small web server on your computer, reached over
 nothing is opened to the internet. Install it on the computer
 (`curl -fsSL https://tailscale.com/install.sh | sh`, then `sudo tailscale up`)
 and the app on the phone, with the same account. Only on the same Wi-Fi?
-`vmagents phone --lan` (not encrypted then; networks of schools and hotels
+`vmforai phone --lan` (not encrypted then; networks of schools and hotels
 often keep devices apart). The link in the QR code holds a random key and the
 server answers nothing without it; `--new` makes a new one. Who connected is
-logged in `~/.cache/vmagents/phone.log`. In the UI: `m`. The page's terminal
+logged in `~/.cache/vmforai/phone.log`. In the UI: `m`. The page's terminal
 (xterm.js) comes from your computer too, fetched once and checked against its
 hash, so on the same Wi-Fi the phone needs no internet.
 
@@ -407,23 +408,23 @@ Let the agents work on a repository of yours, in the VM, and take back what
 they did as a branch:
 
 ```sh
-vmagents project dev ~/code/app   # send it: ~/projects/app on the VM; agents start there
-vmagents dev                      # ...the agent works (it may run anything: it is a VM)
-vmagents changes dev              # what it changed: its commits, and what it did not commit
-vmagents take dev                 # all that as the branch vmagents/dev in ~/code/app
-git merge vmagents/dev            # or: vmagents take dev --pr (a pull request, with gh)
-vmagents project dev              # send the result (and your new commits) back
+vmforai project dev ~/code/app   # send it: ~/projects/app on the VM; agents start there
+vmforai dev                      # ...the agent works (it may run anything: it is a VM)
+vmforai changes dev              # what it changed: its commits, and what it did not commit
+vmforai take dev                 # all that as the branch vmforai/dev in ~/code/app
+git merge vmforai/dev            # or: vmforai take dev --pr (a pull request, with gh)
+vmforai project dev              # send the result (and your new commits) back
 ```
 
-- Commits travel as git bundles over vmagents's SSH connection: the VM needs
+- Commits travel as git bundles over vmforai's SSH connection: the VM needs
   no access to GitHub and no keys, and only committed work goes there.
 - `take` makes or moves a branch only; your checkout is not touched.
   Uncommitted work on the VM (new files too, not ignored ones like
   `node_modules`) comes back as one extra commit on top of the agent's own.
 - Sending again replaces the VM's copy, so it is refused while the VM has work
   that was not taken back; `--discard` sends anyway and keeps that work on the
-  VM under `refs/vmagents/discarded/`.
-- `vmagents create web --project ~/code/app` makes a VM with the project in it.
+  VM under `refs/vmforai/discarded/`.
+- `vmforai create web --project ~/code/app` makes a VM with the project in it.
   In the UI: `p` sends, `c` shows the changes in a tab (`t` take, `P` pull request).
 
 ![The changes of a project, in a tab](docs/ui-changes.png)
@@ -434,25 +435,25 @@ With a project on the VM, one command takes a GitHub issue all the way to a
 pull request, while you do something else:
 
 ```sh
-vmagents fix dev 42 --test "npm test"
+vmforai fix dev 42 --test "npm test"
 ```
 
 1. The issue and its comments are read here, with the GitHub CLI (`gh`).
 2. The project goes to the VM again, a fresh copy of what is checked out here.
-3. The agent gets the issue as a task (`vmagents run`): fix it and commit.
+3. The agent gets the issue as a task (`vmforai run`): fix it and commit.
 4. The tests run on the VM. When they fail, the agent gets their output and
    tries again (`--tries`, 2 in all by default).
-5. The agent's commits come back as the branch `vmagents/issue-42`.
+5. The agent's commits come back as the branch `vmforai/issue-42`.
 6. When the tests pass, the branch is pushed and a pull request opens against
    the branch that was sent, saying "Fixes #42" (`--draft`, or `--no-pr` to
    stop at the branch).
 
 - `--test` is kept for the next issue. Without one, the agent runs the tests
-  it finds, and the pull request says that vmagents did not check.
+  it finds, and the pull request says that vmforai did not check.
 - Only the agent's commits are taken; what it left lying around (caches, test
   reports) stays out, unless it committed nothing at all.
 - The VM never talks to GitHub: it gets the issue's text, and the work comes
-  back through vmagents as with `take`. The agent follows that text without
+  back through vmforai as with `take`. The agent follows that text without
   asking, so when people other than you wrote some of it, `fix` says who and
   asks first (`--yes` skips that).
 - Any agent: `--codex`, `--gemini`, `--opencode`, `--aider`. In the UI: `f`.
@@ -466,62 +467,62 @@ VM down the clean way (ACPI) and waits until it is off. It stays on, and says
 why, when something still uses it:
 
 - the agent still runs in tmux because you detached with `Ctrl-b d`
-  (`vmagents dev` takes you back);
-- another vmagents connection is open (`vmagents shell`, `mount`, a second `vmagents dev`);
+  (`vmforai dev` takes you back);
+- another vmforai connection is open (`vmforai shell`, `mount`, a second `vmforai dev`);
 - someone is logged in on the VM (SSH; on Windows, the screen), or Claude still runs there;
 - the connection broke instead of ending.
 
-`vmagents dev --keep` leaves it on this time, `vmagents autostop dev off`
-always. `vmagents stop dev` shuts it down (`--force` pulls the plug),
-`vmagents start dev` boots it ahead of time, `vmagents list` shows what runs.
+`vmforai dev --keep` leaves it on this time, `vmforai autostop dev off`
+always. `vmforai stop dev` shuts it down (`--force` pulls the plug),
+`vmforai start dev` boots it ahead of time, `vmforai list` shows what runs.
 Machines added with `--host` only are never shut down.
 
-**…and when you forget:** `vmagents idle dev 30` installs a small service on
+**…and when you forget:** `vmforai idle dev 30` installs a small service on
 the VM that shuts it down after 30 minutes in which nothing used it (`create`
 sets this up). Used means an SSH session, a console login, Claude working
 (from its hooks) or a busy CPU on Linux; an SSH connection, someone signed in
 or Claude running on Windows. Claude waiting for you counts as unused: its
-conversation is saved and `vmagents dev --continue` resumes it. Linux VMs
-need systemd and sudo; Windows uses a scheduled task. `vmagents idle dev off`
+conversation is saved and `vmforai dev --continue` resumes it. Linux VMs
+need systemd and sudo; Windows uses a scheduled task. `vmforai idle dev off`
 removes it.
 
 ### Undo
 
-Before vmagents starts a libvirt VM that is off, it takes a snapshot
+Before vmforai starts a libvirt VM that is off, it takes a snapshot
 (`auto-DATE-TIME`; instant, since the VM is off). If the agent broke something:
 
 ```sh
-vmagents undo dev                                  # back to before this session (asks first)
-vmagents snapshots dev                             # all snapshots, oldest first
-vmagents undo dev auto-20261016-224745
-vmagents snapshot dev --name clean "before the big refactor"   # one of your own, any time
+vmforai undo dev                                  # back to before this session (asks first)
+vmforai snapshots dev                             # all snapshots, oldest first
+vmforai undo dev auto-20261016-224745
+vmforai snapshot dev --name clean "before the big refactor"   # one of your own, any time
 ```
 
-The newest 3 automatic snapshots are kept (`vmagents autosnap dev 10`, or
+The newest 3 automatic snapshots are kept (`vmforai autosnap dev 10`, or
 `off`); your own are never deleted automatically (`--delete NAME`). They are
 libvirt internal snapshots inside the VM's qcow2 disk. A snapshot of a running
 VM includes its memory and returns to it running.
 
 ### Notifications
 
-While Claude runs on the VM, `vmagents dev` starts a small background process
+While Claude runs on the VM, `vmforai dev` starts a small background process
 here that asks the VM every 15 seconds whether Claude needs you (a permission
 question, or finished and waiting a minute). Then a desktop notification
 appears, "Claude Code (dev)". It keeps going after `Ctrl-b d` and stops when
 Claude ends or the VM shuts down.
 
-On the VM this uses Claude Code hooks in `~/.config/vmagents/` (`hook.sh` and
+On the VM this uses Claude Code hooks in `~/.config/vmforai/` (`hook.sh` and
 `claude-settings.json`, passed with `--settings`); your own
 `~/.claude/settings.json` is not changed. On Windows VMs the hooks run under
-Git Bash. Needs `notify-send` here; `vmagents notify dev off` turns it off.
+Git Bash. Needs `notify-send` here; `vmforai notify dev off` turns it off.
 
 ### Open a port
 
 ```sh
-vmagents open dev 3000        # http://localhost:3000 here, opens in your browser
-vmagents open dev 5173 8080   # several
-vmagents open dev 9000:3000   # the VM's 3000 as localhost:9000
-vmagents ports dev 3000,5173  # forward these every time you connect
+vmforai open dev 3000        # http://localhost:3000 here, opens in your browser
+vmforai open dev 5173 8080   # several
+vmforai open dev 9000:3000   # the VM's 3000 as localhost:9000
+vmforai ports dev 3000,5173  # forward these every time you connect
 ```
 
 An SSH port forward: it works when the server listens only on the VM's
@@ -533,34 +534,34 @@ one. `Ctrl-C` ends it, then the VM shuts down if nothing else uses it.
 While you are connected to a Linux VM's tmux session, what lands in a tmux
 paste buffer lands in your clipboard too: text Claude Code copies and what
 you copy in tmux copy mode. Needs `xclip` or `xsel` (X11), `wl-copy`
-(Wayland) or `pbcopy` here; `vmagents clipboard dev off` turns it off.
+(Wayland) or `pbcopy` here; `vmforai clipboard dev off` turns it off.
 (VTE terminals such as GNOME Terminal and Xfce Terminal do not understand
-OSC 52, which is why vmagents does it this way.)
+OSC 52, which is why vmforai does it this way.)
 
 ### Other agents
 
 ```sh
-vmagents dev --codex          # OpenAI Codex CLI
-vmagents dev --gemini         # Google Gemini CLI
-vmagents dev --opencode       # OpenCode
-vmagents dev --aider          # aider
-vmagents agent dev codex      # make it the default for "vmagents dev"
+vmforai dev --codex          # OpenAI Codex CLI
+vmforai dev --gemini         # Google Gemini CLI
+vmforai dev --opencode       # OpenCode
+vmforai dev --aider          # aider
+vmforai agent dev codex      # make it the default for "vmforai dev"
 ```
 
 Each agent is installed on the VM the first time (Codex, OpenCode and aider
 with their own installers, Gemini CLI with npm), runs in its own tmux session
 and gets the same autostop, idle shutdown, snapshots and clipboard. Log in
 inside the agent once: Codex's "Sign in with ChatGPT" completes in the browser
-here (vmagents forwards its port 1455). API keys can go into
-`~/.config/vmagents/codex-env` (or `gemini-env`, `opencode-env`, `aider-env`)
+here (vmforai forwards its port 1455). API keys can go into
+`~/.config/vmforai/codex-env` (or `gemini-env`, `opencode-env`, `aider-env`)
 on the VM. Notifications are for Claude only, other agents for Linux VMs only.
 
 ### Claude's past sessions
 
 ```sh
-vmagents history dev              # Claude Code's conversations on the VM, newest first
-vmagents history dev 2            # one of them, readable: what you asked, its answers, its tools
-vmagents dev --resume ID          # go on with it
+vmforai history dev              # Claude Code's conversations on the VM, newest first
+vmforai history dev 2            # one of them, readable: what you asked, its answers, its tools
+vmforai dev --resume ID          # go on with it
 ```
 
 Claude Code keeps them on the VM, in `~/.claude/projects`; reading them
@@ -569,74 +570,74 @@ needs python3 there (cloud images have it). In the UI: `H`.
 ### Autostart and other devices
 
 Any interactive SSH login opens Claude; quit it or press `Ctrl-b d` for a
-shell. Skip it once with `ssh -o SetEnv=LC_VMAGENTS=off dev@VM`, turn it off
-with `vmagents autostart dev off`. To reach the VM from **another device**
+shell. Skip it once with `ssh -o SetEnv=LC_VMFORAI=off dev@VM`, turn it off
+with `vmforai autostart dev off`. To reach the VM from **another device**
 (your phone): a libvirt NAT network (`192.168.122.x`) is reachable only from
 the host; use a bridged network, a port forward or a VPN such as Tailscale.
 
 ## Create a VM
 
 ```sh
-vmagents create dev                                   # Debian 13, 4 GB RAM, 2 CPUs, 20 GB disk
-vmagents create big --memory 16384 --cpus 8 --disk 100
-vmagents create u --image ubuntu24.04
-vmagents create a --image arch --agents claude,codex --ports 3000
-vmagents delete dev                                   # asks you to type the name
-vmagents prune                                        # free the space of unused images
+vmforai create dev                                   # Debian 13, 4 GB RAM, 2 CPUs, 20 GB disk
+vmforai create big --memory 16384 --cpus 8 --disk 100
+vmforai create u --image ubuntu24.04
+vmforai create a --image arch --agents claude,codex --ports 3000
+vmforai delete dev                                   # asks you to type the name
+vmforai prune                                        # free the space of unused images
 ```
 
-**Templates** set up a VM for a kind of work: `vmagents create api --template
+**Templates** set up a VM for a kind of work: `vmforai create api --template
 node` gives it Node.js, npm and build tools, ports 3000 and 5173. Built in:
 `node`, `python`, `ml` (more RAM, CPUs and disk, Jupyter's port), `go`,
-`rust`; `vmagents templates` lists them. Options change what a template
+`rust`; `vmforai templates` lists them. Options change what a template
 sets (`--memory 8192`). Package names are the distribution's own (build
 tools are `build-essential` on Debian, `base-devel` on Arch). Your own:
-`~/.config/vmagents/templates/NAME.conf` with `IMAGE=`, `MEMORY=`, `CPUS=`,
+`~/.config/vmforai/templates/NAME.conf` with `IMAGE=`, `MEMORY=`, `CPUS=`,
 `DISK=`, `AGENTS=`, `PORTS=`, `PACKAGES=node build postgresql` and
 `SETUP=npm install -g pnpm` (a command run at the end). The UI's new-VM form
 offers them too.
 
-**Tools later:** `vmagents tools dev node python` installs them in a VM that
+**Tools later:** `vmforai tools dev node python` installs them in a VM that
 already exists: `node`, `python`, `go`, `rust`, `java`, `build` (a C compiler
 and make), or a package's own name. On Linux with the distribution's package
 manager (apt, dnf, pacman, zypper, apk), on Windows VMs with
-[Scoop](https://scoop.sh) (`vmagents tools win10 node python`).
+[Scoop](https://scoop.sh) (`vmforai tools win10 node python`).
 
 Needs `virsh` and `virt-install`, QEMU, and your user in the `libvirt`
-group: `vmagents deps` installs and sets up all of it.
+group: `vmforai deps` installs and sets up all of it.
 
 If libvirt has no `default` storage pool yet (a fresh Arch), `create` makes
 one in `/var/lib/libvirt/images`. With **ufw** on, allow the libvirt bridge
-or the VM gets no IP address (vmagents says so when it happens):
+or the VM gets no IP address (vmforai says so when it happens):
 `sudo ufw allow in on virbr0 && sudo ufw route allow in on virbr0 && sudo ufw route allow out on virbr0`.
 
 What `create` does:
 
-1. Downloads the official cloud image once into `~/.cache/vmagents/images`
+1. Downloads the official cloud image once into `~/.cache/vmforai/images`
    and checks it against the distribution's published SHA-512/SHA-256 sums.
 2. Copies it into the libvirt pool `default` as a shared base volume. Each VM
    gets a thin copy-on-write disk on top, so a new VM takes seconds and little
    space.
-3. Starts the VM with a cloud-init seed: your user with your vmagents SSH key
+3. Starts the VM with a cloud-init seed: your user with your vmforai SSH key
    and password-less `sudo` (the account has no password at all), and tmux.
-4. Waits until the VM accepts the key, then runs `vmagents setup`.
+4. Waits until the VM accepts the key, then runs `vmforai setup`.
 
 | What | Where |
 |---|---|
-| Downloaded images | `~/.cache/vmagents/images/` |
-| Base images, one per image release | `/var/lib/libvirt/images/vmagents-base-IMAGE-CHECKSUM.qcow2` |
+| Downloaded images | `~/.cache/vmforai/images/` |
+| Base images, one per image release | `/var/lib/libvirt/images/vmforai-base-IMAGE-CHECKSUM.qcow2` |
 | Each VM's own disk (only its differences) | `/var/lib/libvirt/images/NAME.qcow2` |
 | Each VM's cloud-init settings | `/var/lib/libvirt/images/NAME-seed.iso` |
 
-`vmagents images` shows them with sizes and the VMs that use each; `prune`
+`vmforai images` shows them with sizes and the VMs that use each; `prune`
 removes base volumes no VM is built on, and the download cache. The VM is on
 libvirt's `default` NAT network and shows up in virt-manager like any other
-(other pools or networks: `VMAGENTS_POOL`, `VMAGENTS_NETWORK`). Arch's image
+(other pools or networks: `VMFORAI_POOL`, `VMFORAI_NETWORK`). Arch's image
 comes from `geo.mirror.pkgbuild.com`; pick another mirror with
-`VMAGENTS_ARCH_MIRROR` (the checksum still comes from Arch's own server).
+`VMFORAI_ARCH_MIRROR` (the checksum still comes from Arch's own server).
 
 `delete` only deletes VMs that `create` made: the profile has to say so, and
-so does the VM's libvirt description ("created by vmagents").
+so does the VM's libvirt description ("created by vmforai").
 
 <details>
 <summary>Two details that real runs turned up</summary>
@@ -654,7 +655,7 @@ Besides running Claude inside the VM, you can let the Claude Code on your own
 computer reach into it:
 
 ```sh
-vmagents mcp arch --add      # = claude mcp add --scope user arch -- vmagents mcp arch
+vmforai mcp arch --add      # = claude mcp add --scope user arch -- vmforai mcp arch
 ```
 
 Every Claude Code session then has four more tools (see `/mcp`):
@@ -673,13 +674,13 @@ files travel over SFTP. Remove with `claude mcp remove arch --scope user`.
 **Or the VM's folder as a local folder** (needs `sshfs`):
 
 ```sh
-vmagents mount arch          # ~/vm/arch is now the VM's working folder
+vmforai mount arch          # ~/vm/arch is now the VM's working folder
 cd ~/vm/arch && claude       # Claude Code edits the VM's files with its normal tools
-vmagents umount arch
+vmforai umount arch
 ```
 
 Commands started in that folder still run on your computer; run things in
-the VM with `vmagents shell arch 'make test'` or the `run` tool above.
+the VM with `vmforai shell arch 'make test'` or the `run` tool above.
 
 ## Windows VMs
 
@@ -694,9 +695,9 @@ Start-Service sshd; Set-Service sshd -StartupType Automatic
 Then it works as on Linux:
 
 ```sh
-vmagents add win10 --domain win10 --user emin   # or --host IP
-vmagents setup win10
-vmagents win10
+vmforai add win10 --domain win10 --user emin   # or --host IP
+vmforai setup win10
+vmforai win10
 ```
 
 <details>
@@ -713,90 +714,90 @@ vmagents win10
 - **Autostart** goes into your PowerShell profile. That needs PowerShell as
   OpenSSH's default shell and an execution policy that runs profile scripts;
   a `Restricted` user policy is set to `RemoteSigned` (it says so).
-  `vmagents shell NAME` opens PowerShell without Claude.
+  `vmforai shell NAME` opens PowerShell without Claude.
 - Commands go as `powershell -EncodedCommand`, which works under `cmd.exe`
   and PowerShell alike. Claude's arguments pass through Windows' own
   command-line rules, so quotes, spaces and trailing backslashes arrive unchanged.
 - Claude Code on Windows sometimes stays after you quit it under OpenSSH;
-  vmagents notices the console switching back to line mode and ends it.
+  vmforai notices the console switching back to line mode and ends it.
 
 </details>
 
 ## Commands
 
 ```
-vmagents                         connect to the default VM (asks to add one if none)
-vmagents NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmagents dev --continue
-vmagents NAME --codex|--gemini|--opencode|--aider [ARGS...]   another agent this time
-vmagents ui                      the terminal UI
+vmforai                         connect to the default VM (asks to add one if none)
+vmforai NAME [CLAUDE_ARGS...]   connect to VM NAME, e.g. vmforai dev --continue
+vmforai NAME --codex|--gemini|--opencode|--aider [ARGS...]   another agent this time
+vmforai ui                      the terminal UI
 
-vmagents create NAME [options]   make a new Linux VM and set it up
+vmforai create NAME [options]   make a new Linux VM and set it up
     --image debian13|debian12|ubuntu24.04|arch  --memory MB  --cpus N  --disk GB
     --agents claude,codex,gemini,opencode,aider  --ports 3000,5173  --project DIR  --template NAME
     --user USER  --uri LIBVIRT_URI  --idle MINUTES|off  --no-setup
-vmagents resize NAME [--memory MB] [--cpus N] [--stop]
-vmagents delete NAME [--yes]     delete a VM made with create, and its disk
-vmagents images | prune          downloaded images and where they are / remove unused ones
-vmagents templates               what create --template offers
-vmagents tools NAME TOOL...      node, python, go, rust, java, build in the VM (Linux or Windows)
-vmagents deps [--check]          what vmagents uses on this computer, installed
+vmforai resize NAME [--memory MB] [--cpus N] [--stop]
+vmforai delete NAME [--yes]     delete a VM made with create, and its disk
+vmforai images | prune          downloaded images and where they are / remove unused ones
+vmforai templates               what create --template offers
+vmforai tools NAME TOOL...      node, python, go, rust, java, build in the VM (Linux or Windows)
+vmforai deps [--check]          what vmforai uses on this computer, installed
 
-vmagents add NAME [options]      add an existing VM, or change fields of a profile
+vmforai add NAME [options]      add an existing VM, or change fields of a profile
     --host HOST  --user USER  --port PORT  --key FILE
     --domain LIBVIRT_DOMAIN  --uri LIBVIRT_URI  --dir DIR_ON_VM
     --session TMUX_SESSION  --no-tmux
-vmagents setup NAME [--agents LIST] [--no-install] [--no-autostart]
-vmagents connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
-vmagents shell [--keep] NAME [CMD...]   plain shell or command on the VM
-vmagents start NAME | stop NAME [--force]
+vmforai setup NAME [--agents LIST] [--no-install] [--no-autostart]
+vmforai connect [--keep] [--hold] [--no-tmux] [NAME] [-- CLAUDE_ARGS...]
+vmforai shell [--keep] NAME [CMD...]   plain shell or command on the VM
+vmforai start NAME | stop NAME [--force]
 
-vmagents run NAME [--AGENT] [--wait] TASK   a task for an agent, done alone in the background
-vmagents runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
-vmagents history NAME [N|ID]     Claude Code's sessions on the VM; one, readable
-vmagents yolo NAME on|off        agents act without asking first (once: vmagents NAME --yolo)
-vmagents try NAME N [--agents LIST] [--memory MB] [--stop] TASK   N copies, each doing the task
-vmagents tries NAME | try NAME --clean   the copies / delete them
-vmagents net NAME [restricted|open|allow HOST...|deny HOST...|blocked]   the VM's network
+vmforai run NAME [--AGENT] [--wait] TASK   a task for an agent, done alone in the background
+vmforai runs NAME [ID] [-f|--stop] [--clean] [--json]   the tasks; one's output
+vmforai history NAME [N|ID]     Claude Code's sessions on the VM; one, readable
+vmforai yolo NAME on|off        agents act without asking first (once: vmforai NAME --yolo)
+vmforai try NAME N [--agents LIST] [--memory MB] [--stop] TASK   N copies, each doing the task
+vmforai tries NAME | try NAME --clean   the copies / delete them
+vmforai net NAME [restricted|open|allow HOST...|deny HOST...|blocked]   the VM's network
 
-vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
-vmagents changes NAME [--stat]   what the agents changed in it there
-vmagents take NAME [--branch B] [--pr]   that work as a branch here (or a pull request)
-vmagents fix NAME ISSUE [--test CMD] [--tries N] [--no-pr] [--draft]   an issue to a pull request
+vmforai project NAME [DIR]      send a git repository here to the VM (--discard, --off)
+vmforai changes NAME [--stat]   what the agents changed in it there
+vmforai take NAME [--branch B] [--pr]   that work as a branch here (or a pull request)
+vmforai fix NAME ISSUE [--test CMD] [--tries N] [--no-pr] [--draft]   an issue to a pull request
 
-vmagents open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
-vmagents ports NAME 3000,5173    ports forwarded each time you connect (off: none)
-vmagents phone [--lan] [--new] [--port N] | phone off   your VMs on the phone: a QR code to scan
-vmagents phone notify [off|test] [--server URL] [--token T]   notifications on the phone (ntfy)
-vmagents update [--check]        vmagents itself, at its latest release
-vmagents phone ssh NAME KEY|off  an SSH app on the phone into the VM (a port here per VM)
-vmagents undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
-vmagents snapshot NAME [--name SNAP] [LABEL]   take one; snapshots NAME lists them
-vmagents snapshot NAME --label SNAP LABEL      change a snapshot's label
-vmagents autosnap NAME N|off     automatic snapshots to keep (default 3)
-vmagents autostop | autostart | notify | clipboard NAME on|off
-vmagents idle NAME MINUTES|off   the VM shuts itself down when unused (create sets 30)
-vmagents agent NAME [AGENT]      what "vmagents NAME" opens
-vmagents login NAME [--remove]   log Claude in on the VM with this computer's browser
-vmagents mcp NAME [--add]        tools for Claude Code here to work in the VM
-vmagents mount NAME [FOLDER]     the VM's folder as a folder here; umount NAME
-vmagents doctor NAME             check every step
-vmagents list [--json] | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
+vmforai open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
+vmforai ports NAME 3000,5173    ports forwarded each time you connect (off: none)
+vmforai phone [--lan] [--new] [--port N] | phone off   your VMs on the phone: a QR code to scan
+vmforai phone notify [off|test] [--server URL] [--token T]   notifications on the phone (ntfy)
+vmforai update [--check]        vmforai itself, at its latest release
+vmforai phone ssh NAME KEY|off  an SSH app on the phone into the VM (a port here per VM)
+vmforai undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
+vmforai snapshot NAME [--name SNAP] [LABEL]   take one; snapshots NAME lists them
+vmforai snapshot NAME --label SNAP LABEL      change a snapshot's label
+vmforai autosnap NAME N|off     automatic snapshots to keep (default 3)
+vmforai autostop | autostart | notify | clipboard NAME on|off
+vmforai idle NAME MINUTES|off   the VM shuts itself down when unused (create sets 30)
+vmforai agent NAME [AGENT]      what "vmforai NAME" opens
+vmforai login NAME [--remove]   log Claude in on the VM with this computer's browser
+vmforai mcp NAME [--add]        tools for Claude Code here to work in the VM
+vmforai mount NAME [FOLDER]     the VM's folder as a folder here; umount NAME
+vmforai doctor NAME             check every step
+vmforai list [--json] | default NAME | desktop NAME | edit NAME | forget NAME | rm NAME
 ```
 
 Claude arguments apply when a new tmux session starts; an existing session is
-reattached as it is. `vmagents help COMMAND` (or `COMMAND --help`) explains
+reattached as it is. `vmforai help COMMAND` (or `COMMAND --help`) explains
 each command with examples.
 
 ## Configuration
 
-Profiles are plain `KEY=VALUE` files in `~/.config/vmagents/hosts/NAME.conf`,
+Profiles are plain `KEY=VALUE` files in `~/.config/vmforai/hosts/NAME.conf`,
 parsed, never executed:
 
 ```
 HOST=192.168.122.48     # optional with DOMAIN
 USER=dev
 PORT=22
-IDENTITY=~/.ssh/vmagents_ed25519
+IDENTITY=~/.ssh/vmforai_ed25519
 DOMAIN=debian13         # libvirt domain
 LIBVIRT_URI=qemu:///system
 DIR=~/work              # where the agent starts on the VM (created if missing)
@@ -805,27 +806,27 @@ OS=linux                # or windows; detected from the SSH banner on first use
 AGENT=claude            # or codex, gemini, opencode, aider
 AGENTS=claude,codex     # installed on the VM
 PORTS=3000,5173         # forwarded to this computer while connected
-PROJECT=~/code/app      # the git repository sent with "vmagents project"
+PROJECT=~/code/app      # the git repository sent with "vmforai project"
 YOLO=off                # on: agents act without asking first
-NET=open                # restricted: only the hosts on its list (vmagents net); NETPORT: its proxy's port
+NET=open                # restricted: only the hosts on its list (vmforai net); NETPORT: its proxy's port
 AUTOSTOP=on             # off: the VM keeps running after you leave
 AUTOSNAP=3              # automatic snapshots to keep; 0 = none
-IDLE=30                 # what "vmagents idle" set up on the VM (0 = off)
+IDLE=30                 # what "vmforai idle" set up on the VM (0 = off)
 NOTIFY=on               # desktop notifications
 CLIPBOARD=on            # copies on the VM land in this computer's clipboard
 ```
 
-Environment: `VMAGENTS_CONFIG_DIR` (another config folder),
-`VMAGENTS_BOOT_TIMEOUT` (seconds to wait for the VM, default 180),
-`VMAGENTS_STOP_TIMEOUT` (seconds to wait for a shutdown, default 120).
+Environment: `VMFORAI_CONFIG_DIR` (another config folder),
+`VMFORAI_BOOT_TIMEOUT` (seconds to wait for the VM, default 180),
+`VMFORAI_STOP_TIMEOUT` (seconds to wait for a shutdown, default 120).
 
 <details>
 <summary><b>How it works</b></summary>
 
-- `ssh -l USER -p PORT -i KEY -o HostKeyAlias=vmagents-NAME`. The host key is
-  stored under the profile name in vmagents's own `known_hosts`, so a VM whose
+- `ssh -l USER -p PORT -i KEY -o HostKeyAlias=vmforai-NAME`. The host key is
+  stored under the profile name in vmforai's own `known_hosts`, so a VM whose
   DHCP address changes keeps its identity. The first connection accepts the
-  key; after that a changed key is refused until `vmagents forget NAME` (for
+  key; after that a changed key is refused until `vmforai forget NAME` (for
   example after reinstalling the VM).
 - On the VM a short POSIX `sh` script adds `~/.local/bin` to `PATH`, goes to
   `DIR` and runs `tmux new-session -A -s claude claude ...`. Arguments are
@@ -833,7 +834,7 @@ Environment: `VMAGENTS_CONFIG_DIR` (another config folder),
 - Booting libvirt VMs: `virsh start`, then `virsh domifaddr`, then wait for the
   `SSH-2.0` banner. NAT forwards (passt, slirp, VirtualBox) accept connections
   before sshd is up, so an open port alone is not enough.
-- vmagents does not change the VM's sshd settings. Once key login works, you
+- vmforai does not change the VM's sshd settings. Once key login works, you
   may want to turn off password login (`PasswordAuthentication no`).
 
 </details>
@@ -844,7 +845,7 @@ Environment: `VMAGENTS_CONFIG_DIR` (another config folder),
 python3 -m unittest discover -s tests -t .
 ```
 
-The tests run vmagents against fake `ssh`, `virsh`, `virt-install` and
+The tests run vmforai against fake `ssh`, `virsh`, `virt-install` and
 `curl`; the scripts meant for the VM really run, under `sh`, in a throwaway
 home directory. CI runs them on every push, with shellcheck.
 
@@ -859,7 +860,7 @@ home directory. CI runs them on every push, with shellcheck.
 - `test_login.py`: the token reaches Claude however it is started and never
   appears on a command line.
 - `test_mount.py`, `test_mcp.py`: `mount`/`umount` with a fake sshfs; MCP
-  spoken to `vmagents mcp` the way Claude Code does, every tool.
+  spoken to `vmforai mcp` the way Claude Code does, every tool.
 - `test_create.py`: `create` and `delete` (which refuses VMs it did not make),
   the missing `default` pool, the UI under uv, and a Turkish locale (built
   with `localedef` when it is not installed).
@@ -902,7 +903,7 @@ home directory. CI runs them on every push, with shellcheck.
 - `test_templates.py`, `test_history.py`: templates for `create` (built in,
   your own, the package names per distribution) and Claude's sessions.
 - `test_ui.py` (needs Textual and pyte, else skipped): the UI with Textual's
-  test pilot against a fake `vmagents`: Vim keys, language, the new-VM form,
+  test pilot against a fake `vmforai`: Vim keys, language, the new-VM form,
   snapshots, terminal tabs on a real pseudo-terminal, creating in a tab,
   projects and changes, the working/waiting marks. `test_ui_backend.py`: the
   `--json` output and options it builds on.
@@ -912,21 +913,21 @@ home directory. CI runs them on every push, with shellcheck.
 <details>
 <summary>What was tried by hand, on real VMs</summary>
 
-- `vmagents create` on libvirt 11.3 with all four images (Debian 13, Debian
+- `vmforai create` on libvirt 11.3 with all four images (Debian 13, Debian
   12, Ubuntu 24.04, Arch Linux): download, checksum, base volume, VM,
   cloud-init, Claude Code, doctor, shut down and start again, `delete`, `prune`.
 - Inside the Arch VM: connect, detach and reattach, autostart on a plain
   `ssh` login, and the whole test suite. On a Debian 13 cloud image: setup,
-  connect, autostart and skipping it with `LC_VMAGENTS=off`.
+  connect, autostart and skipping it with `LC_VMFORAI=off`.
 - Autostop (quit: off; `Ctrl-b d`, a second connection, an SSH login: stays
   on), idle shutdown after 1 minute, a snapshot at each start and `undo`, live
   snapshots, notifications; on Arch and on Windows 10.
-- `vmagents open` with a web server on the VM; the clipboard with real tmux
+- `vmforai open` with a web server on the VM; the clipboard with real tmux
   (Turkish letters too); Codex, Gemini CLI, aider and OpenCode installed and
   started, Codex's login page through port 1455.
 - Claude Code hooks in Claude Code 2.1, and on Windows 10 under Git Bash, with
   the notification arriving here.
-- `vmagents mcp`: a real `claude -p` session that wrote, ran, edited and
+- `vmforai mcp`: a real `claude -p` session that wrote, ran, edited and
   re-ran a program in the Arch VM with only these tools; `mount` both ways.
 - Windows 10 22H2: setup (key as administrator, Git via the fallback
   installer, Claude Code), doctor, connect, autostart, `shell`, and 13 hard
@@ -974,11 +975,11 @@ home directory. CI runs them on every push, with shellcheck.
   (VirtualBox, VMware, Hyper-V, a cloud VM) work through `--host`: connect,
   open, clipboard, notifications, idle shutdown; start them yourself.
 - Windows VMs have no tmux, so sessions end with the connection; skipping
-  autostart with `LC_VMAGENTS=off` works on Linux VMs only.
+  autostart with `LC_VMFORAI=off` works on Linux VMs only.
 - The clipboard, other agents, projects and the restricted network need a Linux VM;
   on Windows, tasks run with Claude Code only. Copies
-  (`try`) need a VM made by vmagents; the restricted network a libvirt VM on a libvirt network.
-- A plain `ssh` login never shuts the VM down (vmagents is not running then;
+  (`try`) need a VM made by vmforai; the restricted network a libvirt VM on a libvirt network.
+- A plain `ssh` login never shuts the VM down (vmforai is not running then;
   the idle shutdown does, later). The idle shutdown cannot see long jobs that
   use little CPU (a download, a `sleep`).
 - The UI tells "working" from "waiting" by the terminal's output only: a
@@ -987,4 +988,4 @@ home directory. CI runs them on every push, with shellcheck.
 
 ## License
 
-MIT. If vmagents saved you some setup time, a ⭐ on GitHub helps others find it.
+MIT. If vmforai saved you some setup time, a ⭐ on GitHub helps others find it.

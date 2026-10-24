@@ -1,4 +1,4 @@
-"""vmagents open (port forwarding), the clipboard bridge, other agents than
+"""vmforai open (port forwarding), the clipboard bridge, other agents than
 Claude (codex, gemini, aider) and notifications from Windows VMs. Against the
 fake ssh, virsh and VM; the real thing was tried on the Arch and Windows 10
 VMs (a web server on the VM opened here, Claude's copies in tmux pasted here,
@@ -10,7 +10,7 @@ import socket
 import subprocess
 import time
 
-from tests.helpers import ROOT, VMAGENTS, SandboxTest, write_exe
+from tests.helpers import ROOT, VMFORAI, SandboxTest, write_exe
 from tests.ptyrun import run_in_pty
 from tests.test_idle_notify import var
 from tests.test_stop import Base
@@ -42,7 +42,7 @@ def free_pair():
 class OpenTests(Base):
     def open(self, *args, answers=None, **env):
         e = dict(self.sb.env, **env)
-        return run_in_pty([str(VMAGENTS), "open", *args], e, str(self.sb.tmp),
+        return run_in_pty([str(VMFORAI), "open", *args], e, str(self.sb.tmp),
                           answers=answers if answers is not None else [("Stop with Ctrl-C.", "\x03")])
 
     def fetch(self, port):
@@ -54,7 +54,7 @@ class OpenTests(Base):
         write_exe(self.sb.bin / "xdg-open", f'#!/bin/sh\necho "$@" >>{self.sb.tmp}/opened\n')
         seen = []
 
-        def fetch_then_stop():  # while vmagents forwards
+        def fetch_then_stop():  # while vmforai forwards
             seen.append(self.fetch(port))
             return "\x03"
         out = self.open("vm", str(port), answers=[("Stop with Ctrl-C.", fetch_then_stop)])
@@ -134,7 +134,7 @@ class ClipboardTests(Base):
     def copy(self, text):
         f = self.sb.tmp / "clipboard"
         write_exe(self.sb.bin / "xclip", f'#!/bin/sh\necho "$*" >>{f}.args\ncat >>{f}\necho "<end>" >>{f}\n')
-        subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"; exit$/d" "{ROOT}/vmagents"); clip_copy'],
+        subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"; exit$/d" "{ROOT}/vmforai"); clip_copy'],
                        input=text, text=True, check=True,
                        env={"PATH": f"{self.sb.bin}:/usr/bin:/bin", "DISPLAY": ":9", "HOME": str(self.sb.home)})
         return f.read_text() if f.exists() else ""
@@ -179,7 +179,7 @@ class AgentTests(Base):
         main = calls[0]["argv"]
         self.assertIn("127.0.0.1:1455:localhost:1455", main)  # its browser login
         self.assertTrue(main[-1].endswith(" '' 'codex' 'vm' 'codex' '--full-auto'"), main[-1])
-        self.assertEqual([c for c in calls if "vmagents-watch" in c["argv"][-1]], [])  # no Claude hooks
+        self.assertEqual([c for c in calls if "vmforai-watch" in c["argv"][-1]], [])  # no Claude hooks
 
     def test_session_names(self):
         self.assertTrue(self.connect_args("--gemini")[0]["argv"][-1].endswith(" '' 'gemini' 'vm' 'gemini'"))
@@ -192,7 +192,7 @@ class AgentTests(Base):
     def test_agent_command(self):
         self.assertEqual(self.sb.run("agent", "vm", check=0).stdout, "claude\n")
         r = self.sb.run("agent", "vm", "codex", env={"STUB_SSH_EXEC": "", "STUB_SSH_OUTPUT": "Installed codex\n"}, check=0)
-        self.assertIn('"vmagents vm" opens codex now', r.stdout)
+        self.assertIn('"vmforai vm" opens codex now', r.stdout)
         self.assertIn("AGENT=codex\n", self.profile())
         self.assertIn("chatgpt.com/codex/install.sh", self.sb.calls("ssh")[-1]["argv"][-1])
         self.assertTrue(self.connect_args()[0]["argv"][-1].endswith(" '' 'codex' 'vm' 'codex'"))
@@ -215,7 +215,7 @@ class AgentTests(Base):
         self.assertTrue(r.stdout.rstrip().endswith("codex-cli 1.0 hi"), r.stdout)  # no --settings for codex
 
     def test_launcher_gives_settings_to_claude_only(self):
-        d = self.sb.remote_home / ".config" / "vmagents"
+        d = self.sb.remote_home / ".config" / "vmforai"
         d.mkdir(parents=True)
         (d / "claude-settings.json").write_text("{}")
         (d / "codex-env").write_text("OPENAI_API_KEY=k1\n")
@@ -246,7 +246,7 @@ class YoloTests(Base):
         self.sb.run("yolo", "vm", "off", check=0)
         self.assertIn("YOLO=off\n", self.profile())
         self.assertEqual(self.sb.run("yolo", "vm", "maybe").returncode, 2)
-        self.assertIn("vmagents yolo NAME", self.sb.run("help", "yolo", check=0).stdout)
+        self.assertIn("vmforai yolo NAME", self.sb.run("help", "yolo", check=0).stdout)
 
 
 class WindowsNotifyTests(Base):
@@ -294,12 +294,12 @@ a = json.load(open("{answers}"))
 sys.stdout.write(a.pop(0) if a else "claude=0\\n")
 json.dump(a, open("{answers}", "w"))
 """)
-        self.sb.run("__watch", "vm", env={"VMAGENTS_WATCH_INTERVAL": "0.1", "XDG_RUNTIME_DIR": str(self.sb.tmp)},
+        self.sb.run("__watch", "vm", env={"VMFORAI_WATCH_INTERVAL": "0.1", "XDG_RUNTIME_DIR": str(self.sb.tmp)},
                     timeout=20, check=0)
         self.assertEqual(notified.read_text().splitlines(),
-                         ["-a|vmagents|Claude Code (vm)|work: Claude needs your input|"])
+                         ["-a|vmforai|Claude Code (vm)|work: Claude needs your input|"])
         polls = self.scripts()
-        self.assertIn("# vmagents-watch", polls[0])
+        self.assertIn("# vmforai-watch", polls[0])
         self.assertIn("Get-Process claude", polls[0])
         self.assertIn("$last = ''", polls[0])
         self.assertIn("$last = '1000'", polls[1])

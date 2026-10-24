@@ -105,25 +105,25 @@ class FixTests(test_projects.ProjectTests):
         self.assertIn("do not push", task)
         self.assertFalse((self.sb.remote_home / "task-2").exists())
         # The branch here, pushed, and the pull request.
-        self.assertEqual(self.git("show", "vmagents/issue-42:fix.txt"), "good")
-        files = self.git("ls-tree", "-r", "--name-only", "vmagents/issue-42").splitlines()
+        self.assertEqual(self.git("show", "vmforai/issue-42:fix.txt"), "good")
+        files = self.git("ls-tree", "-r", "--name-only", "vmforai/issue-42").splitlines()
         self.assertNotIn("cache/x.pyc", files)  # what the tests left is not part of the work
         self.assertNotIn("report é.txt", files)
         self.assertNotIn("notes.txt", files)  # nor what the agent did not commit
         self.assertIn("Left out, as the agent did not commit it: notes.txt", r.stdout)
-        self.assertEqual(self.git("log", "--format=%s", "-1", "vmagents/issue-42"), "Fix the greeting")
+        self.assertEqual(self.git("log", "--format=%s", "-1", "vmforai/issue-42"), "Fix the greeting")
         self.assertEqual(self.git("rev-parse", "main"), self.git("rev-parse", "HEAD"))  # checkout untouched
-        self.assertEqual(self.git("rev-parse", "vmagents/issue-42", cwd=self.origin),
-                         self.git("rev-parse", "vmagents/issue-42"))
+        self.assertEqual(self.git("rev-parse", "vmforai/issue-42", cwd=self.origin),
+                         self.git("rev-parse", "vmforai/issue-42"))
         create = self.gh_calls("pr", "create")[0]
         opt = dict(zip(create[2::2], create[3::2]))
-        self.assertEqual(opt["--head"], "vmagents/issue-42")
+        self.assertEqual(opt["--head"], "vmforai/issue-42")
         self.assertEqual(opt["--base"], "main")
         self.assertEqual(opt["--title"], "Fix #42: The greeting is wrong")
         self.assertIn("Fixes #42.", opt["--body"])
         self.assertIn("- Fix the greeting", opt["--body"])
         self.assertIn(f"The tests (`{test}`) pass on the VM.", opt["--body"])
-        self.assertIn("Made by Claude Code with `vmagents fix`", opt["--body"])
+        self.assertIn("Made by Claude Code with `vmforai fix`", opt["--body"])
         self.assertIn("Pull request: https://github.com/ada/app/pull/7", r.stdout)
         self.assertIn(f"TEST={test}\n", self.profile())  # kept for next time
 
@@ -146,7 +146,7 @@ class FixTests(test_projects.ProjectTests):
         self.assertIn("It says bad; it should say good.", task)
         self.assertIn("But the tests fail:", task)
         self.assertIn("expected good", task)
-        self.assertEqual(self.git("show", "vmagents/issue-42:fix.txt"), "good")
+        self.assertEqual(self.git("show", "vmforai/issue-42:fix.txt"), "good")
         self.assertEqual(len(self.gh_calls("pr", "create")), 1)
 
     def test_still_failing_no_pull_request(self):
@@ -154,26 +154,26 @@ class FixTests(test_projects.ProjectTests):
                         env={"AGENT_MODE": "bad"})
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertIn("still fail after 1 tries, so no pull request", r.stdout)
-        self.assertEqual(self.git("show", "vmagents/issue-42:fix.txt"), "bad")  # there to look at
+        self.assertEqual(self.git("show", "vmforai/issue-42:fix.txt"), "bad")  # there to look at
         self.assertEqual(self.gh_calls("pr", "create"), [])
-        self.assertNotIn("vmagents/issue-42", self.git("branch", "--list", "-r"))
+        self.assertNotIn("vmforai/issue-42", self.git("branch", "--list", "-r"))
 
     def test_agent_that_does_not_commit(self):
         r = self.sb.run("fix", "vm", "42", "--no-pr", env={"AGENT_MODE": "loose"}, check=0)
-        self.assertEqual(self.git("show", "vmagents/issue-42:fix.txt"), "good")  # then all it left is taken
+        self.assertEqual(self.git("show", "vmforai/issue-42:fix.txt"), "good")  # then all it left is taken
         self.assertNotIn("Left out", r.stdout)
 
     def test_nothing_changed(self):
         r = self.sb.run("fix", "vm", "42", "--no-pr", env={"AGENT_MODE": "nothing"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("the agent changed nothing", r.stderr)
-        self.assertEqual(self.git("branch", "--list", "vmagents/issue-42"), "")
+        self.assertEqual(self.git("branch", "--list", "vmforai/issue-42"), "")
 
     def test_agent_failure_stops_it(self):
         r = self.sb.run("fix", "vm", "42", env={"AGENT_RC": "3"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("did not finish well", r.stderr)
-        self.assertEqual(self.git("branch", "--list", "vmagents/issue-42"), "")
+        self.assertEqual(self.git("branch", "--list", "vmforai/issue-42"), "")
 
     def test_without_tests_and_pull_request(self):
         r = self.sb.run("fix", "vm", "42", "--no-pr", "--branch", "fix/greeting", check=0)
@@ -187,7 +187,7 @@ class FixTests(test_projects.ProjectTests):
         self.sb.run("fix", "vm", "42", "--draft", check=0)
         create = self.gh_calls("pr", "create")[0]
         self.assertIn("--draft", create)
-        self.assertIn("Not tested by vmagents", create[create.index("--body") + 1])
+        self.assertIn("Not tested by vmforai", create[create.index("--body") + 1])
 
     def test_text_by_others_asks_first(self):
         (self.gh / "issue").write_text(ISSUE.replace("\x1fada\x1f\x1f", "\x1fmallory\x1fada bob\x1f", 1))
@@ -205,9 +205,9 @@ class FixTests(test_projects.ProjectTests):
         (self.vm_repo / "mine.txt").write_text("by hand\n")
         r = self.sb.run("fix", "vm", "42", "--no-pr")
         self.assertEqual(r.returncode, 5)
-        self.assertIn("vmagents fix vm 42 --discard", r.stderr)
+        self.assertIn("vmforai fix vm 42 --discard", r.stderr)
         self.sb.run("fix", "vm", "42", "--no-pr", "--discard", check=0)
-        self.assertNotIn("mine.txt", self.git("ls-tree", "--name-only", "vmagents/issue-42"))
+        self.assertNotIn("mine.txt", self.git("ls-tree", "--name-only", "vmforai/issue-42"))
 
     def test_problems(self):
         self.assertIn("which issue?", self.sb.run("fix", "vm").stderr)
@@ -236,5 +236,5 @@ class FixTests(test_projects.ProjectTests):
         self.assertEqual(self.state(), "shut off")
 
     def test_help(self):
-        self.assertIn("vmagents fix NAME ISSUE", self.sb.run("help", "fix", check=0).stdout)
+        self.assertIn("vmforai fix NAME ISSUE", self.sb.run("help", "fix", check=0).stdout)
         self.assertIn("fix NAME ISSUE", self.sb.run("help", check=0).stdout)

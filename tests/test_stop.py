@@ -45,8 +45,8 @@ class AutostopTests(Base):
         r = self.sb.run("vm", env={"STUB_SSH_OUTPUT": out}, check=0)
         self.assertIn("VM testvm stays on: tmux on the VM still has session(s): claude; "
                       "logged in on the VM: bob@pts/1.", r.stderr)
-        self.assertIn("Back to Claude: vmagents vm", r.stderr)
-        self.assertIn("Shut it down: vmagents stop vm", r.stderr)
+        self.assertIn("Back to Claude: vmforai vm", r.stderr)
+        self.assertIn("Shut it down: vmforai stop vm", r.stderr)
         self.assertNotIn("shutdown", self.virsh_cmds())
         self.assertEqual(self.state(), "running")
 
@@ -98,8 +98,8 @@ class AutostopTests(Base):
         self.assertNotIn("shutdown", self.virsh_cmds())
 
     def test_other_connection_from_here_keeps_vm(self):
-        # Any process with the profile's HostKeyAlias: vmagents shell, sshfs, ...
-        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-oHostKeyAlias=vmagents-vm"])
+        # Any process with the profile's HostKeyAlias: vmforai shell, sshfs, ...
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-oHostKeyAlias=vmforai-vm"])
         self.addCleanup(other.wait)
         self.addCleanup(other.kill)
         r = self.sb.run("vm", check=0)
@@ -109,7 +109,7 @@ class AutostopTests(Base):
         self.assertNotIn("shutdown", self.virsh_cmds())
 
     def test_similar_profile_name_does_not_count(self):
-        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-oHostKeyAlias=vmagents-vm2"])
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-oHostKeyAlias=vmforai-vm2"])
         self.addCleanup(other.wait)
         self.addCleanup(other.kill)
         self.sb.run("vm", check=0)
@@ -134,8 +134,8 @@ class AutostopTests(Base):
         self.assertEqual(r.stderr, "")
 
     def test_shutdown_that_hangs(self):
-        r = self.sb.run("vm", env={"STUB_VIRSH_SHUTDOWN_IGNORED": "1", "VMAGENTS_STOP_TIMEOUT": "1"}, check=0)
-        self.assertIn("VM testvm is still running after 1s. Pull the plug: vmagents stop vm --force", r.stderr)
+        r = self.sb.run("vm", env={"STUB_VIRSH_SHUTDOWN_IGNORED": "1", "VMFORAI_STOP_TIMEOUT": "1"}, check=0)
+        self.assertIn("VM testvm is still running after 1s. Pull the plug: vmforai stop vm --force", r.stderr)
 
     def test_windows_check(self):
         self.sb.run("add", "vm", "--os", "windows", check=0)
@@ -200,7 +200,7 @@ class StopStartTests(Base):
         self.assertLess(cmds.index("resume"), cmds.index("shutdown"))
 
     def test_stop_timeout_fails(self):
-        r = self.sb.run("stop", "vm", env={"STUB_VIRSH_SHUTDOWN_IGNORED": "1", "VMAGENTS_STOP_TIMEOUT": "1"})
+        r = self.sb.run("stop", "vm", env={"STUB_VIRSH_SHUTDOWN_IGNORED": "1", "VMFORAI_STOP_TIMEOUT": "1"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("still running after 1s", r.stderr)
 

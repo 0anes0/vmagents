@@ -1,4 +1,4 @@
-"""Drives vmagents ui on a pty of its own (120x32) and copies what it draws to
+"""Drives vmforai ui on a pty of its own (120x32) and copies what it draws to
 stdout, for asciinema (docs/demo/make.sh). Keys at set moments."""
 import fcntl, os, pty, select, struct, sys, termios, time
 
@@ -6,7 +6,7 @@ COLS, ROWS = 120, 32
 pid, fd = pty.fork()
 if pid == 0:
     os.environ.update(TERM="xterm-256color", COLORTERM="truecolor")
-    os.execvp("vmagents", ["vmagents", "ui"])
+    os.execvp("vmforai", ["vmforai", "ui"])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
 seen = b""
 

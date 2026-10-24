@@ -1,19 +1,19 @@
-# vmagents on a Windows 10 or 11 computer: it runs in WSL (Ubuntu), and a
-# "vmagents" command here starts it there.
+# vmforai on a Windows 10 or 11 computer: it runs in WSL (Ubuntu), and a
+# "vmforai" command here starts it there.
 # Usage, in PowerShell:
-#   irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/emincan2000/vmforai/main/install.ps1 | iex
 # or, from a clone: powershell -ExecutionPolicy Bypass -File install.ps1 [-Distro Ubuntu] [-Force] [-Uninstall]
 param([string]$Distro = "Ubuntu", [switch]$Uninstall, [switch]$Force)
 
 $ErrorActionPreference = "Stop"
 $env:WSL_UTF8 = "1"  # wsl.exe writes UTF-8 then, not UTF-16
-$Bin = Join-Path $env:LOCALAPPDATA "vmagents"
-$Raw = "https://raw.githubusercontent.com/emincan2000/vmagents/main"
+$Bin = Join-Path $env:LOCALAPPDATA "vmforai"
+$Raw = "https://raw.githubusercontent.com/emincan2000/vmforai/main"
 
 function Say($s) { Write-Host $s }
-function Fail($s) { throw "vmagents: $s" }
+function Fail($s) { throw "vmforai: $s" }
 
-# The user's PATH, with or without the folder of the "vmagents" command.
+# The user's PATH, with or without the folder of the "vmforai" command.
 function Set-UserPath([bool]$add) {
   $p = [Environment]::GetEnvironmentVariable("Path", "User")
   $parts = @(($p -split ";") | Where-Object { $_ -and $_ -ne $Bin })
@@ -22,12 +22,12 @@ function Set-UserPath([bool]$add) {
 }
 
 # (In a function: with "irm | iex", exit would close the PowerShell window.)
-function Install-VmAgents {
+function Install-Vmforai {
   if ($Uninstall) {
     Remove-Item -Recurse -Force $Bin -ErrorAction SilentlyContinue
     Set-UserPath $false
-    Say "Removed the vmagents command here. In WSL, ~/.local/bin/vmagents is still there"
-    Say "(remove it with: wsl -d $Distro -- bash -c 'rm ~/.local/bin/vmagents')."
+    Say "Removed the vmforai command here. In WSL, ~/.local/bin/vmforai is still there"
+    Say "(remove it with: wsl -d $Distro -- bash -c 'rm ~/.local/bin/vmforai')."
     return
   }
 
@@ -39,7 +39,7 @@ function Install-VmAgents {
     $cs = Get-CimInstance Win32_ComputerSystem
     if (-not $Force -and "$($cs.Manufacturer) $($cs.Model)" -match "QEMU|KVM|VMware|VirtualBox|innotek|Virtual Machine|Xen|Parallels|Bochs") {
       Fail ("this Windows runs in a virtual machine ($($cs.Manufacturer) $($cs.Model)). WSL 2 needs nested virtualization " +
-        "there, and without it Windows may not start again. Install vmagents on the computer that runs the VMs instead; " +
+        "there, and without it Windows may not start again. Install vmforai on the computer that runs the VMs instead; " +
         "or take a snapshot of this VM first and run this with -Force.")
     }
     $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -64,34 +64,34 @@ function Install-VmAgents {
     return
   }
 
-  # 3. vmagents in it, and what it needs (sudo asks for the password set in step 2).
-  Say "Installing vmagents in $Distro..."
+  # 3. vmforai in it, and what it needs (sudo asks for the password set in step 2).
+  Say "Installing vmforai in $Distro..."
   & wsl.exe -d $Distro -e bash -lc "command -v curl >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y curl; }; curl -fsSL $Raw/install.sh | bash"
-  if ($LASTEXITCODE -ne 0) { Fail "installing vmagents in $Distro failed (see above)" }
+  if ($LASTEXITCODE -ne 0) { Fail "installing vmforai in $Distro failed (see above)" }
   # Windows 10's WSL cannot run VMs itself (no nested virtualization): no libvirt
-  # there. Windows 11's can; "vmagents deps" in WSL adds it.
+  # there. Windows 11's can; "vmforai deps" in WSL adds it.
   $build = [Environment]::OSVersion.Version.Build
   $extra = if ($build -ge 22000) { "" } else { " --no-libvirt" }
-  & wsl.exe -d $Distro -e bash -lc "~/.local/bin/vmagents deps --yes$extra"
-  if ($LASTEXITCODE -ne 0) { Say "Some of what vmagents uses is missing; later, in ${Distro}: vmagents deps" }
+  & wsl.exe -d $Distro -e bash -lc "~/.local/bin/vmforai deps --yes$extra"
+  if ($LASTEXITCODE -ne 0) { Say "Some of what vmforai uses is missing; later, in ${Distro}: vmforai deps" }
 
-  # 4. "vmagents" here.
+  # 4. "vmforai" here.
   New-Item -ItemType Directory -Force -Path $Bin | Out-Null
   # (-e: no shell of WSL's own in between, which would expand "$@" too early.)
-  $cmd = "@echo off`r`nwsl.exe -d $Distro -e bash -lc ""exec ~/.local/bin/vmagents \""`$@\"""" vmagents %*`r`n"
-  [IO.File]::WriteAllText((Join-Path $Bin "vmagents.cmd"), $cmd)
+  $cmd = "@echo off`r`nwsl.exe -d $Distro -e bash -lc ""exec ~/.local/bin/vmforai \""`$@\"""" vmforai %*`r`n"
+  [IO.File]::WriteAllText((Join-Path $Bin "vmforai.cmd"), $cmd)
   Set-UserPath $true
   $env:Path = "$env:Path;$Bin"
 
   Say ""
-  Say "vmagents is installed: a new terminal (PowerShell, cmd or Windows Terminal) has the vmagents command."
+  Say "vmforai is installed: a new terminal (PowerShell, cmd or Windows Terminal) has the vmforai command."
   if ($build -lt 22000) {
     Say "On Windows 10, WSL cannot run VMs itself. Use VMs from Hyper-V, VirtualBox or VMware (or another"
-    Say "computer), with their address:   vmagents add dev --host 192.168.1.50 --user you"
+    Say "computer), with their address:   vmforai add dev --host 192.168.1.50 --user you"
   } else {
-    Say "In WSL, libvirt makes VMs:   vmagents create dev"
+    Say "In WSL, libvirt makes VMs:   vmforai create dev"
   }
-  Say "Next: vmagents   (it asks for your VM the first time)"
+  Say "Next: vmforai   (it asks for your VM the first time)"
 }
 
-Install-VmAgents
+Install-Vmforai

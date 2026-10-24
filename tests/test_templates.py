@@ -45,7 +45,7 @@ class TemplateTests(CreateBase):
         (d / "bad.conf").write_text("COLOUR=blue\n")
         self.assertIn("unknown key COLOUR", self.sb.run("create", "x", "--template", "bad", "--no-setup").stderr)
         self.assertIn("no template named 'nope'", self.sb.run("create", "x", "--template", "nope", "--no-setup").stderr)
-        self.assertIn("vmagents templates", self.sb.run("help", "templates", check=0).stdout)
+        self.assertIn("vmforai templates", self.sb.run("help", "templates", check=0).stdout)
 
 
 class TemplateScriptTests(CreateBase):

@@ -1,4 +1,4 @@
-"""vmagents mount / umount with a fake sshfs and fusermount, which record
+"""vmforai mount / umount with a fake sshfs and fusermount, which record
 "mounts" in a file standing in for /proc/mounts."""
 import os
 
@@ -8,11 +8,11 @@ SSHFS = r'''#!/bin/sh
 printf '%s\n' "$@" >"$STUB_SSHFS_ARGS"
 [ -n "$STUB_SSHFS_FAIL" ] && { echo "read: Connection reset by peer" >&2; exit 1; }
 for last; do :; done
-echo "sshfs#remote $(readlink -f "$last") fuse.sshfs rw 0 0" >>"$VMAGENTS_MOUNTS_FILE"
+echo "sshfs#remote $(readlink -f "$last") fuse.sshfs rw 0 0" >>"$VMFORAI_MOUNTS_FILE"
 '''
 FUSERMOUNT = r'''#!/bin/sh
 d=$(readlink -f "$2")
-grep -v " $d " "$VMAGENTS_MOUNTS_FILE" >"$VMAGENTS_MOUNTS_FILE.new"; mv "$VMAGENTS_MOUNTS_FILE.new" "$VMAGENTS_MOUNTS_FILE"
+grep -v " $d " "$VMFORAI_MOUNTS_FILE" >"$VMFORAI_MOUNTS_FILE.new"; mv "$VMFORAI_MOUNTS_FILE.new" "$VMFORAI_MOUNTS_FILE"
 '''
 
 
@@ -26,7 +26,7 @@ class MountTests(SandboxTest):
         self.args = self.sb.tmp / "sshfs.args"
         write_exe(self.sb.bin / "sshfs", SSHFS)
         write_exe(self.sb.bin / "fusermount3", FUSERMOUNT)
-        self.sb.env.update({"VMAGENTS_MOUNTS_FILE": str(self.mounts), "STUB_SSHFS_ARGS": str(self.args),
+        self.sb.env.update({"VMFORAI_MOUNTS_FILE": str(self.mounts), "STUB_SSHFS_ARGS": str(self.args),
                             "STUB_SSH_EXEC": "1"})
         self.mp = self.sb.home / "vm" / "vm"
 
@@ -38,7 +38,7 @@ class MountTests(SandboxTest):
         args = self.args.read_text().splitlines()
         self.assertEqual(args[-2:], [f"dev@192.0.2.7:{work}", str(self.mp)])
         opts = ",".join(a for a in args if a != "-o")
-        for o in ("Port=2222", "HostKeyAlias=vmagents-vm", "BatchMode=yes", "reconnect", "idmap=user",
+        for o in ("Port=2222", "HostKeyAlias=vmforai-vm", "BatchMode=yes", "reconnect", "idmap=user",
                   f"UserKnownHostsFile={self.sb.conf}/known_hosts"):
             self.assertIn(o, opts)
         self.assertIn("Already mounted", self.sb.run("mount", "vm", check=0).stdout)

@@ -1,31 +1,36 @@
 # Maintainer: EminY <57416756+emincan2000@users.noreply.github.com>
-pkgname=vmagents
+pkgname=vmforai
 pkgver=0.24.2
 pkgrel=1
 pkgdesc="Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine"
 arch=('any')
-url="https://github.com/emincan2000/vmagents"
+url="https://github.com/emincan2000/vmforai"
 license=('MIT')
 depends=('bash' 'openssh' 'curl' 'util-linux' 'python' 'git'
          'libvirt' 'virt-install' 'qemu-system-x86' 'qemu-img' 'libisoburn' 'dnsmasq')
+provides=('vmagents')
+conflicts=('vmagents')
+replaces=('vmagents')
 optdepends=('uv: fetches the terminal UI'"'"'s Python packages'
-            'github-cli: pull requests (vmagents take --pr, vmagents fix)'
+            'github-cli: pull requests (vmforai take --pr, vmforai fix)'
             'libnotify: desktop notifications'
             'xclip: the shared clipboard on X11'
             'wl-clipboard: the shared clipboard on Wayland'
-            'sshfs: vmagents mount')
+            'sshfs: vmforai mount')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('bb430226368ffefae437eee5d36a5668357b9392336f97df449f452f745e09eb')
 
 check() {
   cd "$pkgname-$pkgver"
-  [[ $(bash ./vmagents --version) == "vmagents $pkgver" ]]
+  [[ $(bash ./vmforai --version) == "vmforai $pkgver" ]]
 }
 
 package() {
   cd "$pkgname-$pkgver"
-  install -Dm755 vmagents "$pkgdir/usr/bin/vmagents"
-  ln -s vmagents "$pkgdir/usr/bin/vmclaude"
+  install -Dm755 vmforai "$pkgdir/usr/bin/vmforai"
+  ln -s vmforai "$pkgdir/usr/bin/vmf"
+  ln -s vmforai "$pkgdir/usr/bin/vmagents"
+  ln -s vmforai "$pkgdir/usr/bin/vmclaude"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 README.tr.md "$pkgdir/usr/share/doc/$pkgname/README.tr.md"

@@ -1,4 +1,4 @@
-"""Idle shutdown (vmagents idle), Claude's hooks on the VM and desktop
+"""Idle shutdown (vmforai idle), Claude's hooks on the VM and desktop
 notifications (the watcher). The VM side really runs where it can: hook.sh
 and the watcher's poll script, in the fake VM home. The idle service itself
 was tried on the Arch and Windows 10 VMs (they powered off after 1 and 2
@@ -15,15 +15,15 @@ from tests.test_windows import decode
 
 
 def var(name):
-    """A variable of the vmagents script, as the script defines it."""
+    """A variable of the vmforai script, as the script defines it."""
     return subprocess.run(["bash", "-c", f'source <(sed "/^main \\"\\$@\\"; exit$/d" "$0"); printf "%s" "${name}"',
-                           str(ROOT / "vmagents")], capture_output=True, text=True, check=True).stdout
+                           str(ROOT / "vmforai")], capture_output=True, text=True, check=True).stdout
 
 
 class HookTests(SandboxTest):
     def setUp(self):
         super().setUp()
-        self.d = self.sb.remote_home / ".config" / "vmagents"
+        self.d = self.sb.remote_home / ".config" / "vmforai"
         self.d.mkdir(parents=True)
         self.hook = self.d / "hook.sh"
         self.hook.write_text(var("HOOK_SH") + "\n")
@@ -61,7 +61,7 @@ class HookTests(SandboxTest):
         settings = json.loads(var("CLAUDE_SETTINGS"))
         hooks = settings["hooks"]
         self.assertEqual(set(hooks), {"UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification"})
-        self.assertEqual(hooks["Stop"][0]["hooks"][0]["command"], 'sh "$HOME/.config/vmagents/hook.sh" idle')
+        self.assertEqual(hooks["Stop"][0]["hooks"][0]["command"], 'sh "$HOME/.config/vmforai/hook.sh" idle')
         self.assertEqual(hooks["PreToolUse"][0]["matcher"], "*")
         self.assertEqual(hooks["Notification"][0]["hooks"][0]["command"].split()[-1], "notify")
 
@@ -85,13 +85,13 @@ class IdleTests(Base):
         self.assertIn("IDLE=30\n", self.profile())
         argv = self.sb.calls("ssh")[-1]["argv"]
         script = argv[-1]
-        self.assertIn("/etc/systemd/system/vmagents-idle.service", script)
-        self.assertIn("ExecStart=/bin/sh /usr/local/libexec/vmagents-idle $m", script)
-        self.assertIn("vmagents '30' '#!/bin/sh", script)  # minutes, then the idle script
+        self.assertIn("/etc/systemd/system/vmforai-idle.service", script)
+        self.assertIn("ExecStart=/bin/sh /usr/local/libexec/vmforai-idle $m", script)
+        self.assertIn("vmforai '30' '#!/bin/sh", script)  # minutes, then the idle script
         self.assertIn("systemctl poweroff", script)
         self.sb.run("idle", "vm", "off", check=0)
         self.assertIn("IDLE=0\n", self.profile())
-        self.assertIn("vmagents '0' '#!/bin/sh", self.sb.calls("ssh")[-1]["argv"][-1])
+        self.assertIn("vmforai '0' '#!/bin/sh", self.sb.calls("ssh")[-1]["argv"][-1])
         self.assertEqual(self.sb.run("idle", "vm", "soon").returncode, 2)
 
     def test_install_script_needs_systemd_and_sudo(self):
@@ -107,7 +107,7 @@ class IdleTests(Base):
         self.sb.run("idle", "vm", "45", check=0)
         _, ps = decode(self.sb.calls("ssh")[-1]["argv"][-1])
         self.assertIn("$m = 45", ps)
-        self.assertIn("Register-ScheduledTask -TaskName vmagents-idle", ps)
+        self.assertIn("Register-ScheduledTask -TaskName vmforai-idle", ps)
         self.assertIn("-ExecutionTimeLimit ([TimeSpan]::Zero)", ps)
         self.assertIn('-UserId "SYSTEM"', ps)
         self.assertIn("Stop-Computer -Force", ps)
@@ -139,12 +139,12 @@ class WatcherTests(Base):
         write_exe(self.sb.bin / "notify-send",
                   f'#!/bin/sh\nprintf "%s|" "$@" >>{self.notified}\necho >>{self.notified}\n')
         self.sb.remote_tool("pgrep", PGREP)
-        self.events = self.sb.remote_home / ".config" / "vmagents" / "events"
+        self.events = self.sb.remote_home / ".config" / "vmforai" / "events"
         self.events.parent.mkdir(parents=True)
 
     def watch(self, counts, env=None, timeout=20):
         (self.sb.remote_home / "claude-counts").write_text("".join(f"{c}\n" for c in counts))
-        e = {"STUB_SSH_EXEC": "1", "VMAGENTS_WATCH_INTERVAL": "0.2", "XDG_RUNTIME_DIR": str(self.sb.tmp)}
+        e = {"STUB_SSH_EXEC": "1", "VMFORAI_WATCH_INTERVAL": "0.2", "XDG_RUNTIME_DIR": str(self.sb.tmp)}
         e.update(env or {})
         return self.sb.run("__watch", "vm", env=e, timeout=timeout, check=0)
 
@@ -156,8 +156,8 @@ class WatcherTests(Base):
         self.sb.remote_tool("pgrep", PGREP + f'[ -f "$HOME/added" ] || {{ touch "$HOME/added"; printf "{later}" >>"{self.events}"; }}\n')
         self.watch([1, 1, 1, 0, 0])
         lines = self.notified.read_text().splitlines()
-        self.assertEqual(lines, ["-a|vmagents|Claude Code (vm)|my app: Claude needs your permission to use Bash|"])
-        polls = [c for c in self.sb.calls("ssh") if "vmagents-watch" in c["argv"][-1]]
+        self.assertEqual(lines, ["-a|vmforai|Claude Code (vm)|my app: Claude needs your permission to use Bash|"])
+        polls = [c for c in self.sb.calls("ssh") if "vmforai-watch" in c["argv"][-1]]
         self.assertEqual(len(polls), 5)  # stops after Claude is gone twice
         self.assertIn("BatchMode=yes", polls[0]["argv"])
 
@@ -169,7 +169,7 @@ class WatcherTests(Base):
 
     def test_one_watcher_per_vm(self):
         import fcntl
-        lock = open(self.sb.tmp / f"vmagents-watch-{os.getuid()}-vm.lock", "a")
+        lock = open(self.sb.tmp / f"vmforai-watch-{os.getuid()}-vm.lock", "a")
         self.addCleanup(lock.close)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.watch([1, 0, 0])
@@ -186,13 +186,13 @@ class WatcherTests(Base):
         self.assertEqual(len(self.sb.calls("ssh")), 20)
 
     def connect_with_display(self, **env):
-        e = {"DISPLAY": ":9", "VMAGENTS_WATCH_INTERVAL": "0.2", "XDG_RUNTIME_DIR": str(self.sb.tmp),
+        e = {"DISPLAY": ":9", "VMFORAI_WATCH_INTERVAL": "0.2", "XDG_RUNTIME_DIR": str(self.sb.tmp),
              "STUB_SSH_OUTPUT": "claude=0\n"}
         e.update(env)
         self.sb.run("vm", "--keep", env=e, check=0)
         deadline = time.time() + 10
         while time.time() < deadline:
-            polls = [c for c in self.sb.calls("ssh") if "vmagents-watch" in c["argv"][-1]]
+            polls = [c for c in self.sb.calls("ssh") if "vmforai-watch" in c["argv"][-1]]
             if len(polls) >= 2:
                 break
             time.sleep(0.1)
@@ -211,7 +211,7 @@ class WatcherTests(Base):
 
     def test_does_not_keep_the_vm_on(self):
         other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
-                                  "-oHostKeyAlias=vmagents-vm", "sh -c ': vmagents-watch'"])
+                                  "-oHostKeyAlias=vmforai-vm", "sh -c ': vmforai-watch'"])
         self.addCleanup(other.wait)
         self.addCleanup(other.kill)
         r = self.sb.run("vm", check=0)

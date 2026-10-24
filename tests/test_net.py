@@ -1,5 +1,5 @@
 """The restricted network: the proxy (PROXY_PY) with real connections, and
-"vmagents net" against a fake libvirt that keeps the VM's XML, its filter
+"vmforai net" against a fake libvirt that keeps the VM's XML, its filter
 and its card, and the fake VM (its proxy settings)."""
 import http.server
 import json
@@ -57,8 +57,8 @@ class ProxyTests(SandboxTest):
         write_exe(self.sb.bin / "virsh", f"#!/bin/sh\ncat {self.state}\n")
         self.port = free_port()
         # Allowed names that do not exist: refused by their DNS soon, or not.
-        env = dict(os.environ, PATH=f"{self.sb.bin}:{os.environ['PATH']}", VMAGENTS_PROXY_WATCH="0.2",
-                   VMAGENTS_PROXY_CONNECT_TIMEOUT="1")
+        env = dict(os.environ, PATH=f"{self.sb.bin}:{os.environ['PATH']}", VMFORAI_PROXY_WATCH="0.2",
+                   VMFORAI_PROXY_CONNECT_TIMEOUT="1")
         self.proc = subprocess.Popen([sys.executable, "-c", var("PROXY_PY"), str(self.allow), str(self.log),
                                       "127.0.0.1", str(self.port), "qemu:///system", "vm"], env=env)
         self.addCleanup(self.proc.kill)
@@ -159,12 +159,12 @@ class NetTests(SandboxTest):
         self.lv.write_text(json.dumps({"state": "running", "xml": DOMAIN_XML}))
         write_exe(self.sb.bin / "virsh", VIRSH)
         self.sb.env.update(FAKE_LV=str(self.lv), STUB_SSH_EXEC="1", XDG_RUNTIME_DIR=str(self.sb.tmp),
-                           VMAGENTS_PROXY_WATCH="0.3")
+                           VMFORAI_PROXY_WATCH="0.3")
         self.sb.run("add", "vm", "--domain", "vm", "--port", str(self.sshport), "--os", "linux", check=0)
         self.addCleanup(self.stop_proxy)
 
     def stop_proxy(self):
-        pid = self.sb.tmp / f"vmagents-proxy-{os.getuid()}-vm.lock.pid"
+        pid = self.sb.tmp / f"vmforai-proxy-{os.getuid()}-vm.lock.pid"
         if pid.exists():
             try:
                 os.kill(int(pid.read_text()), 9)
@@ -184,17 +184,17 @@ class NetTests(SandboxTest):
         port = int(self.profile().split("NETPORT=")[1].split()[0])
         self.assertIn("NET=restricted\n", self.profile())
         st = self.state()
-        f = st["filters"]["vmagents-restricted"]
+        f = st["filters"]["vmforai-restricted"]
         for rule in ("<udp dstipaddr='$GATEWAY' dstportstart='53'/>", "<tcp dstipaddr='$GATEWAY' dstportstart='$PROXY_PORT'/>",
                      "<tcp dstportstart='22'/>", "<rule action='drop' direction='inout' priority='500'><all/></rule>"):
             self.assertIn(rule, f)
-        self.assertIn("<filterref filter='vmagents-restricted'>", st["xml"])
+        self.assertIn("<filterref filter='vmforai-restricted'>", st["xml"])
         self.assertIn("<parameter name='GATEWAY' value='127.0.0.1'/>", st["xml"])
         self.assertIn(f"<parameter name='PROXY_PORT' value='{port}'/>", st["xml"])
-        self.assertIn("<filterref filter='vmagents-restricted'><parameter name='GATEWAY' value='127.0.0.1'/>",
+        self.assertIn("<filterref filter='vmforai-restricted'><parameter name='GATEWAY' value='127.0.0.1'/>",
                       st["live_iface"])  # the running VM's card too
         self.assertTrue(st["live_iface"].startswith("    <interface type='network'>"))
-        env = (self.sb.remote_home / ".config" / "vmagents" / "proxy-env").read_text()
+        env = (self.sb.remote_home / ".config" / "vmforai" / "proxy-env").read_text()
         self.assertIn(f"https_proxy=http://127.0.0.1:{port}\n", env)
         self.assertIn("NO_PROXY=localhost,127.0.0.1,::1\n", env)
         # The proxy runs here, and notes what it refuses.
@@ -222,7 +222,7 @@ class NetTests(SandboxTest):
         st = self.state()
         self.assertNotIn("filterref", st["xml"])
         self.assertNotIn("filterref", st["live_iface"])
-        self.assertFalse((self.sb.remote_home / ".config" / "vmagents" / "proxy-env").exists())
+        self.assertFalse((self.sb.remote_home / ".config" / "vmforai" / "proxy-env").exists())
         self.assertIn("NET=open\n", self.profile())
         time.sleep(0.5)
         with self.assertRaises(OSError):
@@ -230,7 +230,7 @@ class NetTests(SandboxTest):
         self.assertTrue(json.loads(self.sb.run("list", "--json", check=0).stdout)[0]["net"] == "open")
 
     def test_launcher_reads_the_proxy_settings(self):
-        d = self.sb.remote_home / ".config" / "vmagents"
+        d = self.sb.remote_home / ".config" / "vmforai"
         d.mkdir(parents=True)
         (d / "proxy-env").write_text("HTTPS_PROXY=http://gw:1\n")
         (d / "codex-env").write_text("OPENAI_API_KEY=k\n")
@@ -243,4 +243,4 @@ class NetTests(SandboxTest):
         self.assertEqual(self.sb.run("net", "vm", "closed").returncode, 2)
         self.sb.run("add", "h", "--host", "192.0.2.1", check=0)
         self.assertIn("needs a libvirt VM", self.sb.run("net", "h", "restricted").stderr)
-        self.assertIn("vmagents net NAME", self.sb.run("help", "net", check=0).stdout)
+        self.assertIn("vmforai net NAME", self.sb.run("help", "net", check=0).stdout)

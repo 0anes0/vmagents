@@ -156,14 +156,14 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("installing", r.stderr)
         self.assertIn("key login works", r.stderr)
-        pub = (self.sb.home / ".ssh" / "vmagents_ed25519.pub").read_text()
+        pub = (self.sb.home / ".ssh" / "vmforai_ed25519.pub").read_text()
         self.assertEqual((self.sb.remote_home / ".ssh" / "authorized_keys").read_text(), pub)
         self.assertTrue((self.sb.remote_home / ".local" / "bin" / "claude").exists())
-        self.assertIn("vmagents autostart", (self.sb.remote_home / ".bashrc").read_text())
+        self.assertIn("vmforai autostart", (self.sb.remote_home / ".bashrc").read_text())
 
-        # The host key is pinned under the profile's alias in vmagents's own file.
+        # The host key is pinned under the profile's alias in vmforai's own file.
         kh = (self.sb.conf / "known_hosts").read_text()
-        self.assertTrue(kh.startswith("vmagents-vm ssh-ed25519 "), kh)
+        self.assertTrue(kh.startswith("vmforai-vm ssh-ed25519 "), kh)
 
         # Without the password now: the key must do.
         self.sb.env.pop("SSH_ASKPASS")
@@ -173,7 +173,7 @@ class EndToEnd(unittest.TestCase):
         proj = self.sb.remote_home / "project dir"
         claude = self.sb.remote_home / ".local" / "bin" / "claude"
         self.assertEqual(self.sb.remote_calls(), [
-            f"tmux [new-session] [-A] [-s] [claude] [-c] [{proj}] {WRAP}[{self.sb.remote_home}/.config/vmagents/claude-env] "
+            f"tmux [new-session] [-A] [-s] [claude] [-c] [{proj}] {WRAP}[{self.sb.remote_home}/.config/vmforai/claude-env] "
             f"[{claude}] [-p] [it's $HOME] cwd=[{proj}]"])
 
         r = self.sb.run("doctor", "vm", timeout=60)
@@ -194,7 +194,7 @@ class EndToEnd(unittest.TestCase):
         self.sb.run("add", "vm", "--port", str(self.vm.port), check=0)
         r = self.sb.run("vm", timeout=60)
         self.assertEqual(r.returncode, 255)
-        self.assertIn("vmagents doctor vm", r.stderr)
+        self.assertIn("vmforai doctor vm", r.stderr)
         self.sb.run("forget", "vm", check=0)
         r = self.sb.run("vm", timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)

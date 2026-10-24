@@ -10,19 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: The tag matches VERSION
-        run: test "$GITHUB_REF_NAME" = "v$(sed -n 's/^VERSION=//p' vmagents)"
+        run: test "$GITHUB_REF_NAME" = "v$(sed -n 's/^VERSION=//p' vmforai)"
       - name: Debian package
         run: packaging/deb/build.sh dist
-      - name: The script, and the checksums "vmagents update" checks
+      - name: The script, and the checksums "vmforai update" checks
         run: |
-          cp vmagents dist/vmagents
-          cd dist && sha256sum vmagents *.deb >SHA256SUMS
+          cp vmforai dist/vmforai
+          # (the same, under its old name: "vmagents update" of 0.23 and 0.24 looks for that)
+          cp vmforai dist/vmagents
+          cd dist && sha256sum vmforai vmagents *.deb >SHA256SUMS
       - name: GitHub release with the package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/vmagents dist/SHA256SUMS dist/*.deb --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/vmforai dist/vmagents dist/SHA256SUMS dist/*.deb --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/vmagents dist/SHA256SUMS dist/*.deb --title "vmagents ${GITHUB_REF_NAME#v}" --generate-notes
+            gh release create "$GITHUB_REF_NAME" dist/vmforai dist/vmagents dist/SHA256SUMS dist/*.deb --title "vmforai ${GITHUB_REF_NAME#v}" --generate-notes
           fi

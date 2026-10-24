@@ -69,7 +69,7 @@ class ProjectTests(Base):
         self.assertIn("b.txt", out)
         self.assertNotIn("node_modules", out)  # ignored files stay
         self.assertNotIn("+changed", self.sb.run("changes", "vm", "--stat", check=0).stdout)
-        self.assertEqual(self.git("branch", "--list", "vmagents/vm"), "")  # changes makes no branch
+        self.assertEqual(self.git("branch", "--list", "vmforai/vm"), "")  # changes makes no branch
         self.assertIn("M a.txt", self.vm_git("status", "--short"))  # nor touches the VM
 
         # Sending again would overwrite that work: refused.
@@ -80,17 +80,17 @@ class ProjectTests(Base):
 
         head = self.git("rev-parse", "HEAD")
         r = self.sb.run("take", "vm", check=0)
-        self.assertIn("the branch vmagents/vm", r.stdout)
-        self.assertIn("git merge vmagents/vm", r.stdout)
-        self.assertEqual(self.git("show", "vmagents/vm:b.txt"), "new")
-        self.assertEqual(self.git("show", "vmagents/vm:c.txt"), "committed")
-        self.assertEqual(self.git("log", "--format=%s", "-2", "vmagents/vm").splitlines(),
+        self.assertIn("the branch vmforai/vm", r.stdout)
+        self.assertIn("git merge vmforai/vm", r.stdout)
+        self.assertEqual(self.git("show", "vmforai/vm:b.txt"), "new")
+        self.assertEqual(self.git("show", "vmforai/vm:c.txt"), "committed")
+        self.assertEqual(self.git("log", "--format=%s", "-2", "vmforai/vm").splitlines(),
                          ["Work not committed on the VM", "add c"])
         self.assertEqual(self.git("rev-parse", "HEAD"), head)  # the checkout here is not touched
         self.assertFalse((self.repo / "b.txt").exists())
 
         # Merged here, with one more commit: it goes back, and the VM goes on from there.
-        self.git("merge", "-q", "--ff-only", "vmagents/vm")
+        self.git("merge", "-q", "--ff-only", "vmforai/vm")
         (self.repo / "d.txt").write_text("from here\n")
         self.git("add", "d.txt")
         self.git("commit", "-q", "-m", "add d")
@@ -113,8 +113,8 @@ class ProjectTests(Base):
         self.sb.run("project", "vm", "--discard", check=0)
         self.assertEqual(self.vm_git("status", "--short"), "")
         self.assertFalse((self.vm_repo / "b.txt").exists())
-        kept = self.vm_git("for-each-ref", "--format=%(refname)", "refs/vmagents/discarded/")
-        self.assertTrue(kept.startswith("refs/vmagents/discarded/"))
+        kept = self.vm_git("for-each-ref", "--format=%(refname)", "refs/vmforai/discarded/")
+        self.assertTrue(kept.startswith("refs/vmforai/discarded/"))
         self.assertEqual(self.vm_git("show", f"{kept}:b.txt"), "new")  # set aside, not lost
 
     def test_take_to_a_branch_of_your_choice(self):
@@ -128,7 +128,7 @@ class ProjectTests(Base):
     def test_nothing_to_take(self):
         self.sb.run("project", "vm", str(self.repo), check=0)
         self.assertIn("Nothing to take", self.sb.run("take", "vm", check=0).stdout)
-        self.assertEqual(self.git("branch", "--list", "vmagents/vm"), "")
+        self.assertEqual(self.git("branch", "--list", "vmforai/vm"), "")
 
     def test_new_commits_only(self):
         self.sb.run("project", "vm", str(self.repo), check=0)
@@ -174,7 +174,7 @@ class ProjectTests(Base):
 
     def test_help(self):
         for cmd in ("project", "changes", "take"):
-            self.assertIn(f"vmagents {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
+            self.assertIn(f"vmforai {cmd} NAME", self.sb.run("help", cmd, check=0).stdout)
 
 
 class CreateWithProjectTests(CreateBase):

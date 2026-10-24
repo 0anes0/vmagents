@@ -1,11 +1,11 @@
 name: An idea or a wish
-description: Something vmagents should do, or do differently
+description: Something vmforai should do, or do differently
 labels: [idea]
 body:
   - type: textarea
     id: what
     attributes:
-      label: What would you like to do with vmagents?
+      label: What would you like to do with vmforai?
       description: The situation and what gets in the way is more useful than a finished design.
     validations:
       required: true

@@ -52,4 +52,4 @@ class WindowsTests(SandboxTest):
             self.assertIn(name, script)
 
     def test_help(self):
-        self.assertIn("vmagents tools NAME TOOL", self.sb.run("help", "tools", check=0).stdout)
+        self.assertIn("vmforai tools NAME TOOL", self.sb.run("help", "tools", check=0).stdout)

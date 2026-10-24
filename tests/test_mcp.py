@@ -1,18 +1,18 @@
-"""vmagents mcp NAME: the MCP server, spoken to like Claude Code does, with the
+"""vmforai mcp NAME: the MCP server, spoken to like Claude Code does, with the
 fake ssh/scp running everything in a throwaway "VM" home on this machine."""
 import json
 import subprocess
 
 from tests.helpers import write_exe
 
-from tests.helpers import VMAGENTS, SandboxTest
+from tests.helpers import VMFORAI, SandboxTest
 
 
 class McpTests(SandboxTest):
     def setUp(self):
         super().setUp()
         self.sb.run("add", "vm", "--host", "192.0.2.7", "--os", "linux", "--dir", "~/work", check=0)
-        self.p = subprocess.Popen([str(VMAGENTS), "mcp", "vm"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.p = subprocess.Popen([str(VMFORAI), "mcp", "vm"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True, cwd=self.sb.tmp,
                                   env=dict(self.sb.env, STUB_SSH_EXEC="1"))
         self.addCleanup(self.close)
@@ -40,7 +40,7 @@ class McpTests(SandboxTest):
     def test_handshake_and_tools(self):
         r = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})["result"]
         self.assertEqual(r["protocolVersion"], "2025-06-18")
-        self.assertEqual(r["serverInfo"]["name"], "vmagents-vm")
+        self.assertEqual(r["serverInfo"]["name"], "vmforai-vm")
         self.assertIn("virtual machine 'vm'", r["instructions"])
         self.p.stdin.write('{"jsonrpc": "2.0", "method": "notifications/initialized"}\n')
         tools = {t["name"]: t for t in self.rpc("tools/list")["result"]["tools"]}
@@ -101,13 +101,13 @@ class McpTests(SandboxTest):
 
     def test_unreachable_vm(self):
         self.sb.env["STUB_SSH_RC"] = "255"
-        p = subprocess.run([str(VMAGENTS), "mcp", "vm"], input='{"jsonrpc":"2.0","id":1,"method":"tools/call",'
+        p = subprocess.run([str(VMFORAI), "mcp", "vm"], input='{"jsonrpc":"2.0","id":1,"method":"tools/call",'
                            '"params":{"name":"run","arguments":{"command":"true"}}}\n', capture_output=True, text=True,
                            env=dict(self.sb.env, STUB_SSH_RC="255"), timeout=30)
         r = json.loads(p.stdout)["result"]
         self.assertTrue(r["isError"])
         self.assertIn("cannot reach VM vm", r["content"][0]["text"])
-        self.assertIn("vmagents doctor vm", r["content"][0]["text"])
+        self.assertIn("vmforai doctor vm", r["content"][0]["text"])
 
 
 class McpAddTests(SandboxTest):
@@ -118,5 +118,5 @@ class McpAddTests(SandboxTest):
         r = self.sb.run("mcp", "vm", "--add", check=0)
         self.assertIn("claude mcp remove vm --scope user", r.stdout)
         self.assertEqual(log.read_text().splitlines(),
-                         ["mcp", "add", "--scope", "user", "vm", "--", str(VMAGENTS.resolve()), "mcp", "vm"])
+                         ["mcp", "add", "--scope", "user", "vm", "--", str(VMFORAI.resolve()), "mcp", "vm"])
         self.assertEqual(self.sb.run("mcp", "nope", "--add").returncode, 1)
