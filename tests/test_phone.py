@@ -87,6 +87,10 @@ elif a[:1] == ["runs"] and a[-1] == "--json":
     print(json.dumps([{"id": 1, "agent": "claude", "state": "0", "started": 100, "ended": 160, "task": "a"}]))
 elif a[:1] == ["runs"] and a[-1] == "--stop":
     print(f"Run {a[2]} on {a[1]} stopped.")
+elif a[:2] == ["phone", "notify"]:
+    sent = "true" if "test" in a or "--status" not in a else "null"
+    print('{"on": true, "server": "https://ntfy.sh", "topic": "vmagents-x", "url": "https://ntfy.sh/vmagents-x", '
+          '"app": "ntfy://ntfy.sh/vmagents-x", "sent": %s}' % sent)
 elif a[:1] == ["run"]:
     print(f"Run 7 on {a[1]}: Claude Code works on it, without asking (in tmux session run-7).")
 elif a[:1] in (["start"], ["stop"]):
@@ -284,6 +288,12 @@ class ServerTests(SandboxTest):
         self.assertEqual(self.get("/api/power?t=sekret-key&vm=--help&do=start", b"{}")[0], 400)
         self.assertNotIn("--help", json.dumps(self.calls()))
         self.assertIn("stop dev", (self.sb.tmp / "phone.log").read_text())
+        self.assertEqual(json.loads(self.get("/api/notify?t=sekret-key")[2])["topic"], "vmagents-x")
+        self.assertIn(["phone", "notify", "--status", "--json"], self.calls())
+        self.assertTrue(json.loads(self.get("/api/notify?t=sekret-key&do=test", b"{}")[2])["sent"])
+        self.assertIn(["phone", "notify", "test", "--json"], self.calls())
+        self.assertEqual(self.get("/api/notify?t=sekret-key&do=rm", b"{}")[0], 405)
+        self.assertEqual(self.get("/api/notify?do=on", b"{}")[0], 403)
 
     def test_task_and_fix_terminals(self):
         log = WS(self.port, "t=sekret-key&vm=dev&kind=log&id=4")
@@ -356,6 +366,39 @@ class CommandTests(SandboxTest):
         with self.assertRaises(OSError):
             urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=3)
         self.assertIn("vmagents phone ssh NAME", self.sb.run("help", "phone", check=0).stdout)
+
+    def test_notifications(self):
+        sent = self.sb.tmp / "curl.log"
+        curl = write_exe(self.sb.bin / "curl", f'#!/bin/sh\nprintf "%s\\n" "$*" >>"{sent}"\nexit "${{CURL_RC:-0}}"\n')
+        self.assertIn("are off", self.sb.run("phone", "notify", "--status", check=0).stdout)
+        r = self.sb.run("phone", "notify", check=0)
+        conf = (self.sb.conf / "phone" / "ntfy").read_text()
+        topic = conf.split("TOPIC=")[1].split()[0]
+        self.assertRegex(topic, r"^vmagents-[A-Za-z0-9_-]{20}$")
+        self.assertIn("SERVER=https://ntfy.sh\n", conf)
+        self.assertEqual(oct((self.sb.conf / "phone" / "ntfy").stat().st_mode & 0o777), "0o600")
+        self.assertIn(f"https://ntfy.sh/{topic}", r.stdout)
+        self.assertIn("A test notification was sent.", r.stdout)
+        line = sent.read_text().splitlines()[-1]
+        body = json.loads(line[line.index("{"):line.rindex("}") + 1])
+        self.assertEqual((body["topic"], body["title"]), (topic, "vmagents"))
+        self.assertTrue(line.endswith(" https://ntfy.sh"))
+        self.assertNotIn("Authorization", line)
+        # Again: the same topic. Own server and token; the app's link.
+        info = json.loads(self.sb.run("phone", "notify", "--server", "http://ntfy.home:8080/", "--token", "tk_1",
+                                      "--json", check=0).stdout)
+        self.assertEqual((info["on"], info["topic"], info["server"], info["sent"]), (True, topic, "http://ntfy.home:8080", True))
+        self.assertEqual(info["app"], f"ntfy://ntfy.home:8080/{topic}?secure=false")
+        self.assertIn("-H Authorization: Bearer tk_1", sent.read_text().splitlines()[-1])
+        r = self.sb.run("phone", "notify", "test", env={"CURL_RC": "6"})
+        self.assertIn("did not get through", r.stderr)
+        self.assertEqual(self.sb.run("phone", "notify", "--server", "ftp://x").returncode, 2)
+        status = json.loads(self.sb.run("phone", "notify", "--status", "--json", check=0).stdout)
+        self.assertIsNone(status["sent"])  # --status sends nothing
+        self.assertEqual(json.loads(self.sb.run("phone", "notify", "off", "--json", check=0).stdout), {"on": False})
+        self.assertFalse((self.sb.conf / "phone" / "ntfy").exists())
+        self.assertIn("phone notify", self.sb.run("help", "phone", check=0).stdout)
+        curl.unlink()
 
     def test_ssh_key(self):
         self.sb.env["VMAGENTS_PHONE_ADDR"] = "127.0.0.1"

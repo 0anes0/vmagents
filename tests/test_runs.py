@@ -138,7 +138,26 @@ class RunTests(Base):
             if log.exists() and log.read_text():
                 break
             time.sleep(0.05)
-        self.assertIn("Run 1 finished: ship it", log.read_text())
+        self.assertIn("vm: task 1 done ship it", log.read_text())
+
+    def test_notifies_the_phone(self):
+        # No desktop here; notifications on the phone are on (ntfy): it waits for the end all the same.
+        sent = self.sb.tmp / "ntfy"
+        write_exe(self.sb.bin / "curl", f'#!/bin/sh\nprintf "%s\\n" "$*" >>"{sent}"\n')
+        (self.sb.conf / "phone").mkdir(parents=True)
+        (self.sb.conf / "phone" / "ntfy").write_text("SERVER=https://ntfy.example\nTOPIC=vmagents-abc\nTOKEN=\n")
+        write_exe(self.sb.remote_bin / "claude", CLAUDE.replace('exit "${AGENT_RC:-0}"', "exit 2"))
+        r = self.sb.run("run", "vm", "ship it", env={"VMAGENTS_WATCH_INTERVAL": "0.2"}, check=0)
+        self.assertIn("A notification comes when it ends.", r.stdout)
+        for _ in range(200):
+            if sent.exists() and sent.read_text():
+                break
+            time.sleep(0.05)
+        line = sent.read_text()
+        body = json.loads(line[line.index("{"):line.rindex("}") + 1])
+        self.assertEqual((body["topic"], body["title"], body["message"], body["tags"], body["priority"]),
+                         ("vmagents-abc", "vm: task 1 failed (exit code 2)", "ship it", ["warning"], 4))
+        self.assertTrue(line.rstrip().endswith("https://ntfy.example"))
 
     def test_problems(self):
         self.assertEqual(self.sb.run("run", "vm").returncode, 2)  # no task

@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.22.0
+VERSION=0.23.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -102,6 +102,8 @@ GET STARTED
 
   From the phone:
     vmagents phone                           a QR code: the phone's browser gets your VMs and their agents
+    vmagents phone notify                    notifications on the phone (ntfy app): tasks done, agents waiting
+    vmagents update                          vmagents itself, at its latest release
 
 COMMANDS
   Make and remove VMs (libvirt):
@@ -126,6 +128,8 @@ COMMANDS
     mount NAME [DIR]     show the VM's folder as a folder here (~/vm/NAME); umount NAME
     phone                the VMs on the phone: a QR code to scan (over Tailscale; --lan: same Wi-Fi)
     phone ssh NAME KEY   let an SSH app on the phone into the VM, with that app's public key
+    phone notify         notifications on the phone, through the ntfy app (off, test, --server)
+    update               vmagents itself to its latest release (--check: only say if there is one)
 
   Tasks (an agent works alone, in the background, without asking):
     run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
@@ -556,6 +560,7 @@ EOF
 vmagents phone [--new] [--lan|--tailscale] [--port N] [--json]
 vmagents phone off
 vmagents phone ssh NAME KEY|FILE|off
+vmagents phone notify [off|test] [--server URL] [--token TOKEN] [--status] [--json]
 
 Your VMs on the phone. "vmagents phone" starts a small web server on this
 computer and shows a QR code: scan it with the phone's camera, and its
@@ -591,6 +596,17 @@ public key on the VM and gives the VM a port here (7701, 7702, ...) that
 leads to its SSH server, starting the VM when needed (connect again if the
 app gives up while it boots). With autostart on, Claude Code opens on login.
 "phone ssh NAME off" takes the key off the VM again.
+
+Notifications on the phone: "phone notify" sends one when a task or a fix
+ends, when an agent waits for you (a permission, a question) and when a new
+VM is ready, through ntfy (ntfy.sh, free, no account; or --server, a server
+of your own, with --token when it wants one). It makes a topic with a random
+name, which works like a password, and shows a code for subscribing to it in
+the ntfy app on the phone (Play Store, F-Droid, App Store); tapping a
+notification opens that VM on the phone page. What they say (VM names, a
+task's first line) passes through that server. "phone notify test" sends a
+test, "off" stops them (on again: a new topic). The page's list has the same
+switch. "vmagents notify NAME off" leaves one VM out, here and on the phone.
 
 --json: the address, link, QR code rows and SSH ports, for scripts and the UI.
 
@@ -795,6 +811,22 @@ vmagents changes NAME [--stat]
 Shows what changed in the project on the VM since it was sent: the commits
 the agents made, and what is not committed there (new files too, but not
 ignored ones), as one diff. --stat: the files only. Nothing on the VM changes.
+EOF
+      ;;
+    update) cat <<EOF
+vmagents update [--check] [--json]
+
+Puts vmagents at its latest release on GitHub. The new script (or, when
+vmagents came as a .deb, the new package, through apt and sudo) is checked
+against the release's SHA256SUMS before it replaces this one; then the phone
+server, when it runs, is started again with it. Installed from the AUR or
+run from a git checkout: it says to update that way instead. --check: only
+say whether there is a newer one. The terminal UI says so too, at most once
+a day.
+
+Examples:
+  vmagents update
+  vmagents update --check
 EOF
       ;;
     fix) cat <<EOF
@@ -3145,6 +3177,7 @@ cmd_create() {
       info "Project"
       cmd_project "$name" "$project"
     fi
+    notify_here "$name is ready" "The new VM is set up: $PROG $name" "done"
   else
     say "Created. Next: $PROG setup $name --agents $agents"
     [[ -z $project ]] || say "Then: $PROG project $name $(printf %q "$project")"
@@ -3981,16 +4014,15 @@ cmd___watch() {
     while IFS=$'\t' read -r id dir msg; do
       [[ $id =~ ^[0-9]+$ ]] || continue
       last=$id
-      notify-send -a vmagents "Claude Code ($NAME)" "${dir:+$dir: }$msg" 2>/dev/null || true
+      notify_all "Claude Code ($NAME)" "${dir:+$dir: }$msg" waiting
     done <<<"$out"
     if [[ $out == claude=0* ]]; then ((++gone < 2)) || return 0; else gone=0; fi
   done
 }
 
 start_watcher() {
-  [[ ${P[NOTIFY]:-on} == on ]] || return 0
-  [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 0
-  command -v notify-send >/dev/null && command -v flock >/dev/null || return 0
+  [[ ${P[NOTIFY]:-on} == on ]] && command -v flock >/dev/null || return 0
+  desktop_notes || ntfy_conf || return 0
   local self
   self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
   if command -v setsid >/dev/null; then
@@ -4073,6 +4105,7 @@ cmd_notify() {
     return 0
   fi
   say "Notifications are on: when Claude on the VM needs you, a desktop notification appears here."
+  say "(On the phone too: $PROG phone notify)"
   command -v notify-send >/dev/null || say "Install notify-send first (Debian/Ubuntu: sudo apt install libnotify-bin)."
   return 0
 }
@@ -4836,9 +4869,20 @@ agent_label() { # AGENT
   esac
 }
 
-notify_here() { # TITLE BODY
+desktop_notes() { [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v notify-send >/dev/null; }
+
+notify_here() { # TITLE BODY [KIND]: on the desktop and the phone, unless NOTIFY is off
   [[ ${P[NOTIFY]:-on} == on ]] || return 0
-  notify-send -a vmagents "$1" "$2" 2>/dev/null || true
+  notify_all "$@"
+}
+
+run_note() { # ID STATE TASK: a run ended
+  case $2 in
+    "done 0") notify_here "$NAME: task $1 done" "$3" "done" ;;
+    "done 143") notify_here "$NAME: task $1 stopped" "$3" ;;
+    "done "*) notify_here "$NAME: task $1 failed (exit code ${2#done })" "$3" failed ;;
+    *) notify_here "$NAME: task $1 interrupted" "$3" failed ;;
+  esac
 }
 
 show_run_log() { # ID FOLLOW(0|1)
@@ -4922,7 +4966,7 @@ cmd_run() {
   ((${RUN_STOP_AFTER:-0})) && WAS_OFF=1
   if ((!wait)); then
     local notify=0
-    [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v notify-send >/dev/null && notify=1
+    { desktop_notes || ntfy_conf; } && notify=1
     # Waits for the end to notify, and to shut down a VM that the run started.
     if ((notify || WAS_OFF)); then
       self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
@@ -4940,12 +4984,7 @@ cmd_run() {
   fi
   show_run_log "$id" 1 || true
   state=$(run_state "$id")
-  if ((QUIET)); then :
-  elif [[ $state == "done 0" ]]; then
-    notify_here "vmagents: $NAME" "Run $id finished: $task"
-  else
-    notify_here "vmagents: $NAME" "Run $id ended (${state:-unknown}): $task"
-  fi
+  ((QUIET)) || run_note "$id" "$state" "$task"
   [[ -n ${P[PROJECT]:-} ]] && ((!QUIET)) && say "Its changes: $PROG changes $NAME    as a branch here: $PROG take $NAME"
   project_done
   if ((HOLD)); then
@@ -4974,11 +5013,7 @@ cmd___runwait() {
     break
   done
   task=$(run_script list 2>/dev/null | awk -F '\037' -v id="$id" '$1 == id { print $6 }') || task=''
-  if [[ $state == "done 0" ]]; then
-    notify_here "vmagents: $NAME" "Run $id finished: $task"
-  else
-    notify_here "vmagents: $NAME" "Run $id ended (${state#done }): $task"
-  fi
+  run_note "$id" "$state" "$task"
   if [[ ${3:-0} == 1 ]]; then autostop >/dev/null 2>&1 || true; fi
 }
 
@@ -5245,21 +5280,23 @@ cmd_fix() {
   git -C "$PROJ" --no-pager diff --stat "$sent" "$branch"
   [[ -z $left ]] || say "Left out, as the agent did not commit it: $(printf '%s' "$left" | tr '\n' ' ')"
   if [[ -n $test ]] && ((!passed)); then
-    notify_here "vmagents: $NAME" "Issue #$num: the tests still fail"
+    notify_here "$NAME: issue #$num, the tests still fail" "$title (the work: branch $branch)" failed
     say "The tests ($test) still fail after $tries tries, so no pull request. Look at the branch:"
     say "  git log -p $branch    more tries: $PROG fix $NAME $num --tries 3"
     hold_prompt
     return 1
   fi
   if ((!pr)); then
-    notify_here "vmagents: $NAME" "Issue #$num: the work is the branch $branch"
+    notify_here "$NAME: issue #$num done" "$title (branch $branch)" "done"
     say "Merge it (git merge $branch), or a pull request: $PROG take $NAME --branch $branch --pr"
     hold_prompt
     return 0
   fi
 
-  git -C "$PROJ" push -q --force-with-lease -u origin "$branch" || die "could not push $branch to origin"
-  local url_pr body
+  local url_pr body out
+  # (Quiet: GitHub's own "create a pull request" hint would mislead here.)
+  out=$(git -C "$PROJ" push -q --force-with-lease -u origin "$branch" 2>&1) ||
+    { printf '%s\n' "$out" >&2; die "could not push $branch to origin"; }
   url_pr=$(cd "$PROJ" && gh pr view "$branch" --json url,state --jq 'select(.state == "OPEN") | .url' 2>/dev/null) || url_pr=''
   if [[ -n $url_pr ]]; then
     say "Pushed; its pull request was open already: $url_pr"
@@ -5277,7 +5314,8 @@ cmd_fix() {
     url_pr=${url_pr##*$'\n'}
     say "Pull request: $url_pr"
   fi
-  notify_here "vmagents: $NAME" "Issue #$num: pull request $url_pr"
+  notify_here "$NAME: issue #$num, pull request ready" "$title
+$url_pr" "done"
   hold_prompt
 }
 
@@ -6378,6 +6416,7 @@ cmd_phone() {
   local new=0 json=0 listen='' port='' url token rows line sep='' name
   case ${1:-} in
     ssh) shift; phone_ssh "$@"; return ;;
+    notify) shift; phone_notify "$@"; return ;;
     off)
       (($# == 1)) || usage_error "phone off: no more arguments"
       phone_stop
@@ -6444,6 +6483,138 @@ cmd_phone() {
     [[ -n $name ]] && say "SSH app into $name: ssh -p $port $(phone_user "$name")@$PHONE_ADDR"
   done < <(phone_ssh_lines)
   say "An SSH app instead of the browser: $PROG phone ssh NAME \"its public key\"    off: $PROG phone off"
+}
+
+# ---- notifications on the phone, through ntfy
+
+# ntfy (ntfy.sh, or a server of your own) passes messages on to its app on
+# the phone. They go to a topic with a random name, which is what keeps
+# others out. The file phone/ntfy: SERVER=, TOPIC=, TOKEN= (an access token,
+# for a server that wants one).
+NTFY_SERVER='' NTFY_TOPIC='' NTFY_TOKEN=''
+ntfy_conf() { # 0 when they are on
+  NTFY_SERVER='' NTFY_TOPIC='' NTFY_TOKEN=''
+  local k v
+  [[ -f $PHONE_DIR/ntfy ]] || return 1
+  while IFS='=' read -r k v; do
+    case $k in
+      SERVER) [[ $v =~ ^https?://[^[:space:]]+$ ]] && NTFY_SERVER=${v%/} ;;
+      TOPIC) [[ $v =~ ^[A-Za-z0-9_-]{1,64}$ ]] && NTFY_TOPIC=$v ;;
+      TOKEN) [[ $v =~ ^[A-Za-z0-9_.-]+$ ]] && NTFY_TOKEN=$v ;;
+    esac
+  done <"$PHONE_DIR/ntfy"
+  [[ -n $NTFY_SERVER && -n $NTFY_TOPIC ]]
+}
+
+ntfy_save() {
+  (umask 077 && mkdir -p "$PHONE_DIR" &&
+    printf 'SERVER=%s\nTOPIC=%s\nTOKEN=%s\n' "$NTFY_SERVER" "$NTFY_TOPIC" "$NTFY_TOKEN" >"$PHONE_DIR/ntfy") ||
+    die "could not write $PHONE_DIR/ntfy"
+  chmod 700 "$PHONE_DIR"
+}
+
+# TITLE BODY to the phone. KIND (done, failed, waiting) sets its mark and how
+# loud it is; tapping it opens the VM NAME on the phone page, when that runs.
+ntfy_send() { # TITLE BODY [KIND] [NAME]
+  ntfy_conf || return 0
+  command -v curl >/dev/null || return 1
+  local tag='' prio=3 click='' json
+  local -a auth=()
+  case ${3:-} in
+    done) tag=white_check_mark ;;
+    failed) tag=warning prio=4 ;;
+    waiting) tag=bell prio=4 ;;
+  esac
+  phone_running && click="http://${PHONE_RUNNING% *}:${PHONE_RUNNING#* }/${4:+#vm=$4}"
+  json=$(printf '{"topic": %s, "title": %s, "message": %s, "priority": %d%s%s}' "$(json_str "$NTFY_TOPIC")" \
+    "$(json_str "$1")" "$(json_str "${2:- }")" "$prio" "${tag:+, \"tags\": [\"$tag\"]}" \
+    "${click:+, \"click\": $(json_str "$click")}")
+  [[ -n $NTFY_TOKEN ]] && auth=(-H "Authorization: Bearer $NTFY_TOKEN")
+  curl -fsS -m 10 "${auth[@]}" -H "Content-Type: application/json" -d "$json" "$NTFY_SERVER" >/dev/null 2>&1
+}
+
+# On this computer's desktop and on the phone.
+notify_all() { # TITLE BODY [KIND]
+  notify-send -a vmagents "$1" "$2" 2>/dev/null || true
+  ntfy_send "$1" "$2" "${3:-}" "${NAME:-}" || true
+}
+
+phone_notify() { # [off|test] [--server URL] [--token TOKEN] [--status] [--json]
+  local what='' server='' token='' token_set=0 status=0 json=0 sent='' url app line host
+  while (($#)); do
+    case $1 in
+      off | test) [[ -z $what ]] || usage_error "phone notify: one of off or test"; what=$1 ;;
+      --server)
+        [[ ${2:-} =~ ^https?://[^[:space:]/]+/?$ ]] || usage_error "phone notify: --server takes an address like https://ntfy.example.com"
+        server=${2%/}; shift ;;
+      --token)
+        [[ ${2:-} =~ ^[A-Za-z0-9_.-]*$ && $# -ge 2 ]] || usage_error "phone notify: --token takes an access token (empty: none)"
+        token=$2 token_set=1; shift ;;
+      --status) status=1 ;;
+      --json) json=1 ;;
+      *) usage_error "phone notify: unknown argument $1" ;;
+    esac
+    shift
+  done
+  if [[ $what == off ]]; then
+    rm -f -- "${PHONE_DIR:?}/ntfy"
+    ((json)) && { printf '{"on": false}\n'; return 0; }
+    say "Notifications on the phone are off. (On again: $PROG phone notify; that makes a new topic.)"
+    return 0
+  fi
+  if ((!status)); then
+    if ! ntfy_conf; then
+      NTFY_SERVER=https://ntfy.sh
+      NTFY_TOPIC=vmagents-$(head -c 15 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')
+    fi
+    [[ -n $server ]] && NTFY_SERVER=$server
+    ((token_set)) && NTFY_TOKEN=$token
+    ntfy_save
+    if [[ -z $what || $what == test ]]; then
+      command -v curl >/dev/null || die "notifications on the phone need curl on this computer"
+      if ntfy_send "vmagents" "Notifications from vmagents work. They come when a task or a fix ends, and when an agent waits for you." "done"; then
+        sent=true
+      else
+        sent=false
+      fi
+    fi
+  fi
+  if ! ntfy_conf; then
+    ((json)) && { printf '{"on": false}\n'; return 0; }
+    say "Notifications on the phone are off. On: $PROG phone notify"
+    return 0
+  fi
+  url=$NTFY_SERVER/$NTFY_TOPIC
+  host=${NTFY_SERVER#*://}
+  app="ntfy://$host/$NTFY_TOPIC"
+  [[ $NTFY_SERVER == http://* ]] && app+="?secure=false"
+  if ((json)); then
+    printf '{"on": true, "server": %s, "topic": %s, "url": %s, "app": %s, "sent": %s}\n' "$(json_str "$NTFY_SERVER")" \
+      "$(json_str "$NTFY_TOPIC")" "$(json_str "$url")" "$(json_str "$app")" "${sent:-null}"
+    return 0
+  fi
+  say "Notifications on the phone are on, through $host: when a task or a fix ends, and when an agent waits for you."
+  say "On the phone: the ntfy app (Android: Play Store or F-Droid; iPhone: App Store), subscribed to this"
+  say "topic. Scan the code, or in the app: + and the topic's name."
+  say ""
+  if command -v python3 >/dev/null; then
+    if [[ -t 1 ]]; then
+      while IFS= read -r line; do printf '  \e[97;40m%s\e[0m\n' "$line"; done < <(python3 -c "$QR_PY" "$url")
+    else
+      python3 -c "$QR_PY" "$url" | sed 's/^/  /'
+    fi
+    say ""
+  fi
+  say "  $url"
+  say "  topic: $NTFY_TOPIC"
+  say ""
+  case $sent in
+    true) say "A test notification was sent." ;;
+    false) warn "the test notification did not get through to $NTFY_SERVER (no internet? a server that wants a --token?)" ;;
+  esac
+  say "The topic's name works like a password: share it with no one. What the notifications say (VM names,"
+  say "a task's first line) passes through $host; a server of your own: $PROG phone notify --server URL"
+  say "Off: $PROG phone notify off    a test: $PROG phone notify test"
 }
 
 QR_PY=$(cat <<'QR_END'
@@ -6672,6 +6843,7 @@ CACHE = os.environ.get("VMAGENTS_CACHE", DIR)
 LOG = os.path.join(CACHE, "phone.log")
 MAX_SESSIONS = 8
 sessions = 0
+children = set()  # the terminals' processes
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 ISSUE = re.compile(r"#?[0-9]{1,9}$|https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[0-9]{1,9}$")
 AGENTS = ("claude", "codex", "gemini", "opencode", "aider")
@@ -6900,6 +7072,7 @@ async def terminal(r, w, q):
     os.close(slave)
     os.set_blocking(master, False)
     sessions += 1
+    children.add(proc.pid)
     log(f"{w.get_extra_info('peername')[0]} opened {kind} on {name}")
     loop = asyncio.get_running_loop()
     out = asyncio.Queue()
@@ -6972,6 +7145,7 @@ async def terminal(r, w, q):
                 proc.wait()
         os.close(master)
         sessions -= 1
+        children.discard(proc.pid)
         log(f"{w.get_extra_info('peername')[0]} closed {kind} on {name} ({proc.returncode})")
         try:
             w.write(ws_frame(1, b"x%d" % (proc.returncode or 0)) + ws_frame(8, struct.pack(">H", 1000)))
@@ -6986,6 +7160,20 @@ async def api(w, method, path, q, body):
     name = q.get("vm", [""])[0]
     if path == "/api/vms" and method == "GET":
         return await answer(w, await vms())
+    if path == "/api/notify":
+        do = q.get("do", [""])[0]
+        if method == "GET":
+            args = ["--status"]
+        elif do in ("on", "off", "test"):
+            args = {"on": [], "off": ["off"], "test": ["test"]}[do]
+            log(f"{peer} notifications {do}")
+        else:
+            return await respond(w, "405 Method Not Allowed", "")
+        rc, out = await vmagents("phone", "notify", *args, "--json", timeout=60)
+        try:
+            return await answer(w, json.loads(out.strip().splitlines()[-1]))
+        except (ValueError, IndexError):
+            return await answer(w, {"on": False, "error": last_lines(out)})
     if not NAME.match(name):
         return await answer(w, {"error": "no such VM"}, "400 Bad Request")
     if path == "/api/runs" and method == "GET":
@@ -7243,6 +7431,13 @@ label.check input { width: 20px; height: 20px; accent-color: var(--accent); }
 .run .meta { color: var(--dim); font-size: 13px; }
 .run button { min-height: 36px; padding: 4px 12px; }
 .empty { color: var(--dim); font-size: 14px; }
+#notes { margin-top: 4px; }
+#notes .hint { margin: 0 0 4px; }
+ol.steps { margin: 6px 0 4px; padding-left: 22px; font-size: 15px; }
+ol.steps li { margin: 4px 0; }
+ol.steps a { color: var(--accent); font-weight: 600; }
+code { font: 14px ui-monospace, Menlo, monospace; background: var(--card2); padding: 1px 6px; border-radius: 6px;
+  overflow-wrap: anywhere; }
 #term-view { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: flex; flex-direction: column;
   background: #0b0d10; color: #e6edf3; }
 #bar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; padding-top: max(4px, env(safe-area-inset-top));
@@ -7279,6 +7474,10 @@ label.check input { width: 20px; height: 20px; accent-color: var(--accent); }
     <button class="icon" id="refresh"></button>
   </header>
   <div id="vms"><div class="skel"></div><div class="skel"></div></div>
+  <section class="box" id="notes">
+    <h2 id="h-notes"></h2>
+    <div id="notes-body"></div>
+  </section>
   <div class="foot" id="updated"></div>
 </div>
 <div id="vm-view" class="page hidden">
@@ -7350,7 +7549,12 @@ const S = TR ? {
   powerOff: "Açık terminaller ve çalışan görevler kapanır.", confirmOff: "{n} kapatılsın mı? Çalışan görevler durur.",
   confirmStop: "Bu görev durdurulsun mu?", starting: "Açılıyor...", stopping: "Kapatılıyor...", sending: "Gönderiliyor...",
   isOn: "{n} açıldı.", isOff: "{n} kapatıldı.", fail: "Olmadı:", noTask: "Görevi yaz.", noIssue: "Issue numarasını yaz.",
-  ago: "önce", ram: "RAM", cpu: "CPU", yolo: "sormadan", restricted: "kısıtlı ağ", connecting: "Bağlanıyor"
+  ago: "önce", ram: "RAM", cpu: "CPU", yolo: "sormadan", restricted: "kısıtlı ağ", connecting: "Bağlanıyor",
+  notes: "Bildirimler", notesOff: "Bir görev ya da issue çözme bitince, ya da bir yardımcı seni beklerken telefona bildirim gelsin: ücretsiz ntfy uygulamasıyla, hesap gerekmez.",
+  notesOn: "Aç", notesOnText: "Açık, {host} üzerinden. Telefonda:", notesStep1: "ntfy uygulamasını kur (Play Store, F-Droid ya da App Store).",
+  notesApp: "Uygulamada abone ol", notesOr: "ya da", notesWeb: "tarayıcıda aç", notesStep3: "Elle eklemek için konu adı:",
+  notesTest: "Deneme gönder", notesOffBtn: "Kapat", notesConfirm: "Bildirimler kapatılsın mı? Yeniden açınca yeni bir konu adı gelir.",
+  notesSent: "Deneme bildirimi gönderildi.", notesFail: "Bildirim gönderilemedi: bilgisayar internete çıkabiliyor mu?"
 } : {
   sub: "Your VMs, from the phone", none: "No VMs yet. On the computer: vmagents create", shell: "Shell", back: "VMs",
   send: "Send", type: "Type, then Send", off: "off", running: "running", lost: "The connection dropped.",
@@ -7367,14 +7571,20 @@ const S = TR ? {
   powerOff: "Open terminals and running tasks end.", confirmOff: "Shut {n} down? Running tasks stop.",
   confirmStop: "Stop this task?", starting: "Starting...", stopping: "Shutting down...", sending: "Sending...",
   isOn: "{n} is on.", isOff: "{n} is off.", fail: "That did not work:", noTask: "Write the task.", noIssue: "Give the issue's number.",
-  ago: "ago", ram: "RAM", cpu: "CPU", yolo: "yolo", restricted: "restricted network", connecting: "Connecting"
+  ago: "ago", ram: "RAM", cpu: "CPU", yolo: "yolo", restricted: "restricted network", connecting: "Connecting",
+  notes: "Notifications", notesOff: "Get a notification on the phone when a task or a fix ends, or an agent waits for you: with the free ntfy app, no account needed.",
+  notesOn: "Turn on", notesOnText: "On, through {host}. On the phone:", notesStep1: "Install the ntfy app (Play Store, F-Droid or App Store).",
+  notesApp: "Subscribe in the app", notesOr: "or", notesWeb: "open it in the browser", notesStep3: "To add it by hand, the topic:",
+  notesTest: "Send a test", notesOffBtn: "Turn off", notesConfirm: "Turn notifications off? Turning them on again makes a new topic.",
+  notesSent: "A test notification was sent.", notesFail: "The notification did not get through: does the computer reach the internet?"
 };
 const AGENTS = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", aider: "aider" };
 const $ = id => document.getElementById(id);
 const fmt = (s, o) => s.replace(/\{(\w+)\}/g, (_, k) => o[k]);
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); return v; } catch (e) { return null; } }
 
-let key = new URLSearchParams(location.hash.slice(1)).get("t") || store("vmagents-key") || "";
+const hash = new URLSearchParams(location.hash.slice(1));
+let key = hash.get("t") || store("vmagents-key") || "", wantVM = hash.get("vm");  // a notification opens its VM
 if (location.hash && store("vmagents-key", key) === key) history.replaceState(null, "", location.pathname);
 
 const ICONS = {
@@ -7383,7 +7593,8 @@ const ICONS = {
   task: "M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1", issue: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
   power: "M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0", cpu: "M7 7h10v10H7zM10 2v3M14 2v3M10 19v3M14 19v3M2 10h3M2 14h3M19 10h3M19 14h3",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", bolt: "M13 2L4 14h7l-1 8 9-12h-7z",
-  lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4"
+  lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
+  bell: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"
 };
 function icon(name) {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"), p = document.createElementNS(s.namespaceURI, "path");
@@ -7456,6 +7667,28 @@ async function load() {
   $("vms").replaceChildren(...(vms.length ? vms.map(card) : [el("div", "msg", S.none)]));
   $("updated").textContent = S.updated + " " + new Date().toLocaleTimeString(TR ? "tr" : "en", { hour: "2-digit", minute: "2-digit" });
   if (cur && view === "vm") showVM();
+  if (wantVM && vms.some(v => v.name === wantVM)) { const n = wantVM; wantVM = null; go("vm", n); }
+}
+
+// --- notifications on the phone (ntfy)
+async function notes(doWhat) {
+  let n;
+  try { n = doWhat ? await api("/api/notify", { do: doWhat }, {}) : await api("/api/notify"); }
+  catch (e) { return; }
+  const body = $("notes-body");
+  if (doWhat === "test" || (doWhat === "on" && n.on)) toast(n.sent === false ? S.notesFail : S.notesSent);
+  if (!n.on) {
+    body.replaceChildren(el("p", "hint", S.notesOff),
+      el("div", "row", btn("primary", "bell", S.notesOn, e => { busy(e.currentTarget, S.notesOn); notes("on"); })));
+    return;
+  }
+  const sub = el("a", null, S.notesApp); sub.href = n.app;
+  const web = el("a", null, S.notesWeb); web.href = n.url; web.target = "_blank"; web.rel = "noreferrer";
+  body.replaceChildren(el("p", "hint", fmt(S.notesOnText, { host: n.server.replace(/^https?:\/\//, "") })),
+    el("ol", "steps", el("li", null, S.notesStep1), el("li", null, sub, " ", S.notesOr, " ", web),
+      el("li", null, S.notesStep3, " ", el("code", null, n.topic))),
+    el("div", "row", btn("", "bell", S.notesTest, () => notes("test")),
+      btn("danger", null, S.notesOffBtn, () => { if (confirm(S.notesConfirm)) notes("off"); })));
 }
 
 // --- one VM
@@ -7684,6 +7917,7 @@ $("h-runs").append(icon("task"), S.runs);
 $("h-fix").append(icon("issue"), S.fix); $("issue").placeholder = S.issuePh; $("test").placeholder = S.testPh;
 $("pr-label").textContent = S.pr; $("fix-go").append(icon("play"), S.start); $("fix-hint").textContent = S.fixHint;
 $("h-power").append(icon("power"), S.power);
+$("h-notes").append(icon("bell"), S.notes);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   // Phones drop the connection in the background: back, it comes again by itself.
@@ -7691,6 +7925,7 @@ document.addEventListener("visibilitychange", () => {
   else if (view === "home") load();
   else if (view === "vm") { load(); loadRuns(); }
 });
+notes();
 setInterval(() => {
   if (document.visibilityState !== "visible") return;
   if (view === "home") load();
@@ -7701,14 +7936,132 @@ load();
 </body>
 </html>"""
 
+def stop(*_):
+    """Off at once: the open terminals hang up (agents go on in tmux)."""
+    for pid in list(children):
+        try:
+            os.killpg(pid, signal.SIGHUP)
+        except OSError:
+            pass
+    os._exit(0)
+
+
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGTERM, stop)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
 PHONE_END
 )
+
+# ------------------------------------------------------------------ update
+
+# vmagents puts itself at its latest release: the script (or the .deb) from
+# the GitHub release, checked against the release's SHA256SUMS, in place of
+# this one. VMAGENTS_UPDATE_URL: another place with the same layout (tests).
+UPDATE_URL=${VMAGENTS_UPDATE_URL:-https://github.com/emincan2000/vmagents}
+UPDATE_RAW=${VMAGENTS_UPDATE_RAW:-https://raw.githubusercontent.com/emincan2000/vmagents}
+
+latest_version() { # prints it; with 1, a check from the last day will do
+  local f=$CACHE_DIR/latest v
+  if [[ ${1:-0} == 1 && -f $f ]] && [[ -n $(find "$f" -mmin -1440 2>/dev/null) ]]; then
+    v=$(cat "$f")
+  else
+    # The latest release's page is .../releases/tag/vX.Y.Z.
+    v=$(curl -fsSL -m 20 -o /dev/null -w '%{url_effective}' "$UPDATE_URL/releases/latest" 2>/dev/null) || return 1
+    v=${v##*/tag/v}
+    [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    mkdir -p "$CACHE_DIR" && printf '%s\n' "$v" >"$f"
+  fi
+  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && printf '%s\n' "$v"
+}
+
+newer() { # A B: 0 when version A is newer than B
+  [[ $1 != "$2" && $(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1) == "$1" ]]
+}
+
+# FILE NAME VERSION: checks FILE against the release's SHA256SUMS, when it
+# has one (releases before 0.23.0 do not).
+release_sum_ok() {
+  local sums want got
+  sums=$(curl -fsSL -m 30 "$UPDATE_URL/releases/download/v$3/SHA256SUMS" 2>/dev/null) || return 0
+  want=$(awk -v n="$2" '$2 == n || $2 == "*" n { print $1 }' <<<"$sums")
+  [[ -n $want ]] || return 0
+  got=$(sha256sum "$1" | cut -d' ' -f1)
+  [[ $got == "$want" ]]
+}
+
+cmd_update() {
+  local check=0 json=0 cached=0 latest self dir tmp deb
+  while (($#)); do
+    case $1 in
+      --check) check=1 ;;
+      --json) json=1 ;;
+      --cached) cached=1 ;;
+      *) usage_error "update: unknown argument $1" ;;
+    esac
+    shift
+  done
+  command -v curl >/dev/null || die "update needs curl"
+  latest=$(latest_version "$cached") || die "could not find the latest version on $UPDATE_URL (no internet?)"
+  if ((json)); then
+    printf '{"current": %s, "latest": %s, "newer": %s}\n' "$(json_str "$VERSION")" "$(json_str "$latest")" \
+      "$(newer "$latest" "$VERSION" && echo true || echo false)"
+    return 0
+  fi
+  if ! newer "$latest" "$VERSION"; then
+    say "vmagents $VERSION is the latest."
+    return 0
+  fi
+  say "vmagents $latest is out (this is $VERSION). What is new: $UPDATE_URL/releases/tag/v$latest"
+  if ((check)); then
+    say "Update: $PROG update"
+    return 0
+  fi
+  self=$(readlink -f -- "$0" 2>/dev/null) || self=$0
+  dir=${self%/*}
+  # Installed some other way: updated that way.
+  if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 && [[ -f $dir/install.sh ]]; then
+    die "this vmagents runs from a git checkout ($dir): git pull there (or install it: $dir/install.sh)"
+  fi
+  if command -v pacman >/dev/null && pacman -Qo "$self" >/dev/null 2>&1; then
+    die "vmagents came from the AUR here: update it the same way (e.g. yay -S vmagents)"
+  fi
+  if command -v dpkg >/dev/null && dpkg -S "$self" >/dev/null 2>&1; then
+    tmp=$(mktemp -d)
+    deb=$tmp/vmagents_${latest}_all.deb
+    info "Downloading vmagents_${latest}_all.deb..."
+    curl -fsSL -m 120 -o "$deb" "$UPDATE_URL/releases/download/v$latest/vmagents_${latest}_all.deb" ||
+      { rm -rf "$tmp"; die "could not download the package"; }
+    release_sum_ok "$deb" "vmagents_${latest}_all.deb" "$latest" || { rm -rf "$tmp"; die "the package is not the one released (its checksum differs)"; }
+    chmod 755 "$tmp" && chmod 644 "$deb"
+    info "Installing it (sudo asks for your password)..."
+    sudo apt-get install -y "$deb" || { rm -rf "$tmp"; die "installing the package failed; it is the .deb from $UPDATE_URL/releases"; }
+    rm -rf "$tmp"
+  else
+    [[ -w $dir ]] || die "cannot write $dir: update as the user who installed vmagents there"
+    tmp=$(mktemp "$dir/.vmagents-update.XXXXXX") || die "cannot write $dir"
+    curl -fsSL -m 120 -o "$tmp" "$UPDATE_URL/releases/download/v$latest/vmagents" 2>/dev/null ||
+      curl -fsSL -m 120 -o "$tmp" "$UPDATE_RAW/v$latest/vmagents" ||
+      { rm -f "$tmp"; die "could not download vmagents $latest"; }
+    if ! grep -qx "VERSION=$latest" "$tmp" || ! bash -n "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      die "what came down is not vmagents $latest; nothing changed"
+    fi
+    release_sum_ok "$tmp" vmagents "$latest" || { rm -f "$tmp"; die "the download is not the one released (its checksum differs); nothing changed"; }
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$self" || { rm -f "$tmp"; die "could not replace $self"; }
+  fi
+  rm -f "$CACHE_DIR/latest"
+  say "Updated: $("$self" --version)."
+  # The phone page comes from the server that runs: the new one.
+  if phone_running; then
+    "$self" phone off >/dev/null 2>&1 && "$self" phone >/dev/null 2>&1 &&
+      say "The phone server runs the new version too (the link is the same)."
+  fi
+  return 0
+}
 
 # ------------------------------------------------------------------ ui
 
@@ -7810,6 +8163,16 @@ TEXTS = {"tr": {
     "Open a pull request when the tests pass": "Testler geçince pull request aç",
     "Give the issue.": "Issue'yu yaz.",
     "Phone": "Telefon", "[b]Your VMs on the phone[/b]": "[b]Telefonda VM'lerin[/b]",
+    "vmagents {v} is out (this is {c}). Update: vmagents update":
+        "vmagents {v} çıktı (bu {c}). Güncellemek için: vmagents update",
+    "Notifications on the phone: on (ntfy app, topic {t}). b: send a test":
+        "Telefona bildirimler: açık (ntfy uygulaması, konu {t}). b: deneme gönder",
+    "Notifications on the phone, when a task ends or an agent waits: b turns them on (ntfy app)":
+        "Bir görev bitince ya da bir yardımcı beklerken telefona bildirim: b açar (ntfy uygulaması)",
+    "The notification did not get through: does this computer reach the internet?":
+        "Bildirim gönderilemedi: bu bilgisayar internete çıkabiliyor mu?",
+    "A test notification was sent. On the phone: the ntfy app, subscribed to {t}":
+        "Deneme bildirimi gönderildi. Telefonda: ntfy uygulaması, {t} konusuna abone ol",
     "Starting phone access...": "Telefon erişimi açılıyor...", "New link (n)": "Yeni bağlantı (n)",
     "Turn off (o)": "Kapat (o)", "Same Wi-Fi (w)": "Aynı Wi-Fi (w)",
     "Phone access did not start.": "Telefon erişimi açılamadı.", "Phone access is off.": "Telefon erişimi kapandı.",
@@ -9196,7 +9559,7 @@ class Phone(ModalScreen):
     o: off, w: the local network instead of Tailscale; h, Esc: back."""
     BINDINGS = [Binding("escape", "dismiss(None)", show=False), Binding("h", "dismiss(None)", show=False),
                 Binding("n", "load('--new')", show=False), Binding("o", "off", show=False),
-                Binding("w", "load('--lan')", show=False)]
+                Binding("w", "load('--lan')", show=False), Binding("b", "notes", show=False)]
 
     def compose(self):
         with Vertical(classes="dialog"):
@@ -9204,6 +9567,7 @@ class Phone(ModalScreen):
             yield Static(T("Starting phone access..."), id="phone-text")
             yield Static("", id="qr")
             yield Static("", id="phone-more")
+            yield Static("", id="phone-notes")
             with Horizontal(classes="buttons"):
                 yield Button(T("New link (n)"), id="new")
                 yield Button(T("Turn off (o)"), id="off")
@@ -9216,6 +9580,35 @@ class Phone(ModalScreen):
     def action_load(self, extra):
         r = cli("phone", "--json", *([extra] if extra else []), timeout=30)
         self.app.call_from_thread(self.shown, *r)
+        self.notes_shown(cli("phone", "notify", "--status", "--json", timeout=30))
+
+    def notes_shown(self, r):
+        try:
+            n = json.loads(r[1]) if r[0] == 0 else {}
+        except ValueError:
+            n = {}
+        self.notes_on = bool(n.get("on") and n.get("topic"))
+        if self.notes_on:
+            text = T("Notifications on the phone: on (ntfy app, topic {t}). b: send a test", t=n["topic"])
+        else:
+            text = T("Notifications on the phone, when a task ends or an agent waits: b turns them on (ntfy app)")
+        self.app.call_from_thread(self.query_one("#phone-notes", Static).update, Text(text, style="dim"))
+
+    @work(thread=True, exclusive=True, group="notes")
+    def action_notes(self):
+        r = cli("phone", "notify", *(["test"] if getattr(self, "notes_on", False) else []), "--json", timeout=60)
+        try:
+            n = json.loads(r[1]) if r[0] == 0 else {}
+        except ValueError:
+            n = {}
+        if n.get("sent") is False:
+            msg = T("The notification did not get through: does this computer reach the internet?")
+        elif n.get("on") and n.get("topic"):
+            msg = T("A test notification was sent. On the phone: the ntfy app, subscribed to {t}", t=n["topic"])
+        else:
+            msg = (r[2] or "").strip()
+        self.app.call_from_thread(self.app.notify, msg)
+        self.notes_shown(cli("phone", "notify", "--status", "--json", timeout=30))
 
     def shown(self, rc, out, err):
         try:
@@ -9408,6 +9801,19 @@ class VmAgentsUI(App):
         self.refresh_vms()
         self.set_interval(5, self.refresh_vms)
         self.set_interval(0.5, self.watch_terminals)
+        self.check_update()
+
+    @work(thread=True, group="update")
+    def check_update(self):
+        """A new release: says so (asks GitHub at most once a day)."""
+        rc, out, _ = cli("update", "--json", "--cached", timeout=30)
+        try:
+            u = json.loads(out) if rc == 0 else {}
+        except ValueError:
+            return
+        if u.get("newer"):
+            self.call_from_thread(self.notify, T("vmagents {v} is out (this is {c}). Update: vmagents update",
+                                                 v=u["latest"], c=u["current"]), timeout=15)
 
     def setup_list(self):
         t = self.main.query_one("#vms", DataTable)
@@ -10524,7 +10930,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy | __phone | __addr) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | fix | run | runs | try | tries | net | templates | history | phone | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | fix | run | runs | try | tries | net | templates | history | phone | update | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

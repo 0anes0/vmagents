@@ -5,8 +5,10 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Şimdi
 
-- [ ] **Telefona bildirim**: bir görev ya da issue çözme bitince, ya da bir
-      asistan seni beklerken (ntfy.sh ya da kendi ntfy sunucun; hesap gerekmez)
+- [ ] **Bağımlılık kurucular**: `vmagents deps` vmagents'ın ihtiyacı olanları
+      bu bilgisayara kurar (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine);
+      bir Windows 10 bilgisayar için kurucu; VM'lere geliştirme araçlarını
+      hızlıca eklemenin bir yolu (Linux dağıtımları ve winget ile Windows)
 
 ## Sırada
 
@@ -28,6 +30,9 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Son yapılanlar
 
+- [x] `vmagents update`: vmagents'ı son sürüme günceller (0.23.0)
+- [x] Telefona bildirimler, ntfy ile: biten görevler ve issue çözmeler,
+      bekleyen yardımcılar, hazır olan yeni VM'ler (0.23.0)
 - [x] Telefon sayfası yenilendi: yeni görünüm (açık ve koyu), görev verip
       izleme, issue çözdürme, VM başlatıp kapatma, ana ekranda uygulama gibi,
       aynı Wi-Fi'da internet gerekmez (0.22.0)

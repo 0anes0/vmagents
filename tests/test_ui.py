@@ -49,6 +49,12 @@ elif a[:1] == ["history"]:
     print("> asked in " + a[2] + "\n\n* Bash(npm test)\nanswered " + a[2] + "\n\nGo on with it: vmagents dev --resume " + a[2])
 elif a[:1] == ["changes"]:
     show("changes.txt")
+elif a[:2] == ["phone", "notify"]:  # on once turned on
+    flag = os.path.join(d, "notes-on")
+    if a[2:3] not in (["--status"], ["off"]):
+        open(flag, "w").close()
+    on = os.path.exists(flag)
+    print(json.dumps({"on": True, "topic": "vmagents-t", "sent": True} if on else {"on": False}))
 elif a[:1] == ["phone"] and "--json" in a:
     if os.environ.get("FAKE_PHONE_ERR") and "--lan" not in a:
         print("vmagents: Tailscale is not installed; ...", file=sys.stderr)
@@ -610,7 +616,19 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("o")  # off
             await pilot.pause(0.3)
             self.assertNotIsInstance(self.app.screen, self.ui.Phone)
-            self.assertEqual(self.calls("phone"), [["phone", "--json"], ["phone", "--json", "--new"], ["phone", "off"]])
+            self.assertEqual([c for c in self.calls("phone") if c[1:2] != ["notify"]],
+                             [["phone", "--json"], ["phone", "--json", "--new"], ["phone", "off"]])
+
+    async def test_phone_notifications(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("m")
+            await self.wait_for(pilot, lambda: "b turns them on" in self.text("#phone-notes"))
+            await pilot.press("b")
+            self.assertTrue(await self.wait_for(pilot, lambda: "vmagents-t" in self.text("#phone-notes")))
+            self.assertIn(["phone", "notify", "--json"], self.calls("phone"))
+            await pilot.press("b")  # on: a test
+            self.assertTrue(await self.wait_for(pilot, lambda: ["phone", "notify", "test", "--json"] in self.calls("phone")))
 
     async def test_phone_without_tailscale(self):
         os.environ["FAKE_PHONE_ERR"] = "1"

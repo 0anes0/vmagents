@@ -52,7 +52,7 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
 | **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
 | **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
-| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs, opens their agents in a terminal, gives them tasks and follows them, fixes issues, starts and stops them (over Tailscale, from anywhere). SSH apps get a port per VM too. |
+| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs, opens their agents in a terminal, gives them tasks and follows them, fixes issues, starts and stops them (over Tailscale, from anywhere). `phone notify`: a notification when a task ends or an agent waits. SSH apps get a port per VM too. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
 | **From an issue to a pull request** | `vmagents fix dev 42 --test "npm test"`: the agent works on GitHub issue 42 in the VM, the tests run there (their output goes back to the agent when they fail), and a pull request opens when they pass. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
@@ -82,6 +82,8 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 
 or from a clone: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 It puts `vmagents` in `~/.local/bin`; `./install.sh --uninstall` removes it.
+Later, `vmagents update` brings it to the latest release (checked against the
+release's checksums); the UI says when there is one.
 
 As a package: on Debian and Ubuntu the `.deb` from the
 [releases](https://github.com/emincan2000/vmagents/releases)
@@ -299,6 +301,7 @@ as ufw, allow the VM network to reach this computer on the proxy's port
 ```sh
 vmagents phone                         # a QR code: scan it with the phone's camera
 vmagents phone ssh dev "ssh-ed25519 AAAA... termius"   # an SSH app instead (its public key)
+vmagents phone notify                  # notifications on the phone (the ntfy app)
 vmagents phone off                     # off again
 ```
 
@@ -318,6 +321,16 @@ fix a GitHub issue of its project ([`vmagents fix`](#from-an-issue-to-a-pull-req
 or start and shut it down. Added to the home screen (from the browser's menu),
 the page opens like an app, with its icon and the whole screen. It is light or
 dark, like the phone.
+
+Notifications come to the phone with `vmagents phone notify` (or the switch
+at the bottom of the page): when a task or a fix ends, when an agent waits
+for you (a permission, a question) and when a new VM is ready. They go
+through [ntfy](https://ntfy.sh), free and without an account: vmagents makes
+a topic with a random name, which works like a password, and shows a code
+to subscribe to it in the ntfy app (Play Store, F-Droid, App Store). Tapping
+one opens that VM on the page. What they say (VM names, a task's first line)
+passes through ntfy.sh; `--server` uses one of your own (`--token` when it
+wants one). `phone notify test` sends a test, `phone notify off` stops them.
 
 | The VMs | One VM |
 |---|---|
@@ -701,6 +714,8 @@ vmagents fix NAME ISSUE [--test CMD] [--tries N] [--no-pr] [--draft]   an issue 
 vmagents open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
 vmagents ports NAME 3000,5173    ports forwarded each time you connect (off: none)
 vmagents phone [--lan] [--new] [--port N] | phone off   your VMs on the phone: a QR code to scan
+vmagents phone notify [off|test] [--server URL] [--token T]   notifications on the phone (ntfy)
+vmagents update [--check]        vmagents itself, at its latest release
 vmagents phone ssh NAME KEY|off  an SSH app on the phone into the VM (a port here per VM)
 vmagents undo NAME [SNAPSHOT]    back to before this session (or to SNAPSHOT)
 vmagents snapshot NAME [--name SNAP] [LABEL]   take one; snapshots NAME lists them
@@ -809,6 +824,9 @@ home directory. CI runs them on every push, with shellcheck.
   re-send, `--discard`, only new commits sent later.
 - `test_runs.py`: tasks against a fake tmux on the fake VM: the agents' options,
   the log (Claude's steps one per line), `--wait`, stop, clean, the notification.
+- `test_update.py`: `update` against a fake GitHub on a copy of the script:
+  the check, the swap, a wrong checksum or file refused, older releases, the
+  daily cache, a git checkout.
 - `test_fix.py`: an issue to a pull request, with real git, a fake `gh` and a
   fake agent that commits: the task, failing tests going back to the agent,
   what the tests and the agent left kept out, the push and the pull request,

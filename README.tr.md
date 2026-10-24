@@ -52,7 +52,7 @@ arayüzünden** yap: `vmagents ui`
 | **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
 | **Bir görev, birkaç deneme** | `vmagents try dev 3 "görev"`: VM'in saniyeler içinde üç kopyası, her biri görevi yapar (istersen farklı asistanlarla); en iyisini alırsın. |
 | **Kısa tasmalı ağ** | `vmagents net dev restricted`: VM yalnızca listesindeki adreslere (asistanların servisleri, paket depoları, GitHub) ulaşır; senin bilgisayarında uygulanır. |
-| **Telefondan** | `vmagents phone` bir QR kod gösterir: okut, telefonun tarayıcısında VM'lerin listelenir; asistanlarını bir terminalde açar, görev verip izler, issue çözdürür, VM'leri başlatıp kapatır (Tailscale ile her yerden). SSH uygulamaları için de her VM'e bir port. |
+| **Telefondan** | `vmagents phone` bir QR kod gösterir: okut, telefonun tarayıcısında VM'lerin listelenir; asistanlarını bir terminalde açar, görev verip izler, issue çözdürür, VM'leri başlatıp kapatır (Tailscale ile her yerden). `phone notify`: görev bitince ya da asistan beklerken bildirim. SSH uygulamaları için de her VM'e bir port. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
 | **Issue'dan pull request'e** | `vmagents fix dev 42 --test "npm test"`: asistan VM'de 42 numaralı GitHub issue'su üzerinde çalışır, testler orada çalışır (geçmezlerse çıktıları asistana geri gider), geçince bir pull request açılır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
@@ -82,6 +82,8 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 
 ya da depodan: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 `vmagents`'ı `~/.local/bin` içine koyar; `./install.sh --uninstall` kaldırır.
+Sonra `vmagents update` onu son sürüme getirir (sürümün sağlama toplamlarıyla
+denetlenir); yeni sürüm çıkınca arayüz de söyler.
 
 Paket olarak: Debian ve Ubuntu'da [sürümler](https://github.com/emincan2000/vmagents/releases)
 sayfasındaki `.deb` (`sudo apt install ./vmagents_*_all.deb`); Arch Linux'ta
@@ -300,6 +302,7 @@ Arayüzde `i` kısıtlar, bir adrese izin verir ya da açar.
 ```sh
 vmagents phone                         # bir QR kod: telefonun kamerasıyla okut
 vmagents phone ssh dev "ssh-ed25519 AAAA... termius"   # ya da bir SSH uygulaması (açık anahtarıyla)
+vmagents phone notify                  # telefona bildirimler (ntfy uygulaması)
 vmagents phone off                     # yeniden kapat
 ```
 
@@ -319,6 +322,16 @@ bir GitHub issue'sunu çözdür ([`vmagents fix`](#issuedan-pull-requeste)), ya 
 VM'i başlat ve kapat. Ana ekrana eklenince (tarayıcının menüsünden) sayfa
 simgesiyle ve tam ekran, bir uygulama gibi açılır. Telefona uyarak açık ya da
 koyu görünür.
+
+Bildirimler `vmagents phone notify` ile (ya da sayfanın altındaki düğmeyle)
+telefona gelir: bir görev ya da issue çözme bitince, bir yardımcı seni
+beklerken (bir izin, bir soru) ve yeni bir VM hazır olunca. Ücretsiz ve
+hesapsız [ntfy](https://ntfy.sh) üzerinden giderler: vmagents rastgele adlı,
+parola gibi işleyen bir konu oluşturur ve ntfy uygulamasında (Play Store,
+F-Droid, App Store) ona abone olmak için bir kod gösterir. Bildirime dokununca
+o VM sayfada açılır. İçerikleri (VM adları, bir görevin ilk satırı) ntfy.sh
+üzerinden geçer; `--server` kendi sunucunu kullanır (gerekirse `--token` ile).
+`phone notify test` deneme gönderir, `phone notify off` kapatır.
 
 | VM'ler | Bir VM |
 |---|---|
@@ -702,6 +715,8 @@ vmagents fix AD ISSUE [--test KOMUT] [--tries N] [--no-pr] [--draft]   issue'dan
 vmagents open [AD] [PORT...]     VM'in portu burada, tarayıcında ([YEREL:]PORT; --lan)
 vmagents ports AD 3000,5173      her bağlantıda yönlendirilen portlar (off: hiçbiri)
 vmagents phone [--lan] [--new] [--port N] | phone off   telefonda VM'lerin: okutulacak bir QR kod
+vmagents phone notify [off|test] [--server URL] [--token T]   telefona bildirimler (ntfy)
+vmagents update [--check]        vmagents'ı son sürüme günceller
 vmagents phone ssh AD ANAHTAR|off  telefondaki SSH uygulaması VM'e (burada VM başına bir port)
 vmagents undo AD [GÖRÜNTÜ]       bu oturumdan önceye (ya da GÖRÜNTÜ'ye) dön
 vmagents snapshot AD [--name GÖRÜNTÜ] [ETİKET]   anlık görüntü al; snapshots AD listeler

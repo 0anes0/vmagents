@@ -5,8 +5,10 @@ as issues. Türkçesi: [ROADMAP.tr.md](ROADMAP.tr.md).
 
 ## Now
 
-- [ ] **Notifications on the phone** when a task or a fix ends, or an agent
-      waits for you (ntfy.sh or a self-hosted ntfy; no account needed)
+- [ ] **Dependency installers**: `vmagents deps` puts what vmagents needs on
+      this computer (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine); an
+      installer for a Windows 10 computer; and a quick way to add development
+      tools to a VM (Linux distributions, and Windows through winget)
 
 ## Next
 
@@ -28,6 +30,9 @@ as issues. Türkçesi: [ROADMAP.tr.md](ROADMAP.tr.md).
 
 ## Done lately
 
+- [x] `vmagents update`: vmagents itself, at its latest release (0.23.0)
+- [x] Notifications on the phone, through ntfy: tasks and fixes ending,
+      agents waiting, new VMs ready (0.23.0)
 - [x] The phone page made over: a new look (light and dark), tasks given and
       followed, issues fixed, VMs started and stopped, on the home screen like
       an app, no internet needed on the same Wi-Fi (0.22.0)
