@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.24.0
+VERSION=0.24.1
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -833,7 +833,9 @@ alone; "vmagents create" turns it on.
 something is). --yes: no question first. --all: also sshfs (for "vmagents
 mount"), and the desktop tools without a desktop. --no-libvirt: without
 libvirt and QEMU, for VMs elsewhere (Hyper-V, VirtualBox, another computer).
-install.sh --deps runs it after installing vmagents.
+It also runs by itself: install.sh runs it after installing vmagents (not
+with --no-deps), and the first time vmagents runs in a terminal it installs
+what is missing then, once. The .deb and the AUR package bring it along.
 
 On a Windows 10 or 11 computer, install.ps1 sets vmagents up in WSL:
   irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
@@ -3053,6 +3055,23 @@ deps_libvirt_setup() { # SUDO
       warn "could not add $user to the libvirt group; by hand: sudo usermod -aG libvirt $user"
     fi
   fi
+}
+
+# The first time vmagents runs in a terminal (installed by a package, by
+# hand, or with install.sh --no-deps): what is missing is installed then,
+# without asking for a command. Once; "vmagents deps" does it again.
+deps_first_use() {
+  local mark=$CONF_DIR/deps-checked key name what miss=''
+  [[ -t 0 && -t 1 && -z ${VMAGENTS_NO_DEPS:-} && ! -e $mark && $(uname -s) == Linux ]] || return 0
+  mkdir -p "$CONF_DIR" && : >"$mark" || return 0
+  while IFS='|' read -r key name what; do deps_have "$key" || miss+=" $name"; done < <(deps_items 0 0)
+  if getent group libvirt >/dev/null 2>&1 && ! id -nG | tr ' ' '\n' | grep -qx libvirt; then
+    miss+=" (the libvirt group)"
+  fi
+  [[ -n $miss ]] || return 0
+  say "First run: vmagents puts what it uses on this computer:$miss"
+  ( cmd_deps --yes ) || warn "not all of it is there; later: $PROG deps"
+  say ""
 }
 
 DEPS_RELOGIN=0
@@ -11266,6 +11285,10 @@ main() {
   ((BASH_VERSINFO[0] >= 4)) || { echo "$PROG: bash 4 or newer is required" >&2; exit 1; }
   migrate_old_name
   local cmd=${1-}
+  case $cmd in
+    help | -h | --help | version | -V | --version | deps | update | __*) ;;
+    *) deps_first_use ;;
+  esac
   case $cmd in
     "")
       if [[ -z $(profile_names) ]]; then first_run; else cmd_connect; fi ;;

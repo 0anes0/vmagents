@@ -64,6 +64,7 @@ class Sandbox:
             "STUB_REMOTE_LOG": str(self.remote_log),
             "STUB_RECORDER": str(self.recorder),
             "VMAGENTS_BOOT_TIMEOUT": "10",
+            "VMAGENTS_NO_DEPS": "1",  # no installing on the first run (test_deps tries that)
         }
 
     @property

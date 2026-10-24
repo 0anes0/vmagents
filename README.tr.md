@@ -84,9 +84,11 @@ ya da depodan: `git clone https://github.com/emincan2000/vmagents && cd vmagents
 `vmagents`'ı `~/.local/bin` içine koyar; `./install.sh --uninstall` kaldırır.
 Sonra `vmagents update` onu son sürüme getirir (sürümün sağlama toplamlarıyla
 denetlenir); yeni sürüm çıkınca arayüz de söyler. Kullandıkları (libvirt, QEMU,
-virt-install, ...) `vmagents deps` (ya da `install.sh --deps`) ile tek seferde
-gelir: apt, dnf, pacman, zypper ya da apk ile, yani Debian, Ubuntu, Fedora,
-Arch, openSUSE ve Alpine'de; libvirt'i de başlatır ve seni grubuna ekler.
+virt-install, ...) hemen ardından kendiliğinden kurulur: apt, dnf, pacman,
+zypper ya da apk ile, yani Debian, Ubuntu, Fedora, Arch, openSUSE ve Alpine'de
+(sudo şifreni sorar); libvirt başlatılır ve sen onun grubuna eklenirsin.
+`--no-deps` bunu atlar. Başka bir yolla kurulduysa vmagents aynısını bir
+terminalde ilk çalıştığında yapar; `vmagents deps` yeniden yapar,
 `vmagents deps --check` yalnızca bakar.
 
 Bir **Windows 10 ya da 11 bilgisayarda**, PowerShell'de:
@@ -107,6 +109,7 @@ devam eder).
 Paket olarak: Debian ve Ubuntu'da [sürümler](https://github.com/emincan2000/vmagents/releases)
 sayfasındaki `.deb` (`sudo apt install ./vmagents_*_all.deb`); Arch Linux'ta
 [packaging/aur](packaging/aur) içindeki PKGBUILD (`cd packaging/aur && makepkg -si`).
+İkisi de libvirt, QEMU ve gerisini beraberinde getirir.
 
 **Gerekenler**
 

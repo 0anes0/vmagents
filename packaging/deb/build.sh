@@ -36,9 +36,9 @@ Version: $ver
 Architecture: all
 Maintainer: EminY <57416756+emincan2000@users.noreply.github.com>
 Installed-Size: $(du -sk "$pkg/usr" | cut -f1)
-Depends: bash (>= 4), openssh-client
-Recommends: libvirt-clients, virtinst, xorriso, curl, python3, git, libnotify-bin
-Suggests: libvirt-daemon-system, xclip | wl-clipboard, sshfs, gh
+Depends: bash (>= 4), openssh-client, curl, python3, git, util-linux
+Recommends: libvirt-daemon-system, libvirt-clients, virtinst, qemu-system-x86 | qemu-system-arm, qemu-utils, xorriso, dnsmasq-base, libnotify-bin, xclip | wl-clipboard
+Suggests: sshfs, gh
 Section: utils
 Priority: optional
 Homepage: https://github.com/emincan2000/vmagents

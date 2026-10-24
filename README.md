@@ -82,10 +82,12 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 
 or from a clone: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 It puts `vmagents` in `~/.local/bin`; `./install.sh --uninstall` removes it.
-What it uses (libvirt, QEMU, virt-install, ...) comes in one go with
-`vmagents deps` (or `install.sh --deps`): with apt, dnf, pacman, zypper or apk,
-so on Debian, Ubuntu, Fedora, Arch, openSUSE and Alpine; it also starts
-libvirt and adds you to its group. `vmagents deps --check` only looks.
+What it uses (libvirt, QEMU, virt-install, ...) comes right after, by
+itself: with apt, dnf, pacman, zypper or apk, so on Debian, Ubuntu, Fedora,
+Arch, openSUSE and Alpine (sudo asks for your password); libvirt is started
+and you are added to its group. `--no-deps` leaves that out. Installed some
+other way, vmagents does the same on its first run in a terminal;
+`vmagents deps` does it again, `vmagents deps --check` only looks.
 Later, `vmagents update` brings it to the latest release (checked against the
 release's checksums); the UI says when there is one.
 
@@ -106,7 +108,8 @@ there, and without it Windows may not start again (`-Force` goes on anyway).
 As a package: on Debian and Ubuntu the `.deb` from the
 [releases](https://github.com/emincan2000/vmagents/releases)
 (`sudo apt install ./vmagents_*_all.deb`); on Arch Linux the PKGBUILD in
-[packaging/aur](packaging/aur) (`cd packaging/aur && makepkg -si`).
+[packaging/aur](packaging/aur) (`cd packaging/aur && makepkg -si`). Both
+bring libvirt, QEMU and the rest along.
 
 **Requirements**
 

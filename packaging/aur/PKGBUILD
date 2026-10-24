@@ -6,16 +6,10 @@ pkgdesc="Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) 
 arch=('any')
 url="https://github.com/emincan2000/vmagents"
 license=('MIT')
-depends=('bash' 'openssh')
-optdepends=('libvirt: start, stop and snapshot libvirt VMs'
-            'virt-install: make new VMs (vmagents create)'
-            'libisoburn: make new VMs (their cloud-init seed)'
-            'dnsmasq: the libvirt network of new VMs'
-            'qemu-desktop: run new VMs'
-            'python: the terminal UI and the restricted network'
-            'uv: fetches the terminal UI'"'"'s Python packages'
-            'git: projects (vmagents project, changes, take)'
-            'github-cli: pull requests (vmagents take --pr)'
+depends=('bash' 'openssh' 'curl' 'util-linux' 'python' 'git'
+         'libvirt' 'virt-install' 'qemu-system-x86' 'qemu-img' 'libisoburn' 'dnsmasq')
+optdepends=('uv: fetches the terminal UI'"'"'s Python packages'
+            'github-cli: pull requests (vmagents take --pr, vmagents fix)'
             'libnotify: desktop notifications'
             'xclip: the shared clipboard on X11'
             'wl-clipboard: the shared clipboard on Wayland'

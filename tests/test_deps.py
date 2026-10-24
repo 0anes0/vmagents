@@ -4,7 +4,8 @@ usermod, on a PATH without the real tools."""
 import shutil
 from pathlib import Path
 
-from tests.helpers import SandboxTest, write_exe
+from tests.helpers import VMAGENTS, SandboxTest, write_exe
+from tests.ptyrun import run_in_pty
 
 RECORD = '#!/bin/sh\necho "$(basename "$0") $*" >>"$LOG"\n'
 GONE = {"virsh", "virt-install", "qemu-img", "xorriso", "genisoimage", "mkisofs", "dnsmasq", "libvirtd", "virtqemud",
@@ -103,6 +104,23 @@ class DepsTests(SandboxTest):
         r = self.sb.run("deps", "--yes")
         self.assertEqual(r.returncode, 1)
         self.assertIn("no package manager here that vmagents knows", r.stderr)
+
+    def test_first_run(self):
+        # The first time vmagents runs in a terminal, what is missing comes by itself; once.
+        write_exe(self.sb.bin / "apt-get", RECORD)
+        env = dict(self.sb.env)
+        env.pop("VMAGENTS_NO_DEPS")
+        out = run_in_pty([str(VMAGENTS), "list"], env, self.sb.tmp)
+        self.assertRegex(out, r"First run: vmagents puts what it uses on this computer:.* git ")
+        self.assertIn("apt-get install -y", self.calls())
+        self.assertTrue((self.sb.conf / "deps-checked").exists())
+        self.log.write_text("")
+        out = run_in_pty([str(VMAGENTS), "list"], env, self.sb.tmp)
+        self.assertNotIn("First run", out)
+        self.assertEqual(self.calls(), "")
+        # Not in a terminal (scripts, the UI's calls): never.
+        (self.sb.conf / "deps-checked").unlink()
+        self.assertNotIn("First run", self.sb.run("list", env={"VMAGENTS_NO_DEPS": ""}).stdout)
 
     def test_help(self):
         self.assertIn("vmagents deps [--check]", self.sb.run("help", "deps", check=0).stdout)
