@@ -1,36 +1,79 @@
 <!doctype html>
+<!-- The social preview card (docs/social-preview.png). Rendered with:
+     chromium --headless=new --hide-scrollbars --force-device-scale-factor=2 \
+       --window-size=1280,640 --screenshot=social-preview.png social.html -->
 <html><head><meta charset="utf-8"><style>
+:root { --bg: #171c19; --panel: #1f2621; --panel2: #262e28; --line: #333d36; --text: #e6ebe4; --dim: #9ba79d;
+  --green: #9cc28f; --deep: #5f8a5a; }
 * { margin: 0; box-sizing: border-box; }
-body { width: 1280px; height: 640px; background: #1a1f1c; color: #e4e9e2; font-family: "Inter", "DejaVu Sans", sans-serif;
-  display: flex; overflow: hidden; }
-.left { width: 560px; padding: 64px 0 56px 72px; display: flex; flex-direction: column; }
-.brand { display: flex; align-items: center; gap: 18px; }
-.logo { width: 76px; height: 76px; border-radius: 18px; background: #6f9a6a; display: flex; align-items: center; justify-content: center; }
-h1 { font-size: 64px; font-weight: 800; letter-spacing: -1.5px; }
-.tag { margin-top: 34px; font-size: 38px; line-height: 1.22; font-weight: 700; }
-.tag em { font-style: normal; color: #9cc28f; }
-.sub { margin-top: 22px; font-size: 22px; line-height: 1.45; color: #9aa69b; }
-.agents { margin-top: auto; display: flex; flex-wrap: nowrap; gap: 7px; }
-.agents span { font-size: 15px; white-space: nowrap; color: #c8d1c5; background: #242b26; border: 1px solid #343e37; border-radius: 999px; padding: 6px 11px; }
-.right { flex: 1; position: relative; }
-.shot { position: absolute; left: 30px; top: 70px; width: 760px; border-radius: 14px; border: 1px solid #343e37;
-  box-shadow: 0 20px 60px rgba(0,0,0,.55); }
-.cmd { position: absolute; left: 70px; bottom: 54px; font: 22px "JetBrains Mono", "DejaVu Sans Mono", monospace;
-  background: #202622; border: 1px solid #343e37; border-radius: 10px; padding: 14px 20px; color: #e4e9e2;
-  box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-.cmd b { color: #9cc28f; }
+body { width: 1280px; height: 640px; background: var(--bg); color: var(--text); overflow: hidden;
+  font-family: "Inter", "DejaVu Sans", sans-serif; position: relative; }
+body::before { content: ""; position: absolute; inset: 0;
+  background: radial-gradient(900px 500px at 85% 20%, rgba(156, 194, 143, .09), transparent 70%); }
+.wrap { position: relative; display: flex; height: 548px; padding: 56px 64px 0; gap: 40px; }
+.left { width: 500px; flex: none; display: flex; flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 16px; }
+.logo { width: 58px; height: 58px; border-radius: 14px; background: var(--deep); display: grid; place-items: center; }
+.brand h1 { font-family: "Inter Display", "Inter", sans-serif; font-size: 44px; font-weight: 800; letter-spacing: -1px; }
+.head { margin-top: 38px; font-family: "Inter Display", "Inter", sans-serif; font-size: 46px; line-height: 1.12;
+  font-weight: 800; letter-spacing: -1.2px; }
+.head em { font-style: normal; color: var(--green); }
+.sub { margin-top: 22px; font-size: 21px; line-height: 1.5; color: var(--dim); }
+.sub b { color: var(--text); font-weight: 600; }
+.agents { margin-top: auto; padding-bottom: 6px; }
+.agents .label { font-size: 13px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--dim); margin-bottom: 10px; }
+.pills { display: flex; gap: 7px; }
+.pills span { font-size: 15px; color: #cfd8cc; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 12px; white-space: nowrap; }
+.right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 6px 0 30px; }
+.step { flex: 1; display: flex; gap: 20px; align-items: center; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 16px; padding: 24px 24px; }
+.num { width: 38px; height: 38px; flex: none; border-radius: 50%; background: var(--panel2); border: 1px solid var(--line);
+  display: grid; place-items: center; font-weight: 700; font-size: 17px; color: var(--green); }
+.step .t { font-size: 22px; font-weight: 700; }
+.step .d { margin-top: 10px; font-size: 16px; line-height: 1.45; color: var(--dim); white-space: nowrap; }
+code { font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; font-size: 17px; color: var(--text);
+  background: #151a16; border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px; }
+code b { color: var(--green); font-weight: 400; }
+.step.undo { border-color: #4b6347; background: linear-gradient(180deg, #223024, var(--panel)); }
+.foot { position: absolute; left: 0; right: 0; bottom: 0; height: 92px; border-top: 1px solid var(--line);
+  background: #141815; display: flex; align-items: center; justify-content: center; padding: 0 64px; }
+.feats { display: flex; gap: 44px; font-size: 17px; color: #c3ccc0; }
+.feats span::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  margin-right: 9px; vertical-align: 2px; }
+.repo { font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; font-size: 15px; color: var(--dim); }
 </style></head><body>
-<div class="left">
-  <div class="brand">
-    <div class="logo"><svg width="46" height="46" viewBox="0 0 100 100"><path d="M18 22 42 50 18 78" fill="none" stroke="#f1f5ef" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><rect x="50" y="68" width="34" height="12" rx="4" fill="#f1f5ef"/></svg></div>
-    <h1>vmagents</h1>
+<div class="wrap">
+  <div class="left">
+    <div class="brand">
+      <div class="logo"><svg width="34" height="34" viewBox="0 0 100 100"><path d="M18 22 42 50 18 78" fill="none" stroke="#f1f5ef"
+        stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><rect x="50" y="68" width="34" height="12" rx="4" fill="#f1f5ef"/></svg></div>
+      <h1>vmagents</h1>
+    </div>
+    <div class="head">Run AI coding agents in a <em>virtual machine</em>, not on your computer.</div>
+    <div class="sub">Let them install, run and break things <b>without asking</b>. Your files and keys stay out of reach,
+      and one command takes it all back.</div>
+    <div class="agents">
+      <div class="label">Works with</div>
+      <div class="pills"><span>Claude Code</span><span>Codex</span><span>Gemini CLI</span><span>OpenCode</span><span>aider</span></div>
+    </div>
   </div>
-  <div class="tag">AI coding agents in a <em>virtual machine</em>. Undo with one command.</div>
-  <div class="sub">Let them act without asking: snapshots, background tasks, issue to pull request, from the terminal UI or your phone.</div>
-  <div class="agents"><span>Claude Code</span><span>Codex</span><span>Gemini CLI</span><span>OpenCode</span><span>aider</span></div>
+  <div class="right">
+    <div class="step"><div class="num">1</div><div>
+      <div class="t">A fresh VM in a minute</div>
+      <div class="d"><code><b>$</b> vmagents create dev</code>&nbsp; Debian, Ubuntu or Arch</div>
+    </div></div>
+    <div class="step"><div class="num">2</div><div>
+      <div class="t">The agent works inside it</div>
+      <div class="d"><code><b>$</b> vmagents dev</code>&nbsp; snapshot first, then the agent opens</div>
+    </div></div>
+    <div class="step undo"><div class="num">3</div><div>
+      <div class="t">Anything went wrong? Undo it</div>
+      <div class="d"><code><b>$</b> vmagents undo dev</code>&nbsp; back to before the session</div>
+    </div></div>
+  </div>
 </div>
-<div class="right">
-  <img class="shot" src="../ui.png">
-  <div class="cmd"><b>$</b> vmagents undo dev</div>
+<div class="foot">
+  <div class="feats"><span>Terminal UI</span><span>From your phone</span><span>Background tasks</span><span>GitHub issue → PR</span><span>Linux and Windows VMs</span></div>
 </div>
 </body></html>
