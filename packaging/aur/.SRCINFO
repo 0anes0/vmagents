@@ -1,6 +1,6 @@
 pkgbase = vmforai
 	pkgdesc = Run AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode, aider) inside a virtual machine
-	pkgver = 0.24.2
+	pkgver = 0.25.0
 	pkgrel = 1
 	url = https://github.com/emincan2000/vmforai
 	arch = any
@@ -23,7 +23,10 @@ pkgbase = vmforai
 	optdepends = xclip: the shared clipboard on X11
 	optdepends = wl-clipboard: the shared clipboard on Wayland
 	optdepends = sshfs: vmforai mount
-	source = vmforai-0.24.2.tar.gz::https://github.com/emincan2000/vmforai/archive/refs/tags/v0.24.2.tar.gz
-	sha256sums = bb430226368ffefae437eee5d36a5668357b9392336f97df449f452f745e09eb
+	provides = vmagents
+	conflicts = vmagents
+	replaces = vmagents
+	source = vmforai-0.25.0.tar.gz::https://github.com/emincan2000/vmforai/archive/refs/tags/v0.25.0.tar.gz
+	sha256sums = c84db664e497b5170cc105751d4e5c3b7c2ab57dc1dfa40a81af54cb78ec1a22
 
 pkgname = vmforai
