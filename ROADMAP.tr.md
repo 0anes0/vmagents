@@ -5,10 +5,7 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Şimdi
 
-- [ ] **Bağımlılık kurucular**: `vmagents deps` vmagents'ın ihtiyacı olanları
-      bu bilgisayara kurar (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine);
-      bir Windows 10 bilgisayar için kurucu; VM'lere geliştirme araçlarını
-      hızlıca eklemenin bir yolu (Linux dağıtımları ve winget ile Windows)
+- [ ] `install.ps1` ve `tools`'u (Scoop) gerçek bir Windows 10'da denemek
 
 ## Sırada
 
@@ -30,6 +27,8 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Son yapılanlar
 
+- [x] `vmagents deps` (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine), Windows
+      bilgisayar için `install.ps1`, VM'e araç kuran `vmagents tools` (Linux, Scoop ile Windows) (0.24.0)
 - [x] `vmagents update`: vmagents'ı son sürüme günceller (0.23.0)
 - [x] Telefona bildirimler, ntfy ile: biten görevler ve issue çözmeler,
       bekleyen yardımcılar, hazır olan yeni VM'ler (0.23.0)

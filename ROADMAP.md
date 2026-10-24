@@ -5,10 +5,7 @@ as issues. Türkçesi: [ROADMAP.tr.md](ROADMAP.tr.md).
 
 ## Now
 
-- [ ] **Dependency installers**: `vmagents deps` puts what vmagents needs on
-      this computer (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine); an
-      installer for a Windows 10 computer; and a quick way to add development
-      tools to a VM (Linux distributions, and Windows through winget)
+- [ ] Try `install.ps1` and `tools` (Scoop) on a real Windows 10
 
 ## Next
 
@@ -30,6 +27,8 @@ as issues. Türkçesi: [ROADMAP.tr.md](ROADMAP.tr.md).
 
 ## Done lately
 
+- [x] `vmagents deps` (Debian, Ubuntu, Fedora, Arch, openSUSE, Alpine), `install.ps1`
+      for a Windows computer, `vmagents tools` for a VM (Linux, Windows through Scoop) (0.24.0)
 - [x] `vmagents update`: vmagents itself, at its latest release (0.23.0)
 - [x] Notifications on the phone, through ntfy: tasks and fixes ending,
       agents waiting, new VMs ready (0.23.0)

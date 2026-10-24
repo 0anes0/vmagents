@@ -12,6 +12,12 @@ jobs:
           pip install asyncssh 'textual>=8,<9' 'pyte>=0.8.2' qrcode
       - name: shellcheck
         run: shellcheck vmagents install.sh packaging/deb/build.sh packaging/aur/update.sh
+      - name: install.ps1 parses
+        shell: pwsh
+        run: |
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$e)
+          if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }
       - name: tests
         run: python3 -m unittest discover -v -s tests -t .
       - name: Debian package

@@ -82,8 +82,24 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 
 or from a clone: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 It puts `vmagents` in `~/.local/bin`; `./install.sh --uninstall` removes it.
+What it uses (libvirt, QEMU, virt-install, ...) comes in one go with
+`vmagents deps` (or `install.sh --deps`): with apt, dnf, pacman, zypper or apk,
+so on Debian, Ubuntu, Fedora, Arch, openSUSE and Alpine; it also starts
+libvirt and adds you to its group. `vmagents deps --check` only looks.
 Later, `vmagents update` brings it to the latest release (checked against the
 release's checksums); the UI says when there is one.
+
+On a **Windows 10 or 11 computer**, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
+```
+
+It sets vmagents up in WSL (Ubuntu; it installs WSL first when needed, which
+wants an administrator and a restart) and adds a `vmagents` command to
+Windows. Windows 10's WSL cannot run VMs itself, so there vmagents works with
+VMs from Hyper-V, VirtualBox or VMware (`vmagents add dev --host ADDRESS`);
+on Windows 11 `vmagents deps` in WSL adds libvirt as well.
 
 As a package: on Debian and Ubuntu the `.deb` from the
 [releases](https://github.com/emincan2000/vmagents/releases)
@@ -548,12 +564,14 @@ tools are `build-essential` on Debian, `base-devel` on Arch). Your own:
 `SETUP=npm install -g pnpm` (a command run at the end). The UI's new-VM form
 offers them too.
 
-Needs `virsh` and `virt-install`, and your user in the `libvirt` group:
+**Tools later:** `vmagents tools dev node python` installs them in a VM that
+already exists: `node`, `python`, `go`, `rust`, `java`, `build` (a C compiler
+and make), or a package's own name. On Linux with the distribution's package
+manager (apt, dnf, pacman, zypper, apk), on Windows VMs with
+[Scoop](https://scoop.sh) (`vmagents tools win10 node python`).
 
-| | |
-|---|---|
-| Debian / Ubuntu | `sudo apt install libvirt-daemon-system virtinst` |
-| Arch | `sudo pacman -S libvirt virt-install libisoburn dnsmasq qemu-desktop` and `sudo systemctl enable --now libvirtd` |
+Needs `virsh` and `virt-install`, QEMU, and your user in the `libvirt`
+group: `vmagents deps` installs and sets up all of it.
 
 If libvirt has no `default` storage pool yet (a fresh Arch), `create` makes
 one in `/var/lib/libvirt/images`. With **ufw** on, allow the libvirt bridge
@@ -688,6 +706,8 @@ vmagents resize NAME [--memory MB] [--cpus N] [--stop]
 vmagents delete NAME [--yes]     delete a VM made with create, and its disk
 vmagents images | prune          downloaded images and where they are / remove unused ones
 vmagents templates               what create --template offers
+vmagents tools NAME TOOL...      node, python, go, rust, java, build in the VM (Linux or Windows)
+vmagents deps [--check]          what vmagents uses on this computer, installed
 
 vmagents add NAME [options]      add an existing VM, or change fields of a profile
     --host HOST  --user USER  --port PORT  --key FILE
@@ -824,6 +844,9 @@ home directory. CI runs them on every push, with shellcheck.
   re-send, `--discard`, only new commits sent later.
 - `test_runs.py`: tasks against a fake tmux on the fake VM: the agents' options,
   the log (Claude's steps one per line), `--wait`, stop, clean, the notification.
+- `test_deps.py`: `deps` against fake apt-get, dnf, pacman, zypper and apk:
+  what is missing, the package names of each, uv, libvirt's service and group.
+  `test_tools.py`: `tools` on a fake Linux VM and the Scoop script for Windows.
 - `test_update.py`: `update` against a fake GitHub on a copy of the script:
   the check, the swap, a wrong checksum or file refused, older releases, the
   daily cache, a git checkout.
@@ -888,6 +911,10 @@ home directory. CI runs them on every push, with shellcheck.
   and GitHub reached, example.com refused by the proxy, a direct connection
   dropped by the filter, a Claude task through it, everything gone after
   `open`); the AUR package built and installed with `makepkg -si`; `history`.
+- `deps` on the Arch VM: libvirt, QEMU, virt-install, xorriso, dnsmasq and uv
+  installed with pacman, libvirtd started, the user in the libvirt group,
+  `virsh` answering; `tools` with Go and Rust there; then `undo`. Each
+  distribution's package names checked against its own package index.
 - `fix` on the Arch VM with Claude Code: a bug in a small Python project fixed
   and tested on the VM, the branch pushed (to a local origin; the GitHub side
   through a fake `gh`), a second run on a fresh copy, the caches left out.

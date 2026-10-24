@@ -67,6 +67,20 @@ class TemplateScriptTests(CreateBase):
                       "build-essential htop", calls)
         self.assertIn("npm i -g pnpm", calls)  # SETUP, at the end
 
+    def test_other_distributions(self):
+        for manager, line in (("dnf", "dnf install -y nodejs nodejs-npm python3 python3-pip gcc gcc-c++ make golang "
+                                      "java-latest-openjdk-devel"),
+                              ("zypper", "zypper --non-interactive install nodejs-default npm-default python3 python3-pip "
+                                         "gcc gcc-c++ make go java-devel"),
+                              ("apk", "apk add nodejs npm python3 py3-pip build-base go openjdk21")):
+            with self.subTest(manager):
+                for f in ("dnf", "zypper", "apk"):
+                    (self.sb.tmp / "vmbin" / f).unlink(missing_ok=True)
+                (self.sb.tmp / "calls").unlink(missing_ok=True)
+                r, calls = self.run_script(manager, "", "node", "python", "build", "go", "java")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(line, calls)
+
     def test_arch_names(self):
         r, calls = self.run_script("pacman", "", "python", "build", "go")
         self.assertEqual(r.returncode, 0, r.stderr)

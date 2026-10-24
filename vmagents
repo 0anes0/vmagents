@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.23.0
+VERSION=0.24.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -104,6 +104,8 @@ GET STARTED
     vmagents phone                           a QR code: the phone's browser gets your VMs and their agents
     vmagents phone notify                    notifications on the phone (ntfy app): tasks done, agents waiting
     vmagents update                          vmagents itself, at its latest release
+    vmagents deps                            what vmagents uses here (libvirt, QEMU, ...), installed in one go
+    vmagents tools dev node python           development tools in the VM (Linux or Windows)
 
 COMMANDS
   Make and remove VMs (libvirt):
@@ -130,6 +132,8 @@ COMMANDS
     phone ssh NAME KEY   let an SSH app on the phone into the VM, with that app's public key
     phone notify         notifications on the phone, through the ntfy app (off, test, --server)
     update               vmagents itself to its latest release (--check: only say if there is one)
+    deps                 install what vmagents uses on this computer (--check: only look)
+    tools NAME TOOL...   install node, python, go, rust, java, build (or packages) in the VM
 
   Tasks (an agent works alone, in the background, without asking):
     run NAME "TASK"      start one (--codex, --gemini, ...; --wait: follow it here)
@@ -811,6 +815,48 @@ vmagents changes NAME [--stat]
 Shows what changed in the project on the VM since it was sent: the commits
 the agents made, and what is not committed there (new files too, but not
 ignored ones), as one diff. --stat: the files only. Nothing on the VM changes.
+EOF
+      ;;
+    deps) cat <<EOF
+vmagents deps [--check] [--yes] [--all] [--no-libvirt]
+
+Installs what vmagents uses on this computer, with its package manager (apt
+on Debian and Ubuntu, dnf on Fedora, pacman on Arch, zypper on openSUSE, apk
+on Alpine; sudo asks for your password): the SSH client, curl, flock,
+python3, git; for VMs of libvirt: libvirt, virt-install, QEMU, xorriso,
+dnsmasq; on a desktop: notify-send and a clipboard tool; and uv for the UI
+(into ~/.local/bin, no sudo). Then libvirt's service is started and you are
+added to the libvirt group (log in again once). The default network is left
+alone; "vmagents create" turns it on.
+
+--check: only list what is there and what is missing (exit code 1 when
+something is). --yes: no question first. --all: also sshfs (for "vmagents
+mount"), and the desktop tools without a desktop. --no-libvirt: without
+libvirt and QEMU, for VMs elsewhere (Hyper-V, VirtualBox, another computer).
+install.sh --deps runs it after installing vmagents.
+
+On a Windows 10 or 11 computer, install.ps1 sets vmagents up in WSL:
+  irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
+
+Examples:
+  vmagents deps --check
+  vmagents deps
+EOF
+      ;;
+    tools) cat <<EOF
+vmagents tools NAME TOOL...
+
+Installs development tools in the VM. TOOL: node, python, go, rust, java,
+build (a C compiler and make), or a package's own name. On Linux VMs with
+the distribution's package manager (apt, dnf, pacman, zypper or apk; rust
+through rustup); on Windows VMs with Scoop (installed first, for the user;
+winget does not work over SSH): node is nodejs-lts, rust rustup-gnu, java
+Temurin's JDK, build gcc (MinGW). Templates ("create --template") use the
+same names. A VM that is off is started, and shut down again afterwards.
+
+Examples:
+  vmagents tools dev node python
+  vmagents tools win10 node git
 EOF
       ;;
     update) cat <<EOF
@@ -2891,6 +2937,196 @@ printf "idle=%s\n" "$(sed -n "s/^ExecStart=.* \([0-9][0-9]*\)\$/\1/p" /etc/syste
     fi
   fi
   ((ok)) && say "All good." || return 1
+}
+
+# ------------------------------------------------------------------ deps: what vmagents needs here
+
+# What vmagents uses on this computer, by what it is for. Each item: KEY,
+# whether it is there, what it is for. deps_pkgs turns a KEY into the
+# packages of this distribution's package manager.
+DEPS_SBIN=${VMAGENTS_SBIN:-/usr/sbin}
+deps_items() { # [all] [nolibvirt]: KEY|NAME|FOR lines
+  local all=$1 nolibvirt=$2
+  printf '%s\n' 'ssh|ssh|connecting to VMs' 'curl|curl|downloads' 'flock|flock|one watcher, one server at a time' \
+    'python3|python3|the UI, the phone page, the restricted network' 'git|git|projects and fix'
+  if ((!nolibvirt)); then
+    printf '%s\n' 'libvirt|libvirt|starting, stopping and snapshotting VMs' 'virtinst|virt-install|creating VMs' \
+      'qemu|qemu|running VMs (KVM)' 'xorriso|xorriso|the first-boot disk of new VMs' 'dnsmasq|dnsmasq|the VMs'"'"' network'
+  fi
+  if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || ((all)); then
+    printf '%s\n' 'notify|notify-send|desktop notifications' 'clip|xclip|the shared clipboard'
+  fi
+  ((all)) && printf '%s\n' 'sshfs|sshfs|vmagents mount'
+  printf '%s\n' 'ui|uv|the terminal UI (Textual, through uv)'
+}
+
+deps_have() { # KEY
+  case $1 in
+    ssh) command -v ssh >/dev/null && command -v ssh-keygen >/dev/null ;;
+    python3 | git | curl | flock) command -v "$1" >/dev/null ;;
+    libvirt) command -v virsh >/dev/null && { command -v libvirtd >/dev/null || command -v virtqemud >/dev/null ||
+      [[ -x $DEPS_SBIN/libvirtd || -x $DEPS_SBIN/virtqemud ]]; } ;;
+    virtinst) command -v virt-install >/dev/null ;;
+    qemu) command -v qemu-img >/dev/null ;;
+    xorriso) iso_tool >/dev/null ;;
+    dnsmasq) command -v dnsmasq >/dev/null || [[ -x $DEPS_SBIN/dnsmasq ]] ;;
+    notify) command -v notify-send >/dev/null ;;
+    clip) command -v wl-copy >/dev/null || command -v xclip >/dev/null || command -v xsel >/dev/null ;;
+    sshfs) command -v sshfs >/dev/null ;;
+    ui) command -v uv >/dev/null || [[ -x $HOME/.local/bin/uv ]] || python3 -c 'import textual, pyte' 2>/dev/null ;;
+  esac
+}
+
+deps_manager() { # prints apt, dnf, pacman, zypper or apk
+  local m
+  for m in apt-get dnf pacman zypper apk; do
+    command -v "$m" >/dev/null && { printf '%s\n' "${m%-get}"; return 0; }
+  done
+  return 1
+}
+
+deps_pkgs() { # MANAGER KEY: its packages (none for ui: uv comes from its own installer)
+  local m=$1 arm=0
+  [[ $(uname -m) == aarch64 || $(uname -m) == arm64 ]] && arm=1
+  case $m:$2 in
+    apt:ssh) echo openssh-client ;; dnf:ssh | zypper:ssh) echo openssh-clients ;; pacman:ssh) echo openssh ;;
+    apk:ssh) echo openssh-client-default openssh-keygen ;;
+    *:curl) echo curl ;;
+    apk:flock) echo flock ;; *:flock) echo util-linux ;;
+    pacman:python3) echo python ;; *:python3) echo python3 ;;
+    *:git) echo git ;;
+    apt:libvirt) echo libvirt-daemon-system libvirt-clients ;;
+    dnf:libvirt) echo libvirt-daemon-kvm libvirt-client ;;
+    pacman:libvirt) echo libvirt ;;
+    zypper:libvirt) echo libvirt-daemon-qemu libvirt-daemon-driver-network libvirt-client ;;
+    apk:libvirt) echo libvirt-daemon libvirt-client ;;
+    apt:virtinst) echo virtinst ;; *:virtinst) echo virt-install ;;
+    apt:qemu) if ((arm)); then echo qemu-system-arm qemu-utils; else echo qemu-system-x86 qemu-utils; fi ;;
+    dnf:qemu) echo qemu-kvm qemu-img ;;
+    pacman:qemu) echo qemu-desktop ;;
+    zypper:qemu) if ((arm)); then echo qemu-arm qemu-tools; else echo qemu-x86 qemu-tools; fi ;;
+    apk:qemu) if ((arm)); then echo qemu-system-aarch64 qemu-img; else echo qemu-system-x86_64 qemu-img; fi ;;
+    pacman:xorriso) echo libisoburn ;; *:xorriso) echo xorriso ;;
+    apt:dnsmasq) echo dnsmasq-base ;; *:dnsmasq) echo dnsmasq ;;
+    apt:notify) echo libnotify-bin ;; zypper:notify) echo libnotify-tools ;; *:notify) echo libnotify ;;
+    *:clip) if [[ -n ${WAYLAND_DISPLAY:-} ]]; then echo wl-clipboard; else echo xclip; fi ;;
+    dnf:sshfs) echo fuse-sshfs ;; *:sshfs) echo sshfs ;;
+  esac
+}
+
+deps_install() { # MANAGER SUDO PACKAGES...
+  local m=$1 su=$2
+  shift 2
+  case $m in
+    apt) $su apt-get update -qq && $su env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    dnf) $su dnf install -y "$@" ;;
+    pacman) $su pacman -S --needed --noconfirm "$@" || $su pacman -Syu --needed --noconfirm "$@" ;;
+    zypper) $su zypper --non-interactive install "$@" ;;
+    apk) $su apk add "$@" ;;
+  esac
+}
+
+# libvirt's service on, and this user allowed to use it. The default
+# network is left alone ("vmagents create" turns it on when it needs it).
+deps_libvirt_setup() { # SUDO
+  local su=$1 user
+  user=$(id -un)
+  if command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+    if systemctl is-active --quiet libvirtd.service libvirtd.socket virtqemud.socket virtqemud.service 2>/dev/null; then :
+    elif systemctl cat virtqemud.socket >/dev/null 2>&1 && ! systemctl cat libvirtd.service >/dev/null 2>&1; then
+      info "Starting libvirt (virtqemud and its friends)..."
+      $su systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket virtnodedevd.socket ||
+        warn "could not start libvirt; by hand: sudo systemctl enable --now virtqemud.socket"
+    else
+      info "Starting libvirt (libvirtd)..."
+      $su systemctl enable --now libvirtd.service || warn "could not start libvirt; by hand: sudo systemctl enable --now libvirtd"
+    fi
+  elif command -v rc-service >/dev/null; then
+    info "Starting libvirt (OpenRC)..."
+    { $su rc-update add libvirtd default && $su rc-service libvirtd start; } || warn "could not start libvirtd"
+  fi
+  if getent group libvirt >/dev/null && ! id -nG "$user" | tr ' ' '\n' | grep -qx libvirt; then
+    info "Adding $user to the libvirt group..."
+    if $su usermod -aG libvirt "$user" 2>/dev/null || $su adduser "$user" libvirt 2>/dev/null; then
+      DEPS_RELOGIN=1
+    else
+      warn "could not add $user to the libvirt group; by hand: sudo usermod -aG libvirt $user"
+    fi
+  fi
+}
+
+DEPS_RELOGIN=0
+cmd_deps() {
+  local check=0 yes=0 all=0 nolibvirt=0 key name what m su='' line a
+  local -a need=() pkgs=() got=()
+  while (($#)); do
+    case $1 in
+      --check) check=1 ;;
+      -y | --yes) yes=1 ;;
+      --all) all=1 ;;
+      --no-libvirt) nolibvirt=1 ;;
+      *) usage_error "deps: unknown argument $1" ;;
+    esac
+    shift
+  done
+  say "What vmagents uses on this computer:"
+  while IFS='|' read -r key name what; do
+    if deps_have "$key"; then
+      printf '  ok       %-13s %s\n' "$name" "$what"
+    else
+      printf '  missing  %-13s %s\n' "$name" "$what"
+      need+=("$key")
+    fi
+  done < <(deps_items "$all" "$nolibvirt")
+  if ((!${#need[@]})); then
+    say "Everything is here."
+    ((check || nolibvirt)) || { [[ $(id -u) == 0 ]] || su=sudo; deps_libvirt_setup "$su"; deps_relogin_note; }
+    return 0
+  fi
+  if ((check)); then
+    say "Install them: $PROG deps"
+    return 1
+  fi
+  m=$(deps_manager) || die "no package manager here that vmagents knows (apt, dnf, pacman, zypper, apk); install the missing ones by hand"
+  for key in "${need[@]}"; do
+    read -ra got <<<"$(deps_pkgs "$m" "$key")"
+    pkgs+=("${got[@]}")
+  done
+  if [[ $(id -u) != 0 ]]; then
+    if command -v sudo >/dev/null; then su=sudo
+    elif command -v doas >/dev/null; then su=doas
+    else die "installing packages needs root: run this as root, or install sudo"
+    fi
+  fi
+  say ""
+  ((${#pkgs[@]})) && say "To install with $m${su:+ ($su asks for your password)}: ${pkgs[*]}"
+  [[ " ${need[*]} " == *" ui "* ]] && say "And uv (for the UI), from astral.sh into ~/.local/bin (no sudo)."
+  if ((!yes)); then
+    [[ -t 0 ]] || die "not going on without --yes"
+    read -r -p "Go on? [Y/n] " a || a=n
+    [[ -z $a || $a == [yYeE]* ]] || exit 1
+  fi
+  if ((${#pkgs[@]})); then
+    deps_install "$m" "$su" "${pkgs[@]}" || die "$m could not install them (see above)"
+  fi
+  if [[ " ${need[*]} " == *" ui "* ]]; then
+    info "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh >/dev/null ||
+      warn "could not install uv; the UI needs it (or: pip install textual pyte)"
+  fi
+  ((nolibvirt)) || deps_libvirt_setup "$su"
+  say ""
+  line=''
+  while IFS='|' read -r key name what; do deps_have "$key" || line+=" $name"; done < <(deps_items "$all" "$nolibvirt")
+  if [[ -z $line ]]; then say "Done: everything vmagents uses is here."
+  else warn "still missing:$line (see: $PROG deps --check)"
+  fi
+  deps_relogin_note
+}
+
+deps_relogin_note() {
+  ((DEPS_RELOGIN)) && say "Log out and in again (or reboot) once: then you may use libvirt without sudo."
+  return 0
 }
 
 # ------------------------------------------------------------------ create / delete
@@ -6012,26 +6248,50 @@ load_template() { # NAME
 # On the VM, after setup: the template's packages, then its SETUP command.
 # $1 the SETUP command (or empty), then package names.
 # shellcheck disable=SC2016
-TEMPLATE_SH=$REMOTE_ENV$PKG_SH'setup=$1; shift
+# A tool's packages, by package manager: node, python, go, java, build (a C
+# compiler and make); rust comes from rustup; anything else is a package name.
+# shellcheck disable=SC2016
+TOOL_PKGS_SH='pkg_manager() {
+  for m_ in apt-get dnf pacman zypper apk; do
+    command -v "$m_" >/dev/null 2>&1 && { echo "${m_%-get}"; return 0; }
+  done
+  echo other
+}
+tool_pkgs() {
+  case $1:$2 in
+    dnf:node) echo nodejs nodejs-npm ;;
+    zypper:node) echo nodejs-default npm-default ;;
+    *:node) echo nodejs npm ;;
+    apt:python) echo python3 python3-venv python3-pip ;;
+    pacman:python) echo python python-pip ;;
+    apk:python) echo python3 py3-pip ;;
+    *:python) echo python3 python3-pip ;;
+    apt:build) echo build-essential ;;
+    pacman:build) echo base-devel ;;
+    apk:build) echo build-base ;;
+    *:build) echo gcc gcc-c++ make ;;
+    apt:go | dnf:go) echo golang ;;
+    *:go) echo go ;;
+    apt:java) echo default-jdk ;;
+    pacman:java) echo jdk-openjdk ;;
+    dnf:java) echo java-latest-openjdk-devel ;;
+    zypper:java) echo java-devel ;;
+    apk:java) echo openjdk21 ;;
+    *) echo "$2" ;;
+  esac
+}
+'
+TOOLS_KNOWN="node python go rust java build"
+
+# On the VM: tools (above), then a command ($1, or empty; a template's SETUP).
+# shellcheck disable=SC2016
+TEMPLATE_SH=$REMOTE_ENV$PKG_SH$TOOL_PKGS_SH'setup=$1; shift
 list= rust=
-if command -v apt-get >/dev/null 2>&1; then m=apt
-elif command -v pacman >/dev/null 2>&1; then m=pacman
-else m=other
-fi
+m=$(pkg_manager)
 for p in "$@"; do
-  case $m:$p in
-    *:node) list="$list nodejs npm" ;;
-    apt:python) list="$list python3 python3-venv python3-pip" ;;
-    pacman:python) list="$list python python-pip" ;;
-    *:python) list="$list python3 python3-pip" ;;
-    apt:build) list="$list build-essential" ;;
-    pacman:build) list="$list base-devel" ;;
-    *:build) list="$list gcc gcc-c++ make" ;;
-    apt:go) list="$list golang" ;;
-    pacman:go) list="$list go" ;;
-    *:go) list="$list golang" ;;
-    *:rust) rust=1 ;;
-    *) list="$list $p" ;;
+  case $p in
+    rust) rust=1 list="$list $(tool_pkgs "$m" build)" ;;  # (crates want a C compiler)
+    *) list="$list $(tool_pkgs "$m" "$p")" ;;
   esac
 done
 if [ -n "$list" ]; then
@@ -6050,6 +6310,87 @@ if [ -n "$setup" ]; then
 fi
 exit 0
 '
+
+# The same on Windows VMs, through Scoop (for the user; winget does not work
+# over SSH): installed first when missing. Then each tool's Scoop package.
+win_tools_ps() { # TOOL...
+  local t names=''
+  for t in "$@"; do names+="$(psq "$t"),"; done
+  # shellcheck disable=SC2016 # PowerShell's $
+  printf '$tools = @(%s)\n' "${names%,}"
+  cat <<'EOF'
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$shims = "$env:USERPROFILE\scoop\shims"
+if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+  if (Test-Path "$shims\scoop.ps1") { $env:PATH = "$shims;$env:PATH" }
+}
+if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+  Write-Output "Installing Scoop (a package manager, for this user)..."
+  $f = Join-Path $env:TEMP "install-scoop.ps1"
+  & curl.exe -fsSL -o $f https://get.scoop.sh
+  if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("vmagents: could not download Scoop"); exit 1 }
+  $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+  if ($admin) { & $f -RunAsAdmin | Out-Null } else { & $f | Out-Null }
+  $env:PATH = "$shims;$env:PATH"
+}
+$pkgs = @()
+foreach ($t in $tools) {
+  switch ($t) {
+    "node" { $pkgs += "nodejs-lts" }
+    "python" { $pkgs += "python" }
+    "go" { $pkgs += "go" }
+    "rust" { $pkgs += "rustup-gnu" }
+    "java" { & scoop bucket add java 2>&1 | Out-Null; $pkgs += "java/temurin-lts-jdk" }
+    "build" { $pkgs += "gcc" }
+    default { $pkgs += $t }
+  }
+}
+& scoop install @pkgs
+$bad = @()
+foreach ($p in $pkgs) {
+  $n = ($p -split "/")[-1]
+  if (-not (& scoop prefix $n 2>$null)) { $bad += $n }
+}
+if ($bad) { [Console]::Error.WriteLine("vmagents: not installed: " + ($bad -join ", ")); exit 1 }
+Write-Output ("Installed: " + ($pkgs -join ", ") + ". New shells find them (Scoop's shims are on the PATH).")
+exit 0
+EOF
+}
+
+cmd_tools() {
+  local name='' t
+  local -a tools=()
+  while (($#)); do
+    case $1 in
+      -*) usage_error "tools: unknown option $1" ;;
+      *) if [[ -z $name ]]; then name=$1; else tools+=("$1"); fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "tools: missing NAME"
+  if ((!${#tools[@]})); then
+    say "Tools for a VM: $TOOLS_KNOWN (or a package's own name)."
+    say "  $PROG tools $name node python    Linux: the distribution's packages; Windows: Scoop"
+    return 0
+  fi
+  for t in "${tools[@]}"; do
+    [[ $t =~ ^[A-Za-z0-9][A-Za-z0-9._+/-]*$ ]] || usage_error "tools: not a tool or package name: $t"
+  done
+  load "$name"
+  project_connect
+  info "Installing on $NAME: ${tools[*]}"
+  local rc=0
+  if [[ $C_OS == windows ]]; then
+    win_run "$(win_tools_ps "${tools[@]}")" || rc=$?
+  else
+    run_ssh "$TTY_FLAG" -- "$TARGET" "$(remote_cmd "$TEMPLATE_SH" "" "${tools[@]}")" </dev/null || rc=$?
+  fi
+  project_done
+  ((rc == 0)) || die "installing them on $NAME failed (see above)"
+  say "Done: ${tools[*]} on $NAME."
+}
 
 cmd_templates() {
   local json=0 n sep=''
@@ -10931,7 +11272,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy | __phone | __addr) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | fix | run | runs | try | tries | net | templates | history | phone | update | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | fix | run | runs | try | tries | net | templates | history | phone | update | deps | tools | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

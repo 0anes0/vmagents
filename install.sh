@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Install vmagents for the current user.
-# Usage: ./install.sh [--prefix DIR] [--uninstall]
-#    or: curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
+# Usage: ./install.sh [--prefix DIR] [--deps] [--uninstall]
+#    or: curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash [-s -- --deps]
+# --deps: then also what vmagents uses (libvirt, QEMU, ...), with the package manager.
 set -euo pipefail
 
 RAW=https://raw.githubusercontent.com/emincan2000/vmagents/main/vmagents
 PREFIX=$HOME/.local
 UNINSTALL=0
+DEPS=0
 while (($#)); do
   case $1 in
     --prefix) PREFIX=${2:?--prefix needs a directory}; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h | --help) sed -n '2,4p' "$0"; exit 0 ;;
+    --deps) DEPS=1; shift ;;
+    -h | --help) sed -n '2,5p' "$0"; exit 0 ;;
     *) echo "install.sh: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -52,4 +55,10 @@ case ":$PATH:" in
   *) echo "note: $PREFIX/bin is not on your PATH; add it, e.g. in ~/.bashrc or ~/.zshrc:"
      echo "  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
+if ((DEPS)); then
+  # (sudo asks on the terminal even when this script comes through a pipe.)
+  "$BIN" deps --yes || echo "note: some of what vmagents uses is missing; see: vmagents deps --check" >&2
+else
+  "$BIN" deps --check >/dev/null 2>&1 || echo "Some of what vmagents uses is missing here; install it: vmagents deps"
+fi
 echo "Next: vmagents   (it asks for your VM the first time)"

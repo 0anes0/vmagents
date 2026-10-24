@@ -83,7 +83,23 @@ curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.s
 ya da depodan: `git clone https://github.com/emincan2000/vmagents && cd vmagents && ./install.sh`.
 `vmagents`'ı `~/.local/bin` içine koyar; `./install.sh --uninstall` kaldırır.
 Sonra `vmagents update` onu son sürüme getirir (sürümün sağlama toplamlarıyla
-denetlenir); yeni sürüm çıkınca arayüz de söyler.
+denetlenir); yeni sürüm çıkınca arayüz de söyler. Kullandıkları (libvirt, QEMU,
+virt-install, ...) `vmagents deps` (ya da `install.sh --deps`) ile tek seferde
+gelir: apt, dnf, pacman, zypper ya da apk ile, yani Debian, Ubuntu, Fedora,
+Arch, openSUSE ve Alpine'de; libvirt'i de başlatır ve seni grubuna ekler.
+`vmagents deps --check` yalnızca bakar.
+
+Bir **Windows 10 ya da 11 bilgisayarda**, PowerShell'de:
+
+```powershell
+irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
+```
+
+vmagents'ı WSL'de (Ubuntu) kurar (gerekirse önce WSL'i kurar; bu yönetici
+yetkisi ve yeniden başlatma ister) ve Windows'a bir `vmagents` komutu ekler.
+Windows 10'un WSL'i kendisi VM çalıştıramaz; orada vmagents Hyper-V,
+VirtualBox ya da VMware VM'leriyle çalışır (`vmagents add dev --host ADRES`);
+Windows 11'de WSL içinde `vmagents deps` libvirt'i de ekler.
 
 Paket olarak: Debian ve Ubuntu'da [sürümler](https://github.com/emincan2000/vmagents/releases)
 sayfasındaki `.deb` (`sudo apt install ./vmagents_*_all.deb`); Arch Linux'ta
@@ -548,12 +564,14 @@ kendisinindir (derleme araçları Debian'da `build-essential`, Arch'ta
 `PACKAGES=node build postgresql` ve `SETUP=npm install -g pnpm` (sonda çalışan
 bir komut). Arayüzün yeni VM formu da bunları sunar.
 
-`virsh` ve `virt-install` gerekir, kullanıcının da `libvirt` grubunda olması:
+**Sonradan araçlar:** `vmagents tools dev node python` onları var olan bir VM'e
+kurar: `node`, `python`, `go`, `rust`, `java`, `build` (bir C derleyicisi ve
+make) ya da bir paketin kendi adı. Linux'ta dağıtımın paket yöneticisiyle
+(apt, dnf, pacman, zypper, apk), Windows VM'lerinde [Scoop](https://scoop.sh)
+ile (`vmagents tools win10 node python`).
 
-| | |
-|---|---|
-| Debian / Ubuntu | `sudo apt install libvirt-daemon-system virtinst` |
-| Arch | `sudo pacman -S libvirt virt-install libisoburn dnsmasq qemu-desktop` ve `sudo systemctl enable --now libvirtd` |
+`virsh`, `virt-install`, QEMU ve kullanıcının `libvirt` grubunda olması
+gerekir: `vmagents deps` hepsini kurar ve ayarlar.
 
 libvirt'te henüz `default` depolama havuzu yoksa (yeni kurulmuş bir Arch),
 `create` onu `/var/lib/libvirt/images` içinde oluşturur. **ufw** açıksa libvirt
@@ -717,6 +735,8 @@ vmagents ports AD 3000,5173      her bağlantıda yönlendirilen portlar (off: h
 vmagents phone [--lan] [--new] [--port N] | phone off   telefonda VM'lerin: okutulacak bir QR kod
 vmagents phone notify [off|test] [--server URL] [--token T]   telefona bildirimler (ntfy)
 vmagents update [--check]        vmagents'ı son sürüme günceller
+vmagents deps [--check]          vmagents'ın bu bilgisayarda kullandıklarını kurar
+vmagents tools AD ARAÇ...        VM'e node, python, go, rust, java, build (Linux ya da Windows)
 vmagents phone ssh AD ANAHTAR|off  telefondaki SSH uygulaması VM'e (burada VM başına bir port)
 vmagents undo AD [GÖRÜNTÜ]       bu oturumdan önceye (ya da GÖRÜNTÜ'ye) dön
 vmagents snapshot AD [--name GÖRÜNTÜ] [ETİKET]   anlık görüntü al; snapshots AD listeler
