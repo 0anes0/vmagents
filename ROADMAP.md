@@ -5,7 +5,7 @@ as issues. Türkçesi: [ROADMAP.tr.md](ROADMAP.tr.md).
 
 ## Now
 
-- [ ] Try `install.ps1` and `tools` (Scoop) on a real Windows 10
+- [ ] Try `install.ps1` on a real Windows 10 computer (in a VM, WSL 2 hangs Windows; `tools` with Scoop works there)
 
 ## Next
 

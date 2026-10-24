@@ -2,10 +2,11 @@
 # "vmagents" command here starts it there.
 # Usage, in PowerShell:
 #   irm https://raw.githubusercontent.com/emincan2000/vmagents/main/install.ps1 | iex
-# or, from a clone: powershell -ExecutionPolicy Bypass -File install.ps1 [-Distro Ubuntu] [-Uninstall]
-param([string]$Distro = "Ubuntu", [switch]$Uninstall)
+# or, from a clone: powershell -ExecutionPolicy Bypass -File install.ps1 [-Distro Ubuntu] [-Force] [-Uninstall]
+param([string]$Distro = "Ubuntu", [switch]$Uninstall, [switch]$Force)
 
 $ErrorActionPreference = "Stop"
+$env:WSL_UTF8 = "1"  # wsl.exe writes UTF-8 then, not UTF-16
 $Bin = Join-Path $env:LOCALAPPDATA "vmagents"
 $Raw = "https://raw.githubusercontent.com/emincan2000/vmagents/main"
 
@@ -33,6 +34,14 @@ function Install-VmAgents {
   # 1. WSL. Installing it needs an administrator and a restart.
   & wsl.exe --status *> $null
   if ($LASTEXITCODE -ne 0) {
+    # In a virtual machine, WSL 2's hypervisor needs nested virtualization, and
+    # without it Windows may hang at its logo on the next start (seen in a KVM VM).
+    $cs = Get-CimInstance Win32_ComputerSystem
+    if (-not $Force -and "$($cs.Manufacturer) $($cs.Model)" -match "QEMU|KVM|VMware|VirtualBox|innotek|Virtual Machine|Xen|Parallels|Bochs") {
+      Fail ("this Windows runs in a virtual machine ($($cs.Manufacturer) $($cs.Model)). WSL 2 needs nested virtualization " +
+        "there, and without it Windows may not start again. Install vmagents on the computer that runs the VMs instead; " +
+        "or take a snapshot of this VM first and run this with -Force.")
+    }
     $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
       [Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $admin) { Fail "WSL is not installed. Run this again in PowerShell as administrator: it installs WSL." }

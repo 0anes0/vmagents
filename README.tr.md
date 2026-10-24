@@ -99,7 +99,10 @@ vmagents'ı WSL'de (Ubuntu) kurar (gerekirse önce WSL'i kurar; bu yönetici
 yetkisi ve yeniden başlatma ister) ve Windows'a bir `vmagents` komutu ekler.
 Windows 10'un WSL'i kendisi VM çalıştıramaz; orada vmagents Hyper-V,
 VirtualBox ya da VMware VM'leriyle çalışır (`vmagents add dev --host ADRES`);
-Windows 11'de WSL içinde `vmagents deps` libvirt'i de ekler.
+Windows 11'de WSL içinde `vmagents deps` libvirt'i de ekler. Kendisi bir VM'de
+çalışan bir Windows'ta durur ve nedenini söyler: orada WSL 2 iç içe
+sanallaştırma ister ve o olmadan Windows yeniden açılmayabilir (`-Force` yine de
+devam eder).
 
 Paket olarak: Debian ve Ubuntu'da [sürümler](https://github.com/emincan2000/vmagents/releases)
 sayfasındaki `.deb` (`sudo apt install ./vmagents_*_all.deb`); Arch Linux'ta

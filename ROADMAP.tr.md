@@ -5,7 +5,7 @@ gelebilir. English: [ROADMAP.md](ROADMAP.md).
 
 ## Şimdi
 
-- [ ] `install.ps1` ve `tools`'u (Scoop) gerçek bir Windows 10'da denemek
+- [ ] `install.ps1`'i gerçek bir Windows 10 bilgisayarda denemek (VM'de WSL 2 Windows'u kilitliyor; Scoop'lu `tools` orada çalışıyor)
 
 ## Sırada
 

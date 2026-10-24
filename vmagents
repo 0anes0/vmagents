@@ -6332,7 +6332,8 @@ if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
   if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("vmagents: could not download Scoop"); exit 1 }
   $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-  if ($admin) { & $f -RunAsAdmin | Out-Null } else { & $f | Out-Null }
+  # (*>&1: Write-Host would come through SSH as PowerShell's XML.)
+  if ($admin) { & $f -RunAsAdmin *>&1 | Out-Null } else { & $f *>&1 | Out-Null }
   $env:PATH = "$shims;$env:PATH"
 }
 $pkgs = @()
@@ -6342,16 +6343,16 @@ foreach ($t in $tools) {
     "python" { $pkgs += "python" }
     "go" { $pkgs += "go" }
     "rust" { $pkgs += "rustup-gnu" }
-    "java" { & scoop bucket add java 2>&1 | Out-Null; $pkgs += "java/temurin-lts-jdk" }
+    "java" { & scoop bucket add java *>&1 | Out-Null; $pkgs += "java/temurin-lts-jdk" }
     "build" { $pkgs += "gcc" }
     default { $pkgs += $t }
   }
 }
-& scoop install @pkgs
+& scoop install @pkgs *>&1 | ForEach-Object { "$_" }
 $bad = @()
 foreach ($p in $pkgs) {
   $n = ($p -split "/")[-1]
-  if (-not (& scoop prefix $n 2>$null)) { $bad += $n }
+  if (-not (& scoop prefix $n 2>$null 6>$null)) { $bad += $n }
 }
 if ($bad) { [Console]::Error.WriteLine("vmagents: not installed: " + ($bad -join ", ")); exit 1 }
 Write-Output ("Installed: " + ($pkgs -join ", ") + ". New shells find them (Scoop's shims are on the PATH).")

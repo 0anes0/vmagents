@@ -99,7 +99,9 @@ It sets vmagents up in WSL (Ubuntu; it installs WSL first when needed, which
 wants an administrator and a restart) and adds a `vmagents` command to
 Windows. Windows 10's WSL cannot run VMs itself, so there vmagents works with
 VMs from Hyper-V, VirtualBox or VMware (`vmagents add dev --host ADDRESS`);
-on Windows 11 `vmagents deps` in WSL adds libvirt as well.
+on Windows 11 `vmagents deps` in WSL adds libvirt as well. In a Windows that
+itself runs in a VM it stops and says why: WSL 2 needs nested virtualization
+there, and without it Windows may not start again (`-Force` goes on anyway).
 
 As a package: on Debian and Ubuntu the `.deb` from the
 [releases](https://github.com/emincan2000/vmagents/releases)
@@ -915,6 +917,11 @@ home directory. CI runs them on every push, with shellcheck.
   installed with pacman, libvirtd started, the user in the libvirt group,
   `virsh` answering; `tools` with Go and Rust there; then `undo`. Each
   distribution's package names checked against its own package index.
+- `tools` on the Windows 10 VM: Scoop installed, then Node.js (and `jq`) with
+  it, found in a new SSH session. `install.ps1` there: the WSL features
+  installed; after the restart Windows hung at its logo (WSL 2's hypervisor in
+  a KVM VM), so the VM went back to its snapshot, and the installer now
+  refuses inside a VM unless told otherwise.
 - `fix` on the Arch VM with Claude Code: a bug in a small Python project fixed
   and tested on the VM, the branch pushed (to a local origin; the GitHub side
   through a fake `gh`), a second run on a fresh copy, the caches left out.
