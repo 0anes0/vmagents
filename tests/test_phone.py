@@ -12,6 +12,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
 from tests.helpers import SandboxTest, free_port, listening_port, write_exe
@@ -71,13 +72,26 @@ class QRTests(unittest.TestCase):
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
+if os.environ.get("FAKE_LOG"):
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps(a) + "\n")
 if a[:2] == ["list", "--json"]:
     print(json.dumps([{"name": "dev", "state": "running", "os": "linux", "agent": "codex", "domain": "dev",
-                       "default": True, "user": "me", "try": ""},
+                       "default": True, "user": "me", "try": "", "project": "/home/me/code/app", "memory_mb": 4096,
+                       "cpus": 2, "test": "npm test"},
                       {"name": "dev-t1", "state": "running", "os": "linux", "agent": "claude", "domain": "dev-t1",
                        "default": False, "try": "dev"}]))
 elif a[:1] == ["__addr"]:
     print("127.0.0.1", os.environ["FAKE_SSH_PORT"])
+elif a[:1] == ["runs"] and a[-1] == "--json":
+    print(json.dumps([{"id": 1, "agent": "claude", "state": "0", "started": 100, "ended": 160, "task": "a"}]))
+elif a[:1] == ["runs"] and a[-1] == "--stop":
+    print(f"Run {a[2]} on {a[1]} stopped.")
+elif a[:1] == ["run"]:
+    print(f"Run 7 on {a[1]}: Claude Code works on it, without asking (in tmux session run-7).")
+elif a[:1] in (["start"], ["stop"]):
+    print("VM dev is off." if a[0] == "stop" else "VM dev is running: me@10.0.0.2")
+    sys.exit(0 if a[1] == "dev" else 1)
 else:
     rows, cols = os.popen("stty size").read().split()
     print("session:", " ".join(a), "size:", cols, rows, "tty:", os.isatty(0), flush=True)
@@ -148,7 +162,9 @@ class ServerTests(SandboxTest):
         self.port = free_port()
         self.ssh_srv, ssh_port = listening_port()
         self.addCleanup(self.ssh_srv.close)
-        env = dict(os.environ, VMAGENTS_CACHE=str(self.sb.tmp), FAKE_SSH_PORT=str(ssh_port))
+        self.fake_log = self.sb.tmp / "fake.log"
+        env = dict(os.environ, VMAGENTS_CACHE=str(self.sb.tmp), FAKE_SSH_PORT=str(ssh_port), VMAGENTS_PHONE_FETCH="0",
+                   FAKE_LOG=str(self.fake_log))
         self.proc = subprocess.Popen(["python3", "-c", PHONE, str(fake), str(self.dir), "127.0.0.1", str(self.port)],
                                      env=env, stdin=subprocess.DEVNULL)
         self.addCleanup(self.stop)
@@ -163,18 +179,26 @@ class ServerTests(SandboxTest):
         self.proc.terminate()
         self.proc.wait(5)
 
-    def get(self, path):
+    def get(self, path, data=None, raw=False):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a):
+                return None
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data,
+                                     method="POST" if data is not None else "GET")
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
-                return r.status, r.headers, r.read().decode()
+            with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as r:
+                body = r.read()
+                return r.status, r.headers, body if raw else body.decode()
         except urllib.error.HTTPError as e:
             return e.code, e.headers, e.read().decode()
+
+    def calls(self):
+        return [json.loads(l) for l in self.fake_log.read_text().splitlines()] if self.fake_log.exists() else []
 
     def test_page_and_list(self):
         status, headers, body = self.get("/")
         self.assertEqual(status, 200)
-        self.assertIn("xterm@5.5.0", body)
-        self.assertIn('integrity="sha384-', body)
+        self.assertIn('<script src="/lib/xterm.js" integrity="sha384-', body)
         self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
         self.assertEqual(self.get("/api/vms?t=wrong")[0], 403)
         self.assertEqual(self.get("/api/vms")[0], 403)
@@ -183,6 +207,7 @@ class ServerTests(SandboxTest):
         vms = json.loads(body)
         self.assertEqual([v["name"] for v in vms], ["dev"])  # not the copies of try
         self.assertEqual(vms[0]["agent"], "codex")
+        self.assertEqual((vms[0]["project"], vms[0]["memory_mb"], vms[0]["test"]), ("app", 4096, "npm test"))
         self.assertNotIn("user", vms[0])
         self.assertEqual(self.get("/nope")[0], 404)
         self.assertIn("wrong key", (self.sb.tmp / "phone.log").read_text())
@@ -218,6 +243,61 @@ class ServerTests(SandboxTest):
         bad.s.close()
         ws.s.close()
 
+    def test_terminal_library_icons_manifest(self):
+        status, headers, _ = self.get("/lib/xterm.js")  # not fetched yet: from the CDN
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js")
+        (self.sb.tmp / "phone-lib").mkdir()
+        (self.sb.tmp / "phone-lib" / "xterm.js").write_text("// xterm")
+        status, headers, body = self.get("/lib/xterm.js")
+        self.assertEqual((status, body), (200, "// xterm"))
+        self.assertTrue(headers["Content-Type"].startswith("text/javascript"))
+        self.assertEqual(self.get("/lib/other.js")[0], 404)
+        self.assertEqual(self.get("/lib/../token")[0], 404)
+        manifest = json.loads(self.get("/manifest.webmanifest")[2])
+        self.assertEqual((manifest["name"], manifest["display"], manifest["start_url"]), ("vmagents", "standalone", "/"))
+        self.assertIn("<svg", self.get("/icon.svg")[2])
+        status, headers, png = self.get("/icon.png", raw=True)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", png[16:24]), (192, 192))
+        idat = png[png.index(b"IDAT") + 4:png.index(b"IEND") - 8]
+        self.assertEqual(len(zlib.decompress(idat)), 192 * (1 + 192 * 3))
+
+    def test_actions(self):
+        self.assertEqual(self.get("/api/runs?vm=dev")[0], 403)
+        runs = json.loads(self.get("/api/runs?t=sekret-key&vm=dev")[2])
+        self.assertEqual(runs[0]["task"], "a")
+        r = json.loads(self.get("/api/run?t=sekret-key&vm=dev", json.dumps({"task": "--fix it", "agent": "codex"}).encode())[2])
+        self.assertEqual((r["ok"], r["id"]), (True, 7))
+        self.assertIn(["run", "dev", "--codex", "--", "--fix it"], self.calls())  # the task cannot be an option
+        self.assertEqual(self.get("/api/run?t=sekret-key&vm=dev", b'{"task": " "}')[0], 400)
+        self.assertEqual(self.get("/api/run?t=sekret-key&vm=dev", b'{"task": "x", "agent": "rm"}')[0], 400)
+        self.assertEqual(self.get("/api/run?t=sekret-key&vm=dev")[0], 405)  # actions are POSTs
+        r = json.loads(self.get("/api/stop?t=sekret-key&vm=dev&id=3", b"{}")[2])
+        self.assertTrue(r["ok"])
+        self.assertIn(["runs", "dev", "3", "--stop"], self.calls())
+        r = json.loads(self.get("/api/power?t=sekret-key&vm=dev&do=stop", b"{}")[2])
+        self.assertEqual((r["ok"], r["out"]), (True, "VM dev is off."))
+        self.assertFalse(json.loads(self.get("/api/power?t=sekret-key&vm=nope&do=start", b"{}")[2])["ok"])
+        self.assertEqual(self.get("/api/power?t=sekret-key&vm=dev&do=delete", b"{}")[0], 404)
+        self.assertEqual(self.get("/api/power?t=sekret-key&vm=--help&do=start", b"{}")[0], 400)
+        self.assertNotIn("--help", json.dumps(self.calls()))
+        self.assertIn("stop dev", (self.sb.tmp / "phone.log").read_text())
+
+    def test_task_and_fix_terminals(self):
+        log = WS(self.port, "t=sekret-key&vm=dev&kind=log&id=4")
+        self.assertTrue(log.read_until(lambda: b"session: runs dev 4 -f" in log.out), log.out)
+        log.s.close()
+        fix = WS(self.port, "t=sekret-key&vm=dev&kind=fix&issue=%2342&test=npm+test&pr=0")
+        self.assertTrue(fix.read_until(lambda: b"session: fix dev 42 --test npm test --no-pr" in fix.out), fix.out)
+        fix.s.close()
+        for bad in ("vm=dev&kind=log&id=x", "vm=dev&kind=fix&issue=;rm", "vm=dev&kind=nope", "vm=-x&kind=shell"):
+            ws = WS(self.port, "t=sekret-key&" + bad)
+            self.assertFalse(ws.accepted, bad)
+            self.assertIn("400", ws.status)
+            ws.s.close()
+
     def test_ssh_forward(self):
         (self.dir / "ssh").write_text(f"dev {self.port + 1}\n")
         for _ in range(50):  # the server looks at the file every 2 s
@@ -236,6 +316,7 @@ class CommandTests(SandboxTest):
     def setUp(self):
         super().setUp()
         self.sb.env["XDG_RUNTIME_DIR"] = str(self.sb.tmp)  # its own server, not this computer's
+        self.sb.env["VMAGENTS_PHONE_FETCH"] = "0"  # no downloads in tests
         self.port = free_port()
         self.addCleanup(lambda: self.sb.run("phone", "off"))
 

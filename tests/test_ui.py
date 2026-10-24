@@ -36,6 +36,8 @@ elif a[:1] == ["snapshots"]: show("snaps.json")
 elif a[:1] == ["create"]:
     print("Creating VM " + a[1], flush=True)
     time.sleep(float(os.environ.get("FAKE_CREATE_SLEEP", "0")))
+    while os.environ.get("FAKE_CREATE_GATE") and not os.path.exists(os.environ["FAKE_CREATE_GATE"]):
+        time.sleep(0.1)  # until the test lets it end
     print("Done. Open Claude on the VM with:  vmagents " + a[1], flush=True)
     sys.exit(int(os.environ.get("FAKE_CREATE_RC", "0")))
 elif a[:1] == ["history"] and "--json" in a:
@@ -636,6 +638,34 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await self.wait_for(pilot, lambda: "session: run dev --wait --hold --claude -- fix the build"
                                 in self.screen_text(term))
 
+    async def test_fix_an_issue(self):
+        self.write(list=[dict(VM, project="/home/me/app", test="npm test")])
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("f")
+            await pilot.pause(0.3)
+            dialog = self.app.screen
+            self.assertIsInstance(dialog, self.ui.Ask)
+            self.assertEqual(dialog.query_one("#f-test").value, "npm test")  # the one used last time
+            await self.submit(pilot)
+            await pilot.pause(0.1)
+            self.assertIn("Give the issue", str(dialog.query_one("#error").render()))
+            dialog.query_one("#f-issue").value = "#42"
+            dialog.query_one("#f-test").value = "make check"
+            await self.submit(pilot)
+            await self.wait_for(pilot, lambda: self.app.terminals("dev"))
+            term = self.app.terminals("dev")[0]
+            self.assertEqual(self.tab_labels(), ["1 VMs", "2 dev · Issue"])
+            await self.wait_for(pilot, lambda: "session: fix dev 42 --hold --test make check" in self.screen_text(term))
+
+    async def test_fix_needs_a_project(self):
+        async with self.start() as pilot:
+            await self.ready(pilot)
+            await pilot.press("f")
+            await pilot.pause(0.3)
+            self.assertNotIsInstance(self.app.screen, self.ui.Ask)
+            self.assertEqual(self.app.terminals("dev"), [])
+
     async def test_terminal_keys(self):
         k = self.ui.key_bytes
         self.assertEqual(k("ctrl+c", None), b"\x03")
@@ -698,8 +728,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · Log in"])  # the creating tab is done
 
     async def test_create_in_the_background(self):
-        os.environ["FAKE_CREATE_SLEEP"] = "4"
-        self.addCleanup(os.environ.pop, "FAKE_CREATE_SLEEP")
+        gate = self.d / "create-may-end"
+        os.environ["FAKE_CREATE_GATE"] = str(gate)
+        self.addCleanup(os.environ.pop, "FAKE_CREATE_GATE")
         async with self.start() as pilot:
             await self.ready(pilot)
             await pilot.press("n")
@@ -715,10 +746,11 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause(0.2)
             self.assertEqual(self.app.selected_name(), "srv")
             await pilot.press("q")  # quitting would stop it: asks
-            await pilot.pause(0.2)
-            self.assertIn("still being created", str(self.app.screen.query_one("Static").render()))
+            self.assertTrue(await self.wait_for(
+                pilot, lambda: "still being created" in str(self.app.screen.query_one("Static").render())))
             await pilot.press("n")
-            await self.wait_for(pilot, lambda: self.app.creating()[0].rc is not None, seconds=10)
+            gate.touch()
+            self.assertTrue(await self.wait_for(pilot, lambda: self.app.creating()[0].rc is not None, seconds=10))
             await pilot.pause(0.2)
             self.assertEqual(self.tab_labels(), ["1 VMs", "2 web · ready"])
             self.assertEqual(self.app.current_pane(), "home")

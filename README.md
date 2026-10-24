@@ -12,7 +12,7 @@
   ![Languages](https://img.shields.io/badge/UI-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Commands](#commands)
+  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Issues](#from-an-issue-to-a-pull-request) · [Commands](#commands) · [Roadmap](ROADMAP.md)
 </div>
 
 ---
@@ -52,8 +52,9 @@ without a single password prompt. Or do everything from the **terminal UI**,
 | **Give a task and go** | `vmagents run dev "fix the failing tests"`: an agent works on it alone, in the background; a notification comes when it is done. |
 | **One task, several tries** | `vmagents try dev 3 "the task"`: three copies of the VM in seconds, each doing the task (with different agents if you like); take the best. |
 | **A network on a short leash** | `vmagents net dev restricted`: the VM reaches only the hosts on its list (the agents' services, package registries, GitHub), enforced on your computer. |
-| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs and opens their agents in a terminal (over Tailscale, from anywhere). SSH apps get a port per VM too. |
+| **From the phone** | `vmagents phone` shows a QR code: scan it, and the phone's browser lists your VMs, opens their agents in a terminal, gives them tasks and follows them, fixes issues, starts and stops them (over Tailscale, from anywhere). SSH apps get a port per VM too. |
 | **Yolo, safely** | `vmagents yolo dev on`: agents act without asking first. On your computer that is risky; in a VM, `undo` takes it all back. |
+| **From an issue to a pull request** | `vmagents fix dev 42 --test "npm test"`: the agent works on GitHub issue 42 in the VM, the tests run there (their output goes back to the agent when they fail), and a pull request opens when they pass. |
 | **Your project, back as a branch** | `vmagents project` sends a git repository to the VM, `vmagents take` brings the agents' work back as a branch or pull request. No GitHub keys on the VM. |
 | **New VMs on demand** | `vmagents create` builds a libvirt VM from an official cloud image (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust, your own) sets it up for a kind of work. |
 | **Undo** | Every start takes a snapshot first; `vmagents undo` puts the VM back to before the session. |
@@ -183,6 +184,7 @@ Vim keys too (`j`/`k` move, `l` or Enter open, `h` or Esc back).
 | `i` | network: restrict it to a list of hosts; when restricted, allow a host (the last one refused is offered) or open it again |
 | `H` | Claude's past sessions on the VM, in a tab: `j`/`k` through them (shown below), `r` goes on with one |
 | `p` / `c` | send a project (a git repository) / its changes, in a tab (`t` there: take as a branch, `P`: pull request) |
+| `f` | fix a GitHub issue of the project: its number and the test command, then followed in a tab |
 | `u` | snapshots: go back to one, take one with a name and a label, relabel, delete |
 | `o` | ports: forward now (`o` again stops), every time you connect, or to your LAN too |
 | `t` / `r` | start or stop / RAM and CPUs (shuts the VM down first) |
@@ -310,6 +312,17 @@ autocorrect and dictation work. A key from the bar goes after what you typed,
 so type the start of a file name and tap Tab to complete it. The page comes back by itself when the phone
 wakes up.
 
+Tap a VM's name for the rest: give it a task and follow its output as it
+works (the earlier tasks are there too, and a running one can be stopped),
+fix a GitHub issue of its project ([`vmagents fix`](#from-an-issue-to-a-pull-request)),
+or start and shut it down. Added to the home screen (from the browser's menu),
+the page opens like an app, with its icon and the whole screen. It is light or
+dark, like the phone.
+
+| The VMs | One VM |
+|---|---|
+| ![The phone page: the VMs](docs/phone-list.png) | ![The phone page: one VM, its tasks](docs/phone-vm.png) |
+
 The page is a small web server on your computer, reached over
 [Tailscale](https://tailscale.com) (free): encrypted, from anywhere, and
 nothing is opened to the internet. Install it on the computer
@@ -318,7 +331,9 @@ and the app on the phone, with the same account. Only on the same Wi-Fi?
 `vmagents phone --lan` (not encrypted then; networks of schools and hotels
 often keep devices apart). The link in the QR code holds a random key and the
 server answers nothing without it; `--new` makes a new one. Who connected is
-logged in `~/.cache/vmagents/phone.log`. In the UI: `m`.
+logged in `~/.cache/vmagents/phone.log`. In the UI: `m`. The page's terminal
+(xterm.js) comes from your computer too, fetched once and checked against its
+hash, so on the same Wi-Fi the phone needs no internet.
 
 SSH apps (Termius, Blink, JuiceSSH) work too: `phone ssh NAME KEY` puts the
 app's public key on the VM and gives it a port on your computer (7701, ...)
@@ -351,6 +366,35 @@ vmagents project dev              # send the result (and your new commits) back
   In the UI: `p` sends, `c` shows the changes in a tab (`t` take, `P` pull request).
 
 ![The changes of a project, in a tab](docs/ui-changes.png)
+
+## From an issue to a pull request
+
+With a project on the VM, one command takes a GitHub issue all the way to a
+pull request, while you do something else:
+
+```sh
+vmagents fix dev 42 --test "npm test"
+```
+
+1. The issue and its comments are read here, with the GitHub CLI (`gh`).
+2. The project goes to the VM again, a fresh copy of what is checked out here.
+3. The agent gets the issue as a task (`vmagents run`): fix it and commit.
+4. The tests run on the VM. When they fail, the agent gets their output and
+   tries again (`--tries`, 2 in all by default).
+5. The agent's commits come back as the branch `vmagents/issue-42`.
+6. When the tests pass, the branch is pushed and a pull request opens against
+   the branch that was sent, saying "Fixes #42" (`--draft`, or `--no-pr` to
+   stop at the branch).
+
+- `--test` is kept for the next issue. Without one, the agent runs the tests
+  it finds, and the pull request says that vmagents did not check.
+- Only the agent's commits are taken; what it left lying around (caches, test
+  reports) stays out, unless it committed nothing at all.
+- The VM never talks to GitHub: it gets the issue's text, and the work comes
+  back through vmagents as with `take`. The agent follows that text without
+  asking, so when people other than you wrote some of it, `fix` says who and
+  asks first (`--yes` skips that).
+- Any agent: `--codex`, `--gemini`, `--opencode`, `--aider`. In the UI: `f`.
 
 ## Everyday use
 
@@ -652,6 +696,7 @@ vmagents net NAME [restricted|open|allow HOST...|deny HOST...|blocked]   the VM'
 vmagents project NAME [DIR]      send a git repository here to the VM (--discard, --off)
 vmagents changes NAME [--stat]   what the agents changed in it there
 vmagents take NAME [--branch B] [--pr]   that work as a branch here (or a pull request)
+vmagents fix NAME ISSUE [--test CMD] [--tries N] [--no-pr] [--draft]   an issue to a pull request
 
 vmagents open [NAME] [PORT...]   the VM's port here, in your browser ([LOCAL:]PORT; --lan)
 vmagents ports NAME 3000,5173    ports forwarded each time you connect (off: none)
@@ -764,6 +809,10 @@ home directory. CI runs them on every push, with shellcheck.
   re-send, `--discard`, only new commits sent later.
 - `test_runs.py`: tasks against a fake tmux on the fake VM: the agents' options,
   the log (Claude's steps one per line), `--wait`, stop, clean, the notification.
+- `test_fix.py`: an issue to a pull request, with real git, a fake `gh` and a
+  fake agent that commits: the task, failing tests going back to the agent,
+  what the tests and the agent left kept out, the push and the pull request,
+  text by others, no change, the VM going off again.
 - `test_try.py`: copies against a fake libvirt that keeps domains and volumes:
   new name, UUID, MAC and cloud-init seed, one at a time, the agents taking
   turns, shutting down after their task, `--clean`; the newest lease winning,
@@ -773,7 +822,9 @@ home directory. CI runs them on every push, with shellcheck.
   libvirt: the filter, the VM's card, the VM's proxy settings, open again.
 - `test_phone.py`: the QR code (compared with the `qrcode` library), the web
   server with a real WebSocket client (the page, the list, wrong keys, a
-  terminal with its size and exit code), the SSH forward, `phone ssh` putting
+  terminal with its size and exit code, a task's output, a fix), the actions
+  (tasks, stop, power; names and options refused), the terminal library from
+  here or the CDN, the icon and manifest, the SSH forward, `phone ssh` putting
   the key on the fake VM and taking it off.
 - `test_templates.py`, `test_history.py`: templates for `create` (built in,
   your own, the package names per distribution) and Claude's sessions.
@@ -819,12 +870,19 @@ home directory. CI runs them on every push, with shellcheck.
   and GitHub reached, example.com refused by the proxy, a direct connection
   dropped by the filter, a Claude task through it, everything gone after
   `open`); the AUR package built and installed with `makepkg -si`; `history`.
+- `fix` on the Arch VM with Claude Code: a bug in a small Python project fixed
+  and tested on the VM, the branch pushed (to a local origin; the GitHub side
+  through a fake `gh`), a second run on a fresh copy, the caches left out.
 - Tasks on Windows 10: a real Claude Code task with `--wait`, one in the
   background going on after the connection closed, listed, stopped (with what
   Claude had started in the background), cleaned.
 - The phone page in Chromium at phone size: the list, a shell and Claude Code
   on the Arch VM (started by it), the message box, the session ending; a QR
   code decoded by jsQR; an SSH client through `phone ssh`, starting the VM.
+  The new page, light and dark, at phone size; against the Arch VM: started,
+  a Claude Code task given and its output followed live, a long one stopped
+  (nothing left running), shut down; the terminal library fetched from the CDN
+  and its hashes checked.
 
 </details>
 

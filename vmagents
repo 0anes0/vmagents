@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.21.1
+VERSION=0.22.0
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -30,7 +30,9 @@ DEFAULT_KEY=$HOME/.ssh/vmagents_ed25519
 BOOT_TIMEOUT=${VMAGENTS_BOOT_TIMEOUT:-${VMCLAUDE_BOOT_TIMEOUT:-180}}
 STOP_TIMEOUT=${VMAGENTS_STOP_TIMEOUT:-${VMCLAUDE_STOP_TIMEOUT:-120}}
 APPS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/applications
-PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO TRY NET NETPORT CREATED "
+PROFILE_KEYS=" HOST USER PORT IDENTITY DOMAIN LIBVIRT_URI DIR SESSION OS AGENT AGENTS PORTS AUTOSTOP AUTOSNAP IDLE NOTIFY CLIPBOARD PROJECT YOLO TRY NET NETPORT TEST CREATED "
+QUIET=0       # 1: leave out the hints (commands that fix runs)
+SEND_TAKEN=0  # 1: project replaces work taken back but not merged (fix)
 HOLD=0
 AGENTS="claude codex gemini opencode aider"
 
@@ -95,6 +97,7 @@ GET STARTED
     vmagents project dev ~/code/app          send it; agents start in it ("vmagents dev")
     vmagents changes dev                     what the agents changed there
     vmagents take dev                        that work as the branch vmagents/dev here (--pr: a pull request)
+    vmagents fix dev 42 --test "npm test"    GitHub issue 42 done there; a pull request when the tests pass
     ssh dev@VM                               any SSH app opens Claude too (after setup)
 
   From the phone:
@@ -136,6 +139,7 @@ COMMANDS
     project NAME [DIR]   send the repository (default: this folder); again: send new commits
     changes NAME         what the agents changed since (commits, and what is not committed)
     take NAME            that work as a branch here (vmagents/NAME); --pr opens a pull request
+    fix NAME ISSUE       an agent works on a GitHub issue; the tests run; they pass: a pull request
 
   Undo (libvirt):
     undo NAME [SNAPSHOT] put the VM back to how it was before this session
@@ -574,8 +578,13 @@ networks of schools or hotels often keep devices apart). The choice and
 The link (in the QR code) holds a random key; without it the server answers
 nothing. --new makes a new one: the old link stops working. It runs until
 "vmagents phone off" or until this computer restarts. Log of who connected:
-~/.cache/vmagents/phone.log. The page loads its terminal (xterm.js) from
-cdn.jsdelivr.net, so the phone needs the internet.
+~/.cache/vmagents/phone.log. The page's terminal (xterm.js) is fetched once
+from cdn.jsdelivr.net (checked against its hash) and then served from here.
+
+Tap a VM's name on the page for more: a task for it ("vmagents run") with
+its output followed live, the earlier tasks, stopping one; fixing a GitHub
+issue of its project ("vmagents fix"); starting and shutting it down. Added
+to the home screen, the page opens like an app.
 
 SSH apps (Termius, Blink, JuiceSSH, ...): "phone ssh NAME KEY" puts the app's
 public key on the VM and gives the VM a port here (7701, 7702, ...) that
@@ -786,6 +795,40 @@ vmagents changes NAME [--stat]
 Shows what changed in the project on the VM since it was sent: the commits
 the agents made, and what is not committed there (new files too, but not
 ignored ones), as one diff. --stat: the files only. Nothing on the VM changes.
+EOF
+      ;;
+    fix) cat <<EOF
+vmagents fix NAME ISSUE [--test CMD] [--tries N] [--branch BRANCH] [--no-pr] [--draft]
+                        [--yes] [--discard] [--codex|--gemini|--opencode|--aider]
+
+From a GitHub issue to a pull request, while you do something else. In the
+VM's project ("vmagents project"):
+  1. reads the issue (number or URL) and its comments with the GitHub CLI (gh)
+  2. sends the project again, as it is checked out here, a fresh copy
+  3. gives the issue to the agent as a task ("vmagents run"), to fix and commit
+  4. runs the tests on the VM: --test CMD (kept for next time; "make check",
+     "npm test", "pytest"...). When they fail, the agent gets their output
+     and tries again, --tries times in all (default 2)
+  5. brings the work back as the branch vmagents/issue-ISSUE (or BRANCH): the
+     agent's commits (what it did not commit only when it committed nothing)
+  6. when the tests pass: pushes it to origin and opens a pull request,
+     "Fixes #ISSUE", against the branch that was sent (--draft: as a draft)
+
+Without a test command the agent runs the tests it finds, and the pull
+request says that vmagents did not check. --no-pr stops at the branch.
+Only this computer talks to GitHub; the VM gets the issue's text.
+
+The agent follows the issue's text without asking. When people other than
+you wrote some of it, fix says so and asks first (--yes: do not ask). The VM
+has no access to your GitHub, and what it makes is a pull request for you
+to look at, not a merge.
+
+A VM that was off is started, and shut down again at the end. Work on the
+VM that was not taken back stops it (--discard: set it aside on the VM).
+
+Examples:
+  vmagents fix dev 42 --test "npm test"
+  vmagents fix dev https://github.com/me/app/issues/42 --codex --draft
 EOF
       ;;
     take) cat <<EOF
@@ -2288,8 +2331,9 @@ list_json() {
     printf '"os": %s, "dir": %s, "session": %s, "agent": %s, "agents": %s, "ports": %s, ' \
       "$(json_str "${P[OS]:-}")" "$(json_str "${P[DIR]:-}")" "$(json_str "${P[SESSION]-claude}")" \
       "$(json_str "${P[AGENT]:-claude}")" "$(json_list "${P[AGENTS]:-}")" "$(json_list "${P[PORTS]:-}" NUM)"
-    printf '"project": %s, "yolo": %s, "try": %s, "net": %s, ' "$(json_str "${P[PROJECT]:-}")" \
-      "$(json_bool "${P[YOLO]:-off}")" "$(json_str "${P[TRY]:-}")" "$(json_str "${P[NET]:-open}")"
+    printf '"project": %s, "test": %s, "yolo": %s, "try": %s, "net": %s, ' "$(json_str "${P[PROJECT]:-}")" \
+      "$(json_str "${P[TEST]:-}")" "$(json_bool "${P[YOLO]:-off}")" "$(json_str "${P[TRY]:-}")" \
+      "$(json_str "${P[NET]:-open}")"
     printf '"autostop": %s, "notify": %s, "clipboard": %s, "idle": %d, "autosnap": %d, "created": %s, ' \
       "$(json_bool "${P[AUTOSTOP]:-on}")" "$(json_bool "${P[NOTIFY]:-on}")" "$(json_bool "${P[CLIPBOARD]:-on}")" \
       "$((10#${P[IDLE]:-0}))" "$((10#${P[AUTOSNAP]:-3}))" "$(json_bool "${P[CREATED]:-0}")"
@@ -4181,7 +4225,8 @@ PROJECT_BASE_SH=$WORK_TREE_SH'project_cd "$1" && git rev-parse -q --verify refs/
 
 # Receives a bundle on stdin. $1 folder, $2 branch, $3 $4 user name and
 # email for commits, $5 1: also when the VM has work not taken back (it is
-# kept as refs/vmagents/discarded/TIME), $6 the commit sent. Exit 5: there is
+# kept as refs/vmagents/discarded/TIME), 2: also when the work was taken back
+# but is not in what comes now, $6 the commit sent. Exit 5: there is
 # such work; 7: the folder is not a vmagents project.
 # shellcheck disable=SC2016
 PROJECT_RECEIVE_SH='command -v git >/dev/null 2>&1 || pkg git >&2 || exit 1
@@ -4208,7 +4253,7 @@ if git rev-parse -q --verify HEAD >/dev/null; then
   # Nothing done since it was sent, or everything taken back and part of what comes now.
   [ -n "$base" ] && [ "$t" = "$(git rev-parse "$base^{tree}")" ] && ok=1
   tk=$(git rev-parse -q --verify refs/vmagents/taken)
-  [ -n "$tk" ] && [ "$t" = "$(git rev-parse "$tk^{tree}")" ] && git merge-base --is-ancestor "$tk" "$new" && ok=1
+  [ -n "$tk" ] && [ "$t" = "$(git rev-parse "$tk^{tree}")" ] && { [ "$5" = 2 ] || git merge-base --is-ancestor "$tk" "$new"; } && ok=1
   if [ -z "$ok" ]; then
     [ "$5" = 1 ] || exit 5
     w=$(git commit-tree "$t" -p HEAD -m "Work discarded by vmagents project --discard") &&
@@ -4305,7 +4350,7 @@ cmd_project() {
   if ((off)); then
     # shellcheck disable=SC2088 # a literal "~/" (the VM's home)
     [[ ${P[DIR]:-} == "~/projects/"* ]] && unset 'P[DIR]'
-    unset 'P[PROJECT]'
+    unset 'P[PROJECT]' 'P[TEST]'
     write_profile "$NAME"
     say "$NAME has no project any more; agents start in the VM's home. (The copy on the VM stays.)"
     return 0
@@ -4319,7 +4364,10 @@ cmd_project() {
     info "Note: what is not committed in $top stays here; only commits go to the VM."
   # shellcheck disable=SC2088 # the VM's home, expanded there
   remote="~/projects/${top##*/}"
-  [[ -n ${P[PROJECT]:-} && ${P[PROJECT]} != "$top" ]] && info "The project of $NAME was ${P[PROJECT]}; now it is $top."
+  if [[ -n ${P[PROJECT]:-} && ${P[PROJECT]} != "$top" ]]; then
+    info "The project of $NAME was ${P[PROJECT]}; now it is $top."
+    unset 'P[TEST]'  # its test command
+  fi
   uname=$(git -C "$top" config user.name) || uname=$(id -un)
   uemail=$(git -C "$top" config user.email) || uemail="$(id -un)@localhost"
 
@@ -4334,6 +4382,7 @@ cmd_project() {
     fi
   fi
   info "Sending $branch of $top to $NAME..."
+  ((discard || !SEND_TAKEN)) || discard=2
   run_ssh -T -- "$TARGET" "$(remote_cmd "$REMOTE_ENV$PKG_SH$PROJECT_RECEIVE_SH" "$remote" "$branch" "$uname" "$uemail" \
     "$discard" "$head")" <"$tmp" || rc=$?
   rm -f "$tmp"
@@ -4352,8 +4401,10 @@ cmd_project() {
   P[PROJECT]=$top P[DIR]=$remote
   write_profile "$NAME"
   say "Sent $branch ($(git -C "$top" rev-parse --short "$head")) of $top to $NAME, in $remote."
-  say "Agents start there: $PROG $NAME"
-  say "What they changed: $PROG changes $NAME    as a branch here: $PROG take $NAME"
+  if ((!QUIET)); then
+    say "Agents start there: $PROG $NAME"
+    say "What they changed: $PROG changes $NAME    as a branch here: $PROG take $NAME"
+  fi
   project_done
 }
 
@@ -4889,12 +4940,13 @@ cmd_run() {
   fi
   show_run_log "$id" 1 || true
   state=$(run_state "$id")
-  if [[ $state == "done 0" ]]; then
+  if ((QUIET)); then :
+  elif [[ $state == "done 0" ]]; then
     notify_here "vmagents: $NAME" "Run $id finished: $task"
   else
     notify_here "vmagents: $NAME" "Run $id ended (${state:-unknown}): $task"
   fi
-  [[ -n ${P[PROJECT]:-} ]] && say "Its changes: $PROG changes $NAME    as a branch here: $PROG take $NAME"
+  [[ -n ${P[PROJECT]:-} ]] && ((!QUIET)) && say "Its changes: $PROG changes $NAME    as a branch here: $PROG take $NAME"
   project_done
   if ((HOLD)); then
     printf 'Press Enter to close.' >&2
@@ -5003,6 +5055,230 @@ cmd_runs() {
     esac
     printf '%-4s %-12s %-13s %-17s %s\n' "$i" "$(agent_label "$a")" "$s" "$(date -d "@${st:-0}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$t"
   done <<<"$out"
+}
+
+# ------------------------------------------------------------------ fix: from an issue to a pull request
+
+# "vmagents fix NAME 42": issue 42 of the project's GitHub repository goes to
+# an agent as a run, on a fresh copy of the project on the VM. Then the
+# project's tests run there (--test, kept in the profile as TEST); when they
+# fail, the agent gets their output and tries again (--tries in all). When
+# they pass, the work comes back as the branch vmagents/issue-42, which is
+# pushed, with a pull request that closes the issue. Only this computer talks
+# to GitHub: the VM gets the issue's text, nothing more.
+
+# The issue: a line with number, state, author, the comments' authors, URL
+# and title (separated by \037), then its text with the comments.
+# shellcheck disable=SC2016
+FIX_ISSUE_JQ='([(.number | tostring), .state, .author.login, ([.comments[].author.login] | unique | join(" ")), .url, .title] | join("\u001f"))
+  + "\nIssue #\(.number): \(.title)\n\(.url)\n\n\(.body)"
+  + ([.comments[] | "\n\n--- Comment by \(.author.login):\n\n\(.body)"] | join(""))'
+
+# Runs the tests: $1 the project's folder, $2 the command. With the proxy of
+# a restricted network, like the agents. New files they leave (caches,
+# reports) are deleted again: they are not part of the work.
+# shellcheck disable=SC2016
+FIX_TEST_SH='p=$HOME/.config/vmagents/proxy-env; [ -r "$p" ] && { set -a; . "$p"; set +a; }
+cd_dir "$1" || exit 1
+new_files() { git -c core.quotepath=off ls-files -o --exclude-standard; }
+b_=$(mktemp) || exit 1
+new_files >"$b_"
+sh -c "$2" </dev/null 2>&1
+r_=$?
+new_files | grep -vxF -f "$b_" | while IFS= read -r f; do rm -f -- "$f"; done
+rm -f "$b_"
+exit "$r_"
+'
+
+# shellcheck disable=SC2016 # backquotes for the agent, not for the shell
+fix_task() { # NUM ISSUE_TEXT TEST [TEST_OUTPUT]
+  printf 'Fix this GitHub issue of the project in this folder.\n\n%s\n\n' "$2"
+  printf 'When the fix is done:\n'
+  if [[ -n $3 ]]; then
+    printf -- '- run the tests with `%s`; they must pass\n' "$3"
+  else
+    printf -- '- run the tests of the project, if it has any; they must pass\n'
+  fi
+  printf -- '- commit your work, with a message that says what changed and ends with "Fixes #%s";\n' "$1"
+  printf '  only what you commit is taken, so leave out what does not belong to the fix\n'
+  printf 'There is no access to GitHub from here: do not push, and do not open a pull request.\n'
+  if [[ -n ${4:-} ]]; then
+    printf '\nYou already worked on it; your changes are in this folder. But the tests fail:\n\n$ %s\n%s\n\n' "$3" "$4"
+    printf 'Find out why, and fix it.\n'
+  fi
+}
+
+cmd_fix() {
+  local name='' issue='' test='' tries=2 pr=1 draft=0 yes=0 branch='' agent='' discard=0 a
+  while (($#)); do
+    case $1 in
+      --test) (($# >= 2)) || usage_error "fix: --test needs a command"; test=$2; shift ;;
+      --tries)
+        if (($# < 2)) || ! [[ $2 =~ ^[1-9]$ ]]; then usage_error "fix: --tries takes 1 to 9"; fi
+        tries=$2; shift ;;
+      --branch) (($# >= 2)) || usage_error "fix: --branch needs a name"; branch=$2; shift ;;
+      --no-pr) pr=0 ;;
+      --draft) draft=1 ;;
+      -y | --yes) yes=1 ;;
+      --discard) discard=1 ;;
+      --hold) HOLD=1 ;;
+      --claude | --codex | --gemini | --opencode | --aider) agent=$1 ;;
+      -*) usage_error "fix: unknown option $1" ;;
+      *)
+        if [[ -z $name ]]; then name=$1
+        elif [[ -z $issue ]]; then issue=$1
+        else usage_error "fix: too many arguments"
+        fi ;;
+    esac
+    shift
+  done
+  [[ -n $name ]] || usage_error "fix: missing NAME"
+  [[ -n $issue ]] || usage_error "fix: which issue? e.g. $PROG fix $name 42"
+  issue=${issue#\#}
+  project_load "$name"
+  [[ $C_OS != windows ]] || die "fix needs a project, and projects work with Linux VMs only"
+  [[ -n $C_SESSION ]] || die "fix runs a task, and runs need tmux on the VM; $NAME has no tmux session set (SESSION=)"
+  command -v gh >/dev/null || die "fix needs the GitHub CLI (gh) on this computer: https://cli.github.com"
+  if [[ -n $test && $test != "${P[TEST]:-}" ]]; then
+    P[TEST]=$test
+    write_profile "$NAME"
+  fi
+  test=${test:-${P[TEST]:-}}
+
+  local data meta text num state author others url title me w
+  local -a who=()
+  data=$(cd "$PROJ" && gh issue view "$issue" --json number,state,author,comments,url,title,body --jq "$FIX_ISSUE_JQ") ||
+    die "could not read issue $issue with gh (in $PROJ)"
+  meta=${data%%$'\n'*} text=${data#*$'\n'}
+  IFS=$'\037' read -r num state author others url title <<<"$meta"
+  [[ $num =~ ^[0-9]+$ ]] || die "gh gave no issue for $issue"
+  # The issue's text steers the agent: say so when others wrote some of it.
+  me=$(gh api user --jq .login 2>/dev/null) || me=''
+  for w in $author $others; do
+    [[ $w == "$me" || " ${who[*]} " == *" $w "* ]] || who+=("$w")
+  done
+  if ((${#who[@]} && !yes)); then
+    info "Issue #$num has text by ${who[*]}, not you. The agent follows it as it is, without asking,"
+    info "on $NAME (which has no access to your GitHub; what it makes comes back as a branch to look at)."
+    if [[ -t 0 ]]; then
+      read -r -p "Go on? [y/N] " a || a=''
+      [[ $a == [yYeE]* ]] || exit 1
+    else
+      die "not going on without --yes"
+    fi
+  fi
+  [[ $state == OPEN ]] || info "Note: issue #$num is ${state,,}."
+
+  branch=${branch:-vmagents/issue-$num}
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "not a valid branch name: $branch"
+  [[ $(git -C "$PROJ" symbolic-ref -q --short HEAD) != "$branch" ]] ||
+    die "$branch is checked out in $PROJ; switch to another branch first"
+  local base
+  base=$(git -C "$PROJ" symbolic-ref -q --short HEAD) || base=''
+  if ((pr)); then
+    git -C "$PROJ" remote get-url origin >/dev/null 2>&1 || die "$PROJ has no remote origin to push to (or use --no-pr)"
+    gh auth status >/dev/null 2>&1 || die "gh is not logged in: gh auth login (or use --no-pr)"
+  fi
+
+  say "Issue #$num: $title"
+  project_connect
+  local rc=0
+  # A fresh copy of the project: work taken back before (a branch here) may go.
+  (
+    QUIET=1 SEND_TAKEN=1
+    if ((discard)); then cmd_project "$NAME" --discard; else cmd_project "$NAME"; fi
+  ) || rc=$?
+  if ((rc)); then
+    ((rc == 5)) && info "Or let fix set that work aside on the VM: $PROG fix $NAME $num --discard"
+    project_done
+    hold_prompt
+    exit "$rc"
+  fi
+
+  local n=1 out task passed=0 hold=$HOLD
+  out=$(mktemp)
+  HOLD=0  # for the runs; fix waits at its end
+  task=$(fix_task "$num" "$text" "$test")
+  while :; do
+    ((tries == 1)) || info "-- Try $n of $tries"
+    rc=0
+    (
+      QUIET=1
+      if [[ -n $agent ]]; then cmd_run "$NAME" --wait "$agent" -- "$task"; else cmd_run "$NAME" --wait -- "$task"; fi
+    ) || rc=$?
+    if ((rc)); then
+      rm -f "$out"
+      HOLD=$hold
+      project_done
+      die "the agent's run on $NAME did not finish well; nothing taken back (see: $PROG runs $NAME)"
+    fi
+    [[ -n $test ]] || break
+    info "-- Running the tests on $NAME: $test"
+    if run_ssh -T -- "$TARGET" "$(remote_cmd "$REMOTE_ENV$FIX_TEST_SH" "$C_DIR" "$test")" </dev/null | tee "$out"; then
+      passed=1
+      info "-- The tests pass."
+      break
+    fi
+    info "-- The tests fail."
+    ((n < tries)) || break
+    n=$((n + 1))
+    task=$(fix_task "$num" "$text" "$test" "$(tail -n 80 "$out" | cut -c1-300)")
+  done
+  rm -f "$out"
+  HOLD=$hold
+
+  rc=0
+  fetch_work 1 || rc=$?
+  project_done
+  ((rc != 10)) || die "the agent changed nothing on $NAME: no branch, no pull request (what it did: $PROG runs $NAME)"
+  # The agent's commits; what it did not commit (caches, notes) only when it
+  # committed nothing.
+  local work=refs/vmagents/$NAME/work sent=refs/vmagents/$NAME/base left=''
+  if [[ $(git -C "$PROJ" log -1 --format=%s "$work") == "Work not committed on the VM" &&
+    $(git -C "$PROJ" rev-parse "$work^") != "$(git -C "$PROJ" rev-parse "$sent")" ]]; then
+    left=$(git -C "$PROJ" diff --name-only "$work^" "$work")
+    work=$work^
+  fi
+  git -C "$PROJ" branch -f "$branch" "$work" >/dev/null || die "could not make the branch $branch"
+  say "The work is the branch $branch in $PROJ:"
+  git -C "$PROJ" --no-pager log --format='  %h %s' "$sent..$branch"
+  git -C "$PROJ" --no-pager diff --stat "$sent" "$branch"
+  [[ -z $left ]] || say "Left out, as the agent did not commit it: $(printf '%s' "$left" | tr '\n' ' ')"
+  if [[ -n $test ]] && ((!passed)); then
+    notify_here "vmagents: $NAME" "Issue #$num: the tests still fail"
+    say "The tests ($test) still fail after $tries tries, so no pull request. Look at the branch:"
+    say "  git log -p $branch    more tries: $PROG fix $NAME $num --tries 3"
+    hold_prompt
+    return 1
+  fi
+  if ((!pr)); then
+    notify_here "vmagents: $NAME" "Issue #$num: the work is the branch $branch"
+    say "Merge it (git merge $branch), or a pull request: $PROG take $NAME --branch $branch --pr"
+    hold_prompt
+    return 0
+  fi
+
+  git -C "$PROJ" push -q --force-with-lease -u origin "$branch" || die "could not push $branch to origin"
+  local url_pr body
+  url_pr=$(cd "$PROJ" && gh pr view "$branch" --json url,state --jq 'select(.state == "OPEN") | .url' 2>/dev/null) || url_pr=''
+  if [[ -n $url_pr ]]; then
+    say "Pushed; its pull request was open already: $url_pr"
+  else
+    body="Fixes #$num."$'\n\n'$(git -C "$PROJ" log --reverse --format='- %s' "$sent..$branch")$'\n\n'
+    if [[ -n $test ]]; then body+="The tests (\`$test\`) pass on the VM."
+    else body+="Not tested by vmagents (no test command)."
+    fi
+    a=${agent#--}
+    body+=$'\n\n'"Made by $(agent_label "${a:-$C_AGENT}") with \`vmagents fix\`, in a virtual machine."
+    local -a args=(--head "$branch" --title "Fix #$num: $title" --body "$body")
+    [[ -n $base ]] && args+=(--base "$base")
+    ((draft)) && args+=(--draft)
+    url_pr=$(cd "$PROJ" && gh pr create "${args[@]}") || die "gh pr create failed (the branch $branch is pushed)"
+    url_pr=${url_pr##*$'\n'}
+    say "Pull request: $url_pr"
+  fi
+  notify_here "vmagents: $NAME" "Issue #$num: pull request $url_pr"
+  hold_prompt
 }
 
 # ------------------------------------------------------------------ try: one task, several clones
@@ -6383,7 +6659,8 @@ QR_END
 )
 
 PHONE_PY=$(cat <<'PHONE_END'
-import asyncio, base64, fcntl, hashlib, json, os, secrets, signal, struct, subprocess, sys, termios, time
+import asyncio, base64, fcntl, hashlib, json, os, re, secrets, signal, struct, subprocess, sys, termios, threading, time
+import zlib
 from urllib.parse import parse_qs, urlsplit
 
 # vmagents's phone access: a web page with the VMs and a terminal for each
@@ -6391,9 +6668,27 @@ from urllib.parse import parse_qs, urlsplit
 # forwards for SSH apps, one port per VM, that start the VM when needed.
 # Arguments: vmagents itself, its phone folder (token, ssh), address, port.
 SELF, DIR, ADDR, PORT = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-LOG = os.path.join(os.environ.get("VMAGENTS_CACHE", DIR), "phone.log")
+CACHE = os.environ.get("VMAGENTS_CACHE", DIR)
+LOG = os.path.join(CACHE, "phone.log")
 MAX_SESSIONS = 8
 sessions = 0
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+ISSUE = re.compile(r"#?[0-9]{1,9}$|https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[0-9]{1,9}$")
+AGENTS = ("claude", "codex", "gemini", "opencode", "aider")
+
+# The terminal library: served from here once fetched (checked against its
+# hash; the page checks it again), so a phone without internet works on the
+# same Wi-Fi; until then the page gets it from the CDN.
+CDN = "https://cdn.jsdelivr.net/npm/@xterm/"
+LIBS = {
+    "xterm.js": ("xterm@5.5.0/lib/xterm.js", "sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/",
+                 "text/javascript"),
+    "xterm.css": ("xterm@5.5.0/css/xterm.css", "sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP",
+                  "text/css"),
+    "addon-fit.js": ("addon-fit@0.10.0/lib/addon-fit.js",
+                     "sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn", "text/javascript"),
+}
+LIB_DIR = os.path.join(CACHE, "phone-lib")
 
 
 def log(msg):
@@ -6417,25 +6712,127 @@ def allowed(q):
     return bool(t) and secrets.compare_digest(q.get("t", [""])[0].encode(), t.encode())
 
 
-async def respond(w, status, body, ctype="text/plain; charset=utf-8", extra=""):
+async def respond(w, status, body, ctype="text/plain; charset=utf-8", extra="", cache="no-store"):
     if isinstance(body, str):
         body = body.encode()
     w.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
-            f"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+            f"Cache-Control: {cache}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
             f"{extra}Connection: close\r\n\r\n".encode() + body)
     await w.drain()
 
 
-async def vms():
-    p = await asyncio.create_subprocess_exec(SELF, "list", "--json", stdout=subprocess.PIPE,
-                                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
-    out, _ = await p.communicate()
+async def answer(w, data, status="200 OK"):
+    await respond(w, status, json.dumps(data), "application/json")
+
+
+async def vmagents(*args, timeout=600):
+    """Runs vmagents ARGS: (exit code, its output)."""
+    p = await asyncio.create_subprocess_exec(SELF, *args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                             stdin=subprocess.DEVNULL, start_new_session=True)
     try:
-        items = json.loads(out or b"[]")
+        out, _ = await asyncio.wait_for(p.communicate(), timeout)
+    except asyncio.TimeoutError:
+        p.kill()
+        await p.wait()
+        return 124, "timed out"
+    return p.returncode, out.decode(errors="replace")
+
+
+async def vms():
+    _, out = await vmagents("list", "--json", timeout=60)
+    try:
+        items = json.loads(out or "[]")
     except ValueError:
         items = []
-    keep = ("name", "state", "os", "agent", "domain", "default")
-    return [{k: v.get(k) for k in keep} for v in items if isinstance(v, dict) and not v.get("try")]
+    keep = ("name", "state", "os", "agent", "agents", "domain", "default", "memory_mb", "cpus", "yolo", "net", "test")
+    return [dict({k: v.get(k) for k in keep}, project=os.path.basename(v.get("project") or ""))
+            for v in items if isinstance(v, dict) and not v.get("try")]
+
+
+def last_lines(text, n=6):
+    return "\n".join(l for l in text.strip().splitlines()[-n:])
+
+
+def fetch_libs():
+    if os.environ.get("VMAGENTS_PHONE_FETCH") == "0":
+        return
+    import urllib.request
+    for name, (path, sri, _) in LIBS.items():
+        dest = os.path.join(LIB_DIR, name)
+        if os.path.exists(dest):
+            continue
+        try:
+            with urllib.request.urlopen(CDN + path, timeout=30) as r:
+                data = r.read(4 << 20)
+        except Exception as e:
+            log(f"could not fetch {path}: {e!r}")
+            continue
+        if "sha384-" + base64.b64encode(hashlib.sha384(data).digest()).decode() != sri:
+            log(f"{path}: not the expected file, not kept")
+            continue
+        os.makedirs(LIB_DIR, exist_ok=True)
+        with open(dest + ".part", "wb") as f:
+            f.write(data)
+        os.replace(dest + ".part", dest)
+
+
+def png(n, pixel):
+    """An RGB PNG of n x n pixels; pixel(x, y) gives each one's color."""
+    raw = b"".join(b"\0" + b"".join(bytes(pixel(x, y)) for x in range(n)) for y in range(n))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def icon_png(n=192):
+    """The app's icon: a prompt, ">_", light on the accent color (full bleed:
+    phones round the corners themselves)."""
+    def near(x, y, ax, ay, bx, by, r):
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+        return (x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2 <= r * r
+
+    def pixel(px, py):
+        x, y = (px + .5) / n, (py + .5) / n
+        on = (near(x, y, .27, .3, .47, .5, .055) or near(x, y, .47, .5, .27, .7, .055) or
+              (.53 <= x <= .76 and .64 <= y <= .74))
+        return (255, 247, 242) if on else (217, 119, 87)
+    return png(n, pixel)
+
+
+ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" '
+            'fill="#d97757"/><path d="M27 30 47 50 27 70" fill="none" stroke="#fff7f2" stroke-width="11" '
+            'stroke-linecap="round" stroke-linejoin="round"/><rect x="53" y="64" width="23" height="10" rx="3" '
+            'fill="#fff7f2"/></svg>')
+MANIFEST = json.dumps({
+    "name": "vmagents", "short_name": "vmagents", "start_url": "/", "scope": "/", "display": "standalone",
+    "background_color": "#0e1116", "theme_color": "#0e1116",
+    "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+              {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}]})
+_icon = None
+
+
+def term_argv(name, kind, q):
+    """What a terminal of KIND runs, or None when the request makes no sense."""
+    one = lambda k: q.get(k, [""])[0]
+    if not NAME.match(name):
+        return None
+    if kind == "agent":
+        return [SELF, "connect", name]
+    if kind == "shell":
+        return [SELF, "shell", name]
+    if kind == "log" and one("id").isdigit():
+        return [SELF, "runs", name, one("id"), "-f"]
+    if kind == "fix" and ISSUE.match(one("issue")) and len(one("test")) <= 500:
+        argv = [SELF, "fix", name, one("issue").lstrip("#")]
+        if one("test"):
+            argv += ["--test", one("test")]
+        if one("pr") == "0":
+            argv.append("--no-pr")
+        return argv
+    return None
 
 
 # --- WebSocket (RFC 6455), what a browser needs
@@ -6490,7 +6887,7 @@ async def terminal(r, w, q):
         rows = max(5, min(300, int(q.get("rows", ["24"])[0])))
     except ValueError:
         cols, rows = 80, 24
-    argv = [SELF, "shell", name] if kind == "shell" else [SELF, "connect", name]
+    argv = term_argv(name, kind, q)
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", VMAGENTS_PHONE="1")
@@ -6583,7 +6980,48 @@ async def terminal(r, w, q):
             pass
 
 
+async def api(w, method, path, q, body):
+    """The page's actions on a VM. Answers JSON."""
+    peer = w.get_extra_info("peername")[0]
+    name = q.get("vm", [""])[0]
+    if path == "/api/vms" and method == "GET":
+        return await answer(w, await vms())
+    if not NAME.match(name):
+        return await answer(w, {"error": "no such VM"}, "400 Bad Request")
+    if path == "/api/runs" and method == "GET":
+        rc, out = await vmagents("runs", name, "--json", timeout=60)
+        try:
+            return await answer(w, json.loads(out) if rc == 0 else [])
+        except ValueError:
+            return await answer(w, [])
+    if method != "POST":
+        return await respond(w, "405 Method Not Allowed", "")
+    if path == "/api/power" and q.get("do", [""])[0] in ("start", "stop"):
+        do = q["do"][0]
+        log(f"{peer} {do} {name}")
+        rc, out = await vmagents(do, name)
+        return await answer(w, {"ok": rc == 0, "out": last_lines(out)})
+    if path == "/api/run":
+        try:
+            want = json.loads(body or b"{}")
+            task, agent = str(want.get("task", "")).strip(), str(want.get("agent") or "")
+        except (ValueError, AttributeError):
+            task, agent = "", ""
+        if not task or len(task) > 20000 or (agent and agent not in AGENTS):
+            return await answer(w, {"error": "no task"}, "400 Bad Request")
+        log(f"{peer} task on {name}")
+        rc, out = await vmagents("run", name, *([f"--{agent}"] if agent else []), "--", task)
+        m = re.search(r"^Run (\d+) on ", out, re.M)
+        return await answer(w, {"ok": rc == 0 and bool(m), "id": int(m.group(1)) if m else None, "out": last_lines(out)})
+    if path == "/api/stop" and q.get("id", [""])[0].isdigit():
+        log(f"{peer} stop task {q['id'][0]} on {name}")
+        rc, out = await vmagents("runs", name, q["id"][0], "--stop", timeout=60)
+        return await answer(w, {"ok": rc == 0, "out": last_lines(out)})
+    return await respond(w, "404 Not Found", "not found")
+
+
 async def http(r, w):
+    global _icon
     try:
         head = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), 20)
     except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
@@ -6595,21 +7033,43 @@ async def http(r, w):
         h = {k.strip().lower(): v.strip() for k, v in (l.split(":", 1) for l in lines[1:] if ":" in l)}
         u = urlsplit(target)
         q = parse_qs(u.query)
-        if method != "GET":
+        size = int(h.get("content-length") or 0)
+        if size > 65536:
+            return await respond(w, "413 Content Too Large", "too big")
+        body = await asyncio.wait_for(r.readexactly(size), 20) if size else b""
+        lib = LIBS.get(u.path[5:]) if u.path.startswith("/lib/") else None
+        if method not in ("GET", "POST"):
             await respond(w, "405 Method Not Allowed", "")
         elif u.path == "/":
             await respond(w, "200 OK", PAGE, "text/html; charset=utf-8",
-                          "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
-                          "style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src data:\r\n")
-        elif u.path in ("/api/vms", "/ws") and not allowed(q):
+                          "Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline' "
+                          "https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                          "connect-src 'self'; img-src 'self' data:; manifest-src 'self'\r\n")
+        elif lib:
+            try:
+                with open(os.path.join(LIB_DIR, u.path[5:]), "rb") as f:
+                    await respond(w, "200 OK", f.read(), lib[2] + "; charset=utf-8", cache="max-age=86400")
+            except OSError:
+                await respond(w, "302 Found", "", extra=f"Location: {CDN}{lib[0]}\r\n")
+        elif u.path == "/manifest.webmanifest":
+            await respond(w, "200 OK", MANIFEST, "application/manifest+json", cache="max-age=86400")
+        elif u.path == "/icon.svg":
+            await respond(w, "200 OK", ICON_SVG, "image/svg+xml", cache="max-age=86400")
+        elif u.path == "/icon.png":
+            _icon = _icon or await asyncio.get_running_loop().run_in_executor(None, icon_png)
+            await respond(w, "200 OK", _icon, "image/png", cache="max-age=86400")
+        elif (u.path.startswith("/api/") or u.path == "/ws") and not allowed(q):
             await asyncio.sleep(1)  # slows down guessing
             log(f"{w.get_extra_info('peername')[0]} wrong key")
             await respond(w, "403 Forbidden", "wrong key: open the link from vmagents phone again")
-        elif u.path == "/api/vms":
-            await respond(w, "200 OK", json.dumps(await vms()), "application/json")
+        elif u.path.startswith("/api/"):
+            await api(w, method, u.path, q, body)
         elif u.path == "/ws" and h.get("upgrade", "").lower() == "websocket" and "sec-websocket-key" in h:
             if sessions >= MAX_SESSIONS:
                 await respond(w, "503 Service Unavailable", "too many terminals open")
+                return
+            if not term_argv(q.get("vm", [""])[0], q.get("kind", ["agent"])[0], q):
+                await respond(w, "400 Bad Request", "not a terminal I can open")
                 return
             acc = base64.b64encode(hashlib.sha1((h["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
             w.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -6675,6 +7135,7 @@ def ssh_ports():
 async def main():
     server = await asyncio.start_server(http, ADDR, PORT, limit=16384)
     log(f"listening on {ADDR}:{PORT}")
+    threading.Thread(target=fetch_libs, daemon=True).start()  # not holding up the end
     forwards = {}
     while True:  # follows the ssh file: ports come and go
         want = ssh_ports()
@@ -6699,119 +7160,409 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#0d1014">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="vmagents">
 <title>vmagents</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" integrity="sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP" crossorigin="anonymous">
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js" integrity="sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js" integrity="sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn" crossorigin="anonymous"></script>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="stylesheet" href="/lib/xterm.css" integrity="sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP" crossorigin="anonymous">
+<script src="/lib/xterm.js" integrity="sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/" crossorigin="anonymous"></script>
+<script src="/lib/addon-fit.js" integrity="sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn" crossorigin="anonymous"></script>
 <style>
-:root { --bg: #0d1014; --panel: #161b22; --line: #2a313b; --text: #e6e9ee; --dim: #8b949e; --accent: #d97757; --ok: #3fb950; }
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
-button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 12px; min-height: 40px; touch-action: manipulation; }
-button:active { background: var(--line); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+:root { --bg: #0e1116; --card: #161b22; --card2: #1d232c; --line: #2a313b; --text: #e6edf3; --dim: #8b949e;
+  --accent: #d97757; --accent2: #e8896a; --ink: #fff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3); color-scheme: dark; }
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f7f9; --card: #fff; --card2: #eef1f4; --line: #dde2e8; --text: #1f2328; --dim: #636c76;
+    --accent: #c4613f; --accent2: #d97757; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --shadow: 0 1px 3px rgba(31, 35, 40, .08); color-scheme: light; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+button, input, textarea, select { font: inherit; color: var(--text); }
+button { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px;
+  min-height: 44px; touch-action: manipulation; cursor: pointer; display: inline-flex; align-items: center;
+  justify-content: center; gap: 8px; transition: transform .08s, background .15s; }
+button:active { transform: scale(.97); }
+button:disabled { opacity: .55; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+button.danger { color: var(--bad); }
+button.icon { min-width: 44px; padding: 8px; background: transparent; border-color: transparent; }
+button svg, .chip svg, h2 svg { width: 18px; height: 18px; flex: none; }
+input[type=text], textarea, select { width: 100%; background: var(--card2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; font-size: 16px; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+textarea { resize: vertical; min-height: 84px; }
 .hidden { display: none !important; }
-#list { max-width: 640px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
-#list h1 { font-size: 20px; margin: 4px 0 2px; }
-#list .sub { color: var(--dim); font-size: 14px; margin-bottom: 16px; }
-.vm { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
-.vm .top { display: flex; align-items: baseline; gap: 8px; }
-.vm .name { font-weight: 600; font-size: 17px; overflow-wrap: anywhere; }
-.vm .state { color: var(--dim); font-size: 13px; }
-.vm .state.on { color: var(--ok); }
-.vm .acts { display: flex; gap: 8px; margin-top: 10px; }
-.vm .acts button { flex: 1; }
-.msg { color: var(--dim); padding: 24px 0; }
-#term-view { position: fixed; left: 0; top: 0; width: 100%; display: flex; flex-direction: column; height: 100%; }
-#bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top));
-  border-bottom: 1px solid var(--line); }
-#bar .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-#bar button { min-height: 34px; padding: 4px 10px; }
-#term { flex: 1; min-height: 0; padding: 4px 0 0 4px; background: #0b0d10; }
-#keys { display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto; border-top: 1px solid var(--line); scrollbar-width: none; }
-#keys button { flex: none; min-width: 44px; min-height: 36px; padding: 4px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
-#keys button.on { background: var(--accent); border-color: var(--accent); }
-#compose { display: flex; gap: 6px; padding: 0 8px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
-#compose textarea { flex: 1; min-width: 0; resize: none; height: 40px; max-height: 120px; font: inherit; font-size: 16px;
-  color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
-#over { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; background: rgba(13, 16, 20, .88); text-align: center; padding: 16px; }
+.page { max-width: 640px; margin: 0 auto; padding: 0 16px max(24px, env(safe-area-inset-bottom)); }
+header.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 0 10px; background: var(--bg); }
+header.top .grow { flex: 1; min-width: 0; }
+header.top h1 { font-size: 21px; margin: 0; line-height: 1.2; overflow-wrap: anywhere; }
+.sub { color: var(--dim); font-size: 14px; }
+.logo { width: 38px; height: 38px; border-radius: 10px; flex: none; }
+.vm { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 12px;
+  box-shadow: var(--shadow); }
+.vm .head { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.vm .name { font-weight: 650; font-size: 18px; overflow-wrap: anywhere; }
+.vm .state { color: var(--dim); font-size: 14px; }
+.vm .chev { margin-left: auto; color: var(--dim); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.dot.busy { background: var(--warn); animation: pulse 1.2s infinite; }
+.dot.bad { background: var(--bad); }
+@keyframes pulse { 50% { opacity: .35; } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--dim); background: var(--card2);
+  border-radius: 999px; padding: 3px 10px; }
+.chip.warn { color: var(--warn); }
+.acts { display: flex; gap: 8px; }
+.acts button { flex: 1; }
+.msg { color: var(--dim); text-align: center; padding: 40px 12px; }
+.skel { height: 132px; border-radius: 16px; background: var(--card); margin-bottom: 12px; animation: pulse 1.2s infinite; }
+.foot { color: var(--dim); font-size: 13px; text-align: center; padding: 8px; }
+section.box { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px;
+  margin-bottom: 12px; box-shadow: var(--shadow); }
+section.box h2 { font-size: 16px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+section.box .hint { color: var(--dim); font-size: 13px; margin: 8px 0 0; }
+.row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.row > * { flex: 1; }
+.row > button { flex: none; }
+label.check { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 15px; }
+label.check input { width: 20px; height: 20px; accent-color: var(--accent); }
+.run { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.run:first-child { border-top: 0; padding-top: 0; }
+.run .dot { margin-top: 7px; }
+.run .what { flex: 1; min-width: 0; }
+.run .task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.run .meta { color: var(--dim); font-size: 13px; }
+.run button { min-height: 36px; padding: 4px 12px; }
+.empty { color: var(--dim); font-size: 14px; }
+#term-view { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: flex; flex-direction: column;
+  background: #0b0d10; color: #e6edf3; }
+#bar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; padding-top: max(4px, env(safe-area-inset-top));
+  background: #161b22; border-bottom: 1px solid #2a313b; }
+#bar button { color: #e6edf3; background: transparent; border-color: transparent; min-height: 40px; padding: 4px 10px; }
+#bar .title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#bar .title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#term { flex: 1; min-height: 0; padding: 4px 0 0 4px; }
+#ended { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #1d232c; border-top: 1px solid #2a313b; }
+#ended span { flex: 1; color: #c9d1d9; font-size: 14px; }
+#ended button { color: #fff; background: #d97757; border-color: #d97757; min-height: 38px; }
+#keys { display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto; background: #161b22; border-top: 1px solid #2a313b;
+  scrollbar-width: none; }
+#keys button { flex: none; min-width: 46px; min-height: 38px; padding: 4px 10px; color: #e6edf3; background: #1d232c;
+  border-color: #2a313b; font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+#keys button.on { background: #d97757; border-color: #d97757; color: #fff; }
+#compose { display: flex; gap: 6px; padding: 0 8px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); background: #161b22; }
+#compose textarea { flex: 1; min-width: 0; resize: none; min-height: 0; height: 44px; max-height: 120px; color: #e6edf3;
+  background: #0b0d10; border-color: #2a313b; padding: 10px; overflow-y: auto; scrollbar-width: none; }
+#compose button { color: #fff; background: #d97757; border-color: #d97757; font-weight: 600; }
+#toast { position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  z-index: 20; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); border-radius: 12px;
+  padding: 10px 16px; font-size: 15px; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); white-space: pre-line; }
+.spin { width: 16px; height: 16px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: rot .7s linear infinite; flex: none; }
+@keyframes rot { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-<div id="list">
-  <h1>vmagents</h1>
-  <div class="sub" id="sub"></div>
-  <div id="vms"><div class="msg" id="loading"></div></div>
+<div id="home" class="page">
+  <header class="top">
+    <img class="logo" src="/icon.svg" alt="">
+    <div class="grow"><h1>vmagents</h1><div class="sub" id="sub"></div></div>
+    <button class="icon" id="refresh"></button>
+  </header>
+  <div id="vms"><div class="skel"></div><div class="skel"></div></div>
+  <div class="foot" id="updated"></div>
+</div>
+<div id="vm-view" class="page hidden">
+  <header class="top">
+    <button class="icon" id="vm-back"></button>
+    <div class="grow"><h1 id="vm-name"></h1><div class="sub" id="vm-state"></div></div>
+    <button class="icon" id="vm-refresh"></button>
+  </header>
+  <div class="chips" id="vm-chips"></div>
+  <div class="acts" id="vm-open"></div>
+  <div style="height:12px"></div>
+  <section class="box">
+    <h2 id="h-task"></h2>
+    <textarea id="task" rows="3"></textarea>
+    <div class="row"><select id="agent"></select><button class="primary" id="task-go"></button></div>
+    <p class="hint" id="task-hint"></p>
+  </section>
+  <section class="box">
+    <h2 id="h-runs"></h2>
+    <div id="runs"></div>
+  </section>
+  <section class="box" id="fix-box">
+    <h2 id="h-fix"></h2>
+    <input type="text" id="issue" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
+    <div style="height:8px"></div>
+    <input type="text" id="test" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+    <label class="check"><input type="checkbox" id="pr" checked><span id="pr-label"></span></label>
+    <div class="row"><span></span><button class="primary" id="fix-go"></button></div>
+    <p class="hint" id="fix-hint"></p>
+  </section>
+  <section class="box" id="power-box">
+    <h2 id="h-power"></h2>
+    <button id="power" style="width:100%"></button>
+    <p class="hint" id="power-hint"></p>
+  </section>
 </div>
 <div id="term-view" class="hidden">
   <div id="bar">
     <button id="back"></button>
-    <div class="title" id="title"></div>
-    <button id="smaller" aria-label="smaller">A-</button>
+    <div class="title"><div class="dot" id="conn"></div><span id="title"></span></div>
+    <button id="smaller" aria-label="smaller">A−</button>
     <button id="bigger" aria-label="bigger">A+</button>
   </div>
   <div id="term"></div>
+  <div id="ended" class="hidden"><span id="ended-text"></span><button id="ended-btn"></button></div>
   <div id="keys"></div>
   <div id="compose">
     <textarea id="text" rows="1" autocapitalize="sentences"></textarea>
-    <button class="primary" id="send"></button>
+    <button id="send"></button>
   </div>
-  <div id="over" class="hidden"><div id="over-text"></div><button class="primary" id="over-btn"></button></div>
 </div>
+<div id="toast" class="hidden"></div>
 <script>
 "use strict";
 const TR = (navigator.language || "").toLowerCase().startsWith("tr");
 const S = TR ? {
-  sub: "Telefondan VM'lerin", loading: "Yükleniyor...", none: "Henüz VM yok.", shell: "Kabuk", back: "VM'ler",
-  send: "Gönder", type: "Yaz, Gönder'e bas (Enter da olur)", off: "kapalı", running: "açık", lost: "Bağlantı koptu.",
-  again: "Yeniden bağlan", ended: "Oturum bitti.", list: "Listeye dön", badkey: "Anahtar geçersiz. Bilgisayarda \"vmagents phone\" ile çıkan bağlantıyı yeniden aç.",
-  noload: "Liste alınamadı. Bilgisayar açık ve vmagents phone çalışıyor mu?", starts: "kapalıysa açılır",
-  nolib: "Terminal kitaplığı yüklenemedi: telefonun internete çıkabilmesi gerekiyor."
+  sub: "Telefondan VM'lerin", none: "Henüz VM yok. Bilgisayarda: vmagents create", shell: "Kabuk", back: "VM'ler",
+  send: "Gönder", type: "Yaz, Gönder'e bas", off: "kapalı", running: "açık", lost: "Bağlantı koptu.",
+  again: "Yeniden bağlan", ended: "Oturum bitti.", close: "Kapat", badkey: "Anahtar geçersiz. Bilgisayarda \"vmagents phone\" ile çıkan bağlantıyı yeniden aç.",
+  noload: "Liste alınamadı. Bilgisayar açık ve vmagents phone çalışıyor mu?", starts: "dokununca açılır",
+  nolib: "Terminal kitaplığı yüklenemedi. Bilgisayar onu ilk açılışta indirir; telefon internete çıkabiliyorsa oradan da alır.",
+  updated: "Güncellendi", task: "Yeni görev", taskPh: "Ne yapılsın? Örneğin: başarısız testleri düzelt",
+  taskHint: "Yardımcı tek başına, sormadan çalışır (bu bir VM: undo geri alır). Çıktısını buradan izlersin; bitince bildirim gelir.",
+  start: "Başlat", runs: "Görevler", noRuns: "Henüz görev yok.", offRuns: "VM kapalı; görevleri açılınca görünür.",
+  stop: "Durdur", stopped: "durduruldu", done: "bitti", failed: "başarısız", lost2: "yarıda kaldı", working: "çalışıyor",
+  fix: "GitHub issue'su çöz", issuePh: "Issue numarası ya da adresi, örneğin 42", testPh: "Test komutu, örneğin npm test (boş: yardımcı bulur)",
+  pr: "Testler geçince pull request aç", fixHint: "Yardımcı issue üzerinde çalışır, testler VM'de çalışır; geçerse iş bir dal ve pull request olur.",
+  power: "Güç", turnOn: "Aç", turnOff: "Kapat", powerOn: "Kapalıyken dokunduğun her şey onu kendiliğinden açar.",
+  powerOff: "Açık terminaller ve çalışan görevler kapanır.", confirmOff: "{n} kapatılsın mı? Çalışan görevler durur.",
+  confirmStop: "Bu görev durdurulsun mu?", starting: "Açılıyor...", stopping: "Kapatılıyor...", sending: "Gönderiliyor...",
+  isOn: "{n} açıldı.", isOff: "{n} kapatıldı.", fail: "Olmadı:", noTask: "Görevi yaz.", noIssue: "Issue numarasını yaz.",
+  ago: "önce", ram: "RAM", cpu: "CPU", yolo: "sormadan", restricted: "kısıtlı ağ", connecting: "Bağlanıyor"
 } : {
-  sub: "Your VMs, from the phone", loading: "Loading...", none: "No VMs yet.", shell: "Shell", back: "VMs",
-  send: "Send", type: "Type, then Send (or Enter)", off: "off", running: "running", lost: "The connection dropped.",
-  again: "Reconnect", ended: "The session ended.", list: "Back to the list", badkey: "Wrong key. Open the link from \"vmagents phone\" on the computer again.",
-  noload: "Could not get the list. Is the computer on and vmagents phone running?", starts: "starts it when off",
-  nolib: "The terminal library did not load: the phone needs to reach the internet."
+  sub: "Your VMs, from the phone", none: "No VMs yet. On the computer: vmagents create", shell: "Shell", back: "VMs",
+  send: "Send", type: "Type, then Send", off: "off", running: "running", lost: "The connection dropped.",
+  again: "Reconnect", ended: "The session ended.", close: "Close", badkey: "Wrong key. Open the link from \"vmagents phone\" on the computer again.",
+  noload: "Could not get the list. Is the computer on and vmagents phone running?", starts: "starts when you tap",
+  nolib: "The terminal library did not load. The computer fetches it the first time; with internet the phone gets it from there too.",
+  updated: "Updated", task: "New task", taskPh: "What should be done? e.g. make the failing tests pass",
+  taskHint: "The agent works alone, without asking (it is a VM: undo takes it back). Follow its output here; a notification comes when it ends.",
+  start: "Start", runs: "Tasks", noRuns: "No tasks yet.", offRuns: "The VM is off; its tasks show when it is on.",
+  stop: "Stop", stopped: "stopped", done: "done", failed: "failed", lost2: "interrupted", working: "working",
+  fix: "Fix a GitHub issue", issuePh: "The issue's number or URL, e.g. 42", testPh: "Test command, e.g. npm test (empty: the agent finds it)",
+  pr: "Open a pull request when the tests pass", fixHint: "The agent works on the issue, the tests run on the VM; when they pass, the work becomes a branch and a pull request.",
+  power: "Power", turnOn: "Start", turnOff: "Shut down", powerOn: "Anything you open while it is off starts it too.",
+  powerOff: "Open terminals and running tasks end.", confirmOff: "Shut {n} down? Running tasks stop.",
+  confirmStop: "Stop this task?", starting: "Starting...", stopping: "Shutting down...", sending: "Sending...",
+  isOn: "{n} is on.", isOff: "{n} is off.", fail: "That did not work:", noTask: "Write the task.", noIssue: "Give the issue's number.",
+  ago: "ago", ram: "RAM", cpu: "CPU", yolo: "yolo", restricted: "restricted network", connecting: "Connecting"
 };
 const AGENTS = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", opencode: "OpenCode", aider: "aider" };
 const $ = id => document.getElementById(id);
+const fmt = (s, o) => s.replace(/\{(\w+)\}/g, (_, k) => o[k]);
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); return v; } catch (e) { return null; } }
 
 let key = new URLSearchParams(location.hash.slice(1)).get("t") || store("vmagents-key") || "";
 if (location.hash && store("vmagents-key", key) === key) history.replaceState(null, "", location.pathname);
 
-$("sub").textContent = S.sub; $("loading").textContent = S.loading;
-$("back").textContent = "‹ " + S.back; $("send").textContent = S.send; $("text").placeholder = S.type;
+const ICONS = {
+  refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7", back: "M15 5l-7 7 7 7", chev: "M9 5l7 7-7 7",
+  term: "M4 6l6 6-6 6M12 19h8", shell: "M4 5h16v14H4zM8 10l3 2-3 2M13 15h3", play: "M7 5v14l11-7z",
+  task: "M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1", issue: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
+  power: "M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0", cpu: "M7 7h10v10H7zM10 2v3M14 2v3M10 19v3M14 19v3M2 10h3M2 14h3M19 10h3M19 14h3",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", bolt: "M13 2L4 14h7l-1 8 9-12h-7z",
+  lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4"
+};
+function icon(name) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"), p = document.createElementNS(s.namespaceURI, "path");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+  s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+  s.setAttribute("aria-hidden", "true"); p.setAttribute("d", ICONS[name]); s.append(p); return s;
+}
+function el(tag, cls, ...kids) {
+  const e = document.createElement(tag); if (cls) e.className = cls;
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+function btn(cls, ic, text, fn) { const b = el("button", cls, ic ? icon(ic) : null, text); b.onclick = fn; return b; }
+function toast(text) {
+  const t = $("toast"); t.textContent = text; t.classList.remove("hidden");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add("hidden"), 4000);
+}
+function busy(b, text) {
+  const old = [...b.childNodes]; b.disabled = true; b.replaceChildren(el("span", "spin"), text);
+  return () => { b.disabled = false; b.replaceChildren(...old); };
+}
+function ago(sec) {
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  const rtf = new Intl.RelativeTimeFormat(TR ? "tr" : "en", { numeric: "auto" });
+  if (d < 60) return rtf.format(-Math.round(d), "second");
+  if (d < 3600) return rtf.format(-Math.round(d / 60), "minute");
+  if (d < 86400) return rtf.format(-Math.round(d / 3600), "hour");
+  return rtf.format(-Math.round(d / 86400), "day");
+}
+function dur(s) { s = Math.max(0, Math.round(s)); return s < 60 ? s + " s" : s < 3600 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h"; }
 
-function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-
-async function load() {
-  let r;
-  try { r = await fetch("/api/vms?t=" + encodeURIComponent(key), { cache: "no-store" }); }
-  catch (e) { $("vms").replaceChildren(el("div", "msg", S.noload)); return; }
-  if (r.status === 403) { $("vms").replaceChildren(el("div", "msg", S.badkey)); return; }
-  const vms = await r.json();
-  if (!vms.length) { $("vms").replaceChildren(el("div", "msg", S.none)); return; }
-  $("vms").replaceChildren(...vms.map(vm => {
-    const card = el("div", "vm"), top = el("div", "top"), acts = el("div", "acts");
-    const on = !vm.domain || vm.state === "running";
-    top.append(el("span", "name", vm.name),
-      el("span", "state" + (on && vm.domain ? " on" : ""), vm.domain ? (on ? S.running : S.off + " · " + S.starts) : (vm.os || "")));
-    const a = el("button", "primary", AGENTS[vm.agent] || AGENTS.claude), sh = el("button", "", S.shell);
-    a.onclick = () => open(vm.name, "agent", a.textContent);
-    sh.onclick = () => open(vm.name, "shell", S.shell);
-    acts.append(a, sh); card.append(top, acts);
-    return card;
-  }));
+async function api(path, params, body) {
+  const q = new URLSearchParams(Object.assign({ t: key }, params || {}));
+  const r = await fetch(path + "?" + q, body === undefined ? { cache: "no-store" } :
+    { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 403) throw new Error(S.badkey);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
 }
 
-let term, fit, ws, cur, ended = false, ctrl = false, composing = false, size = +(store("vmagents-font") || 14);
+// --- the list
+let vms = [], cur = null;
+const isOn = vm => !vm.domain || vm.state === "running";
+const agentOf = vm => AGENTS[vm.agent] ? vm.agent : "claude";
+function stateText(vm) { return vm.domain ? (isOn(vm) ? S.running : S.off + " · " + S.starts) : (vm.os || ""); }
+function chips(vm) {
+  const c = [];
+  const chip = (ic, text, cls) => c.push(el("span", "chip" + (cls ? " " + cls : ""), ic ? icon(ic) : null, text));
+  chip(null, vm.os === "windows" ? "Windows" : "Linux");
+  if (vm.memory_mb) chip("cpu", (vm.memory_mb >= 1024 ? Math.round(vm.memory_mb / 1024) + " GB" : vm.memory_mb + " MB") + (vm.cpus ? " · " + vm.cpus + " " + S.cpu : ""));
+  if (vm.project) chip("folder", vm.project);
+  if (vm.yolo) chip("bolt", S.yolo, "warn");
+  if (vm.net === "restricted") chip("lock", S.restricted);
+  return c;
+}
+function openButtons(vm) {
+  const a = agentOf(vm);
+  return [btn("primary", "term", AGENTS[a], () => openTerm(vm.name, "agent", AGENTS[a])),
+    btn("", "shell", S.shell, () => openTerm(vm.name, "shell", S.shell))];
+}
+function card(vm) {
+  const head = el("div", "head", el("div", "dot" + (vm.domain && isOn(vm) ? " on" : "")),
+    el("div", null, el("div", "name", vm.name), el("div", "state", stateText(vm))), el("span", "chev", icon("chev")));
+  head.onclick = () => go("vm", vm.name);
+  return el("div", "vm", head, el("div", "chips", ...chips(vm)), el("div", "acts", ...openButtons(vm)));
+}
+async function load() {
+  try { vms = await api("/api/vms"); }
+  catch (e) { $("vms").replaceChildren(el("div", "msg", e.message.includes("vmagents phone") ? e.message : S.noload)); return; }
+  $("vms").replaceChildren(...(vms.length ? vms.map(card) : [el("div", "msg", S.none)]));
+  $("updated").textContent = S.updated + " " + new Date().toLocaleTimeString(TR ? "tr" : "en", { hour: "2-digit", minute: "2-digit" });
+  if (cur && view === "vm") showVM();
+}
 
+// --- one VM
+function showVM() {
+  const vm = vms.find(v => v.name === cur) || { name: cur };
+  $("vm-name").textContent = vm.name; $("vm-state").textContent = stateText(vm);
+  $("vm-chips").replaceChildren(...chips(vm));
+  $("vm-open").replaceChildren(...openButtons(vm));
+  const linux = vm.os !== "windows";
+  const sel = $("agent"), want = sel.value || agentOf(vm);
+  const list = linux ? Object.keys(AGENTS) : ["claude"];
+  sel.replaceChildren(...list.map(a => { const o = el("option", null, AGENTS[a]); o.value = a; return o; }));
+  sel.value = list.includes(want) ? want : list[0];
+  $("fix-box").classList.toggle("hidden", !(linux && vm.project));
+  if (!$("test").value && vm.test) $("test").value = vm.test;
+  $("power-box").classList.toggle("hidden", !vm.domain);
+  const on = isOn(vm);
+  $("power").replaceChildren(icon("power"), on ? S.turnOff : S.turnOn);
+  $("power").className = on ? "danger" : "";
+  $("power-hint").textContent = on ? S.powerOff : S.powerOn;
+}
+function runState(r) {
+  if (r.state === "running") return ["busy", S.working];
+  if (r.state === "lost") return ["bad", S.lost2];
+  if (r.state === "0") return ["on", S.done];
+  if (r.state === "143") return ["", S.stopped];
+  return ["bad", S.failed + " (" + r.state + ")"];
+}
+async function loadRuns() {
+  const name = cur, vm = vms.find(v => v.name === name);
+  if (vm && !isOn(vm)) { $("runs").replaceChildren(el("div", "empty", S.offRuns)); return; }
+  let runs;
+  try { runs = await api("/api/runs", { vm: name }); } catch (e) { return; }
+  if (name !== cur) return;
+  if (!runs.length) { $("runs").replaceChildren(el("div", "empty", S.noRuns)); return; }
+  $("runs").replaceChildren(...runs.slice().reverse().slice(0, 20).map(r => {
+    const [cls, text] = runState(r);
+    const meta = [AGENTS[r.agent] || r.agent, text, r.started ? ago(r.started) : ""];
+    if (r.ended && r.started) meta.push(dur(r.ended - r.started));
+    const row = el("div", "run", el("div", "dot " + cls), el("div", "what", el("div", "task", r.task || "#" + r.id),
+      el("div", "meta", meta.filter(Boolean).join(" · "))));
+    row.onclick = () => openTerm(name, "log", "#" + r.id + " " + (r.task || ""), { id: r.id });
+    if (r.state === "running") {
+      const b = btn("danger", null, S.stop, async e => {
+        e.stopPropagation();
+        if (!confirm(S.confirmStop)) return;
+        const done = busy(b, S.stop);
+        try { await api("/api/stop", { vm: name, id: r.id }, {}); } catch (err) { toast(S.fail + " " + err.message); }
+        done(); loadRuns();
+      });
+      row.append(b);
+    }
+    return row;
+  }));
+}
+$("task-go").onclick = async () => {
+  const task = $("task").value.trim(), name = cur;
+  if (!task) { toast(S.noTask); $("task").focus(); return; }
+  const vm = vms.find(v => v.name === name), done = busy($("task-go"), vm && !isOn(vm) ? S.starting : S.sending);
+  try {
+    const r = await api("/api/run", { vm: name }, { task, agent: $("agent").value });
+    if (!r.ok) throw new Error(r.out || "");
+    $("task").value = "";
+    openTerm(name, "log", "#" + r.id + " " + task, { id: r.id });
+    load();
+  } catch (e) { toast(S.fail + " " + e.message); }
+  done();
+};
+$("fix-go").onclick = () => {
+  const issue = $("issue").value.trim();
+  if (!/^#?\d+$|^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(issue)) { toast(S.noIssue); $("issue").focus(); return; }
+  openTerm(cur, "fix", S.fix + " " + (issue.startsWith("http") ? "#" + issue.split("/").pop() : "#" + issue.replace("#", "")),
+    { issue, test: $("test").value.trim(), pr: $("pr").checked ? "1" : "0" });
+  $("issue").value = "";
+};
+$("power").onclick = async () => {
+  const name = cur, vm = vms.find(v => v.name === name), on = vm && isOn(vm);
+  if (on && !confirm(fmt(S.confirmOff, { n: name }))) return;
+  const done = busy($("power"), on ? S.stopping : S.starting);
+  try {
+    const r = await api("/api/power", { vm: name, do: on ? "stop" : "start" }, {});
+    toast(r.ok ? fmt(on ? S.isOff : S.isOn, { n: name }) : S.fail + "\n" + r.out);
+  } catch (e) { toast(S.fail + " " + e.message); }
+  done(); await load(); loadRuns();
+};
+
+// --- views, with the phone's back button
+let view = "home";
+function show(v) {
+  view = v;
+  $("home").classList.toggle("hidden", v !== "home");
+  $("vm-view").classList.toggle("hidden", v !== "vm");
+  $("term-view").classList.toggle("hidden", v !== "term");
+  if (v !== "term" && ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (v === "vm") { showVM(); loadRuns(); window.scrollTo(0, 0); }
+  if (v === "home") load();
+}
+function go(v, name) {
+  if (name) cur = name;
+  history.pushState({ v, name: cur }, "");
+  show(v);
+}
+window.addEventListener("popstate", e => { const s = e.state || { v: "home" }; if (s.name) cur = s.name; show(s.v === "term" ? (cur ? "vm" : "home") : s.v); });
+history.replaceState({ v: "home" }, "");
+
+// --- a terminal
+let term, fit, ws, sess, ended = false, ctrl = false, composing = false, size = +(store("vmagents-font") || 14);
 function sendRaw(s) { if (ws && ws.readyState === 1) ws.send(s); }
 function input(d) {
   if (ctrl && d.length === 1) {
@@ -6826,12 +7577,15 @@ function fitNow() {
   $("term-view").style.height = (v ? v.height : window.innerHeight) + "px";
   if (fit) try { fit.fit(); } catch (e) { }
 }
-
-function open(name, kind, label) {
-  if (!window.Terminal || !window.FitAddon) { alert(S.nolib); return; }
-  cur = { name, kind };
+function conn(state) { $("conn").className = "dot " + state; }
+function openTerm(name, kind, label, extra) {
+  if (!window.Terminal || !window.FitAddon) { toast(S.nolib); return; }
+  sess = { name, kind, extra: extra || {} };
+  cur = name;
   $("title").textContent = name + " · " + label;
-  $("list").classList.add("hidden"); $("term-view").classList.remove("hidden");
+  const interactive = kind === "agent" || kind === "shell" || kind === "fix";
+  $("keys").classList.toggle("hidden", !interactive); $("compose").classList.toggle("hidden", !interactive);
+  go("term");
   if (!term) {
     term = new Terminal({ fontSize: size, fontFamily: "ui-monospace, Menlo, Consolas, monospace", cursorBlink: true,
       scrollback: 5000, theme: { background: "#0b0d10" } });
@@ -6847,28 +7601,25 @@ function open(name, kind, label) {
   fitNow();
   connect();
 }
-
 function connect() {
-  ended = false; $("over").classList.add("hidden");
+  ended = false; $("ended").classList.add("hidden"); conn("busy");
   if (ws) { ws.onclose = null; ws.close(); }
-  const q = new URLSearchParams({ t: key, vm: cur.name, kind: cur.kind, cols: term.cols, rows: term.rows });
+  const q = new URLSearchParams(Object.assign({ t: key, vm: sess.name, kind: sess.kind, cols: term.cols, rows: term.rows }, sess.extra));
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?" + q);
   ws.binaryType = "arraybuffer";
+  ws.onopen = () => conn("on");
   ws.onmessage = e => {
     if (typeof e.data === "string") { if (e.data[0] === "x") ended = true; return; }
     term.write(new Uint8Array(e.data));
   };
-  ws.onclose = () => over(ended ? S.ended : S.lost, ended ? S.list : S.again, ended ? close : connect);
+  ws.onclose = () => {
+    conn(ended ? "" : "bad");
+    // A fix or a log shows its end; the agent and a shell, what to do next.
+    over(ended ? S.ended : S.lost, ended ? S.close : S.again, ended ? () => history.back() : connect);
+  };
   if (!matchMedia("(pointer: coarse)").matches) term.focus();
 }
-
-function over(text, btn, fn) { $("over-text").textContent = text; $("over-btn").textContent = btn; $("over-btn").onclick = fn; $("over").classList.remove("hidden"); }
-
-function close() {
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
-  $("term-view").classList.add("hidden"); $("list").classList.remove("hidden");
-  load();
-}
+function over(text, b, fn) { $("ended-text").textContent = text; $("ended-btn").textContent = b; $("ended-btn").onclick = fn; $("ended").classList.remove("hidden"); fitNow(); }
 
 const KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["Ctrl", null], ["^C", "\x03"],
   ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["Enter", "\r"], ["^D", "\x04"]];
@@ -6914,15 +7665,37 @@ $("text").addEventListener("keydown", e => {
   if (e.key === "Tab") { e.preventDefault(); press(e.shiftKey ? "\x1b[Z" : "\t"); }  // a keyboard with Tab
 });
 $("text").addEventListener("input", () => { const t = $("text"); t.style.height = ""; t.style.height = Math.min(120, t.scrollHeight) + "px"; });
-$("back").onclick = close;
 function font(d) { size = Math.max(9, Math.min(24, size + d)); store("vmagents-font", String(size)); if (term) { term.options.fontSize = size; fitNow(); } }
 $("smaller").onclick = () => font(-1); $("bigger").onclick = () => font(1);
 window.addEventListener("resize", fitNow);
 if (window.visualViewport) visualViewport.addEventListener("resize", fitNow);
+
+// --- texts, buttons, and keeping things fresh
+$("sub").textContent = S.sub;
+$("refresh").append(icon("refresh")); $("refresh").setAttribute("aria-label", "refresh"); $("refresh").onclick = load;
+$("vm-back").append(icon("back")); $("vm-back").setAttribute("aria-label", S.back); $("vm-back").onclick = () => history.back();
+$("vm-refresh").append(icon("refresh")); $("vm-refresh").setAttribute("aria-label", "refresh");
+$("vm-refresh").onclick = () => { load(); loadRuns(); };
+$("back").replaceChildren(icon("back")); $("back").setAttribute("aria-label", S.back); $("back").onclick = () => history.back();
+$("send").textContent = S.send; $("text").placeholder = S.type;
+$("h-task").append(icon("play"), S.task); $("task").placeholder = S.taskPh; $("task-hint").textContent = S.taskHint;
+$("task-go").append(icon("play"), S.start);
+$("h-runs").append(icon("task"), S.runs);
+$("h-fix").append(icon("issue"), S.fix); $("issue").placeholder = S.issuePh; $("test").placeholder = S.testPh;
+$("pr-label").textContent = S.pr; $("fix-go").append(icon("play"), S.start); $("fix-hint").textContent = S.fixHint;
+$("h-power").append(icon("power"), S.power);
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
   // Phones drop the connection in the background: back, it comes again by itself.
-  if (document.visibilityState === "visible" && cur && !ended && (!ws || ws.readyState > 1) && !$("term-view").classList.contains("hidden")) connect();
+  if (view === "term" && sess && !ended && (!ws || ws.readyState > 1)) connect();
+  else if (view === "home") load();
+  else if (view === "vm") { load(); loadRuns(); }
 });
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  if (view === "home") load();
+  else if (view === "vm") loadRuns();
+}, 15000);
 load();
 </script>
 </body>
@@ -7020,10 +7793,22 @@ TEXTS = {"tr": {
     "working": "işlem sürüyor",
     "{n} VM": "{n} VM", "{n} VMs": "{n} VM", "no VMs yet: press n": "henüz VM yok: n'ye bas",
     "[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · c: changes · "
-    "H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · m: phone · L: language · q: quit[/]":
+    "f: fix an issue · H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · m: phone · "
+    "L: language · q: quit[/]":
         "[dim]Enter ya da l: aç · j/k: gezin · n: yeni VM · a: görev · x: kopyalarda dene · p: proje · "
-        "c: değişiklikler · H: geçmiş · i: ağ · o: portlar · t: başlat/durdur · u: anlık görüntüler · Y: sormadan · "
-        "m: telefon · L: dil · q: çık[/]",
+        "c: değişiklikler · f: issue çöz · H: geçmiş · i: ağ · o: portlar · t: başlat/durdur · u: anlık görüntüler · "
+        "Y: sormadan · m: telefon · L: dil · q: çık[/]",
+    "Issue": "Issue", "Fix an issue": "Issue çöz", "Test command": "Test komutu",
+    "Send a project to {n} first (p): fix works on its GitHub issues.":
+        "Önce {n} makinesine bir proje gönder (p): issue çözme onun GitHub issue'ları üzerinde çalışır.",
+    "[b]Fix an issue of {p}[/b]\nThe agent works on the GitHub issue on {n}, alone; then the tests run there. When "
+    "they pass, the work becomes a branch and a pull request. Follow it in a tab.":
+        "[b]{p} için bir issue çöz[/b]\nYardımcı GitHub issue'su üzerinde {n} makinesinde tek başına çalışır; sonra "
+        "testler orada çalışır. Geçerlerse iş bir dal ve pull request olur. Bir sekmede izle.",
+    "its number, e.g. 42, or its URL": "numarası, örneğin 42, ya da adresi",
+    "e.g. npm test (empty: the agent's own)": "örneğin npm test (boş: yardımcı kendisi bulur)",
+    "Open a pull request when the tests pass": "Testler geçince pull request aç",
+    "Give the issue.": "Issue'yu yaz.",
     "Phone": "Telefon", "[b]Your VMs on the phone[/b]": "[b]Telefonda VM'lerin[/b]",
     "Starting phone access...": "Telefon erişimi açılıyor...", "New link (n)": "Yeni bağlantı (n)",
     "Turn off (o)": "Kapat (o)", "Same Wi-Fi (w)": "Aynı Wi-Fi (w)",
@@ -8363,6 +9148,8 @@ def kind_label(kind):
         return T("Log in")
     if kind == "run":
         return T("Task")
+    if kind == "fix":
+        return T("Issue")
     return AGENT_NAMES.get(kind, kind)
 
 
@@ -8495,7 +9282,7 @@ def while_open(f):
 
 
 LIST_ACTIONS = {"open", "new", "shell", "ports", "toggle", "snapshots", "resize", "delete", "language", "quit",
-                "refresh", "project", "changes", "yolo", "task", "try", "net", "history", "phone"}
+                "refresh", "project", "changes", "yolo", "task", "try", "net", "history", "phone", "fix"}
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAB_ACTIONS = {"home", "back_to_tab", "prev_tab", "next_tab", "goto_tab", "open_kind"}
 
@@ -8566,6 +9353,7 @@ class VmAgentsUI(App):
                     Binding("n", "new", T("New VM")), Binding("s", "shell", T("Shell"), show=False),
                     Binding("a", "task", T("Task")), Binding("x", "try", T("Try"), show=False),
                     Binding("p", "project", T("Project")), Binding("c", "changes", T("Changes")),
+                    Binding("f", "fix", T("Fix an issue"), show=False),
                     Binding("o", "ports", T("Ports")), Binding("t", "toggle", T("Start/stop")),
                     Binding("u", "snapshots", T("Snapshots")), Binding("r", "resize", T("Resources")),
                     Binding("d", "delete", T("Delete")),
@@ -8628,8 +9416,8 @@ class VmAgentsUI(App):
         t.focus()
         self._seen = None
         self.log_line(T("[dim]Enter or l: open · j/k: move · n: new VM · a: task · x: try on copies · p: project · "
-                        "c: changes · H: history · i: network · o: ports · t: start/stop · u: snapshots · Y: yolo · "
-                        "m: phone · L: language · q: quit[/]"))
+                        "c: changes · f: fix an issue · H: history · i: network · o: ports · t: start/stop · "
+                        "u: snapshots · Y: yolo · m: phone · L: language · q: quit[/]"))
         self.log_line(T("[dim]Tabs: Ctrl+] list ⇄ last tab · F7/F8 (or Ctrl+PgUp/PgDn) previous/next · "
                         "1 to 9 here: that tab[/]"))
 
@@ -8961,7 +9749,7 @@ class VmAgentsUI(App):
                 last = self.pane(self.last) if self.last in self.pane_ids() else None
                 self.show(last.id if last in terms else terms[-1].id)
             return
-        if kind not in ("shell", "login", "claude", "run") and vm.get("os") == "windows":
+        if kind not in ("shell", "login", "claude", "run", "fix") and vm.get("os") == "windows":
             self.notify(T("Only Claude Code runs on Windows VMs."))
             return
         for t in terms:
@@ -9140,6 +9928,32 @@ class VmAgentsUI(App):
 
     def action_phone(self):
         self.push_screen(Phone())
+
+    def action_fix(self):
+        """A GitHub issue of the VM's project to a pull request (vmagents fix), followed in a tab."""
+        if not (vm := self.need_vm(busy_ok=True)):
+            return
+        if vm.get("os") == "windows" or not vm.get("project"):
+            self.notify(T("Send a project to {n} first (p): fix works on its GitHub issues.", n=vm["name"]))
+            return
+        n = vm["name"]
+
+        def chosen(r):
+            if not r:
+                return
+            argv = [VMAGENTS, "fix", n, r["issue"].lstrip("#"), "--hold"]
+            if r["test"]:
+                argv += ["--test", r["test"]]
+            if not r["pr"]:
+                argv.append("--no-pr")
+            self.open_session(n, "fix", argv)
+        self.push_screen(Ask(T("[b]Fix an issue of {p}[/b]\nThe agent works on the GitHub issue on {n}, alone; then "
+                               "the tests run there. When they pass, the work becomes a branch and a pull request. "
+                               "Follow it in a tab.", p=home_short(vm["project"]), n=n),
+                             [("issue", T("Issue"), "", T("its number, e.g. 42, or its URL")),
+                              ("test", T("Test command"), vm.get("test") or "", T("e.g. npm test (empty: the agent's own)"))],
+                             lambda v: "" if v["issue"].strip().lstrip("#") else T("Give the issue."),
+                             [("pr", T("Open a pull request when the tests pass"), True)]), chosen)
 
     def action_history(self):
         if not (vm := self.need_vm(busy_ok=True)):
@@ -9710,7 +10524,7 @@ main() {
       if [[ -n ${2-} ]]; then help_cmd "$2"; else usage; fi ;;
     version | -V | --version) say "vmagents $VERSION" ;;
     __mcp-info | __mcp-run | __mcp-get | __mcp-put | __watch | __runwait | __proxy | __phone | __addr) shift; "cmd_$cmd" "$@" ;;
-    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | run | runs | try | tries | net | templates | history | phone | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
+    add | create | delete | images | prune | mcp | mount | umount | login | setup | connect | shell | start | stop | autostop | snapshot | snapshots | undo | autosnap | idle | notify | clipboard | open | ports | project | changes | take | fix | run | runs | try | tries | net | templates | history | phone | yolo | agent | resize | ui | autostart | doctor | list | default | desktop | edit | forget | rm)
       shift
       if wants_help "$cmd" "$@"; then help_cmd "$cmd"; return 0; fi
       "cmd_$cmd" "$@" ;;

@@ -12,7 +12,7 @@
   ![Diller](https://img.shields.io/badge/aray%C3%BCz-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Telefon](#telefondan) · [Projeler](#projeler) · [Komutlar](#komutlar)
+  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Telefon](#telefondan) · [Projeler](#projeler) · [Issue'lar](#issuedan-pull-requeste) · [Komutlar](#komutlar) · [Yol haritası](ROADMAP.tr.md)
 </div>
 
 ---
@@ -52,8 +52,9 @@ arayüzünden** yap: `vmagents ui`
 | **Görevi ver, git** | `vmagents run dev "başarısız testleri düzelt"`: bir asistan arka planda tek başına çalışır; bitince bildirim gelir. |
 | **Bir görev, birkaç deneme** | `vmagents try dev 3 "görev"`: VM'in saniyeler içinde üç kopyası, her biri görevi yapar (istersen farklı asistanlarla); en iyisini alırsın. |
 | **Kısa tasmalı ağ** | `vmagents net dev restricted`: VM yalnızca listesindeki adreslere (asistanların servisleri, paket depoları, GitHub) ulaşır; senin bilgisayarında uygulanır. |
-| **Telefondan** | `vmagents phone` bir QR kod gösterir: okut, telefonun tarayıcısında VM'lerin listelenir ve asistanları bir terminalde açılır (Tailscale ile her yerden). SSH uygulamaları için de her VM'e bir port. |
+| **Telefondan** | `vmagents phone` bir QR kod gösterir: okut, telefonun tarayıcısında VM'lerin listelenir; asistanlarını bir terminalde açar, görev verip izler, issue çözdürür, VM'leri başlatıp kapatır (Tailscale ile her yerden). SSH uygulamaları için de her VM'e bir port. |
 | **Güvenle sormadan çalışma** | `vmagents yolo dev on`: asistanlar önce sormadan çalışır. Kendi bilgisayarında riskli; VM'de `undo` hepsini geri alır. |
+| **Issue'dan pull request'e** | `vmagents fix dev 42 --test "npm test"`: asistan VM'de 42 numaralı GitHub issue'su üzerinde çalışır, testler orada çalışır (geçmezlerse çıktıları asistana geri gider), geçince bir pull request açılır. |
 | **Projen, dal olarak geri** | `vmagents project` bir git deposunu VM'e gönderir, `vmagents take` asistanların işini dal ya da pull request olarak geri getirir. VM'de GitHub anahtarı gerekmez. |
 | **İstediğin an yeni VM** | `vmagents create` resmî bir bulut imajından libvirt VM'i kurar (Debian 13, Debian 12, Ubuntu 24.04, Arch Linux); `--template node` (python, ml, go, rust ya da kendi şablonun) onu bir iş türüne göre hazırlar. |
 | **Geri alma** | Her başlatmadan önce anlık görüntü alınır; `vmagents undo` VM'i oturumdan önceki hâline döndürür. |
@@ -185,6 +186,7 @@ dilini değiştirir (English / Türkçe) ve seçim hatırlanır.
 | `i` | ağ: bir adres listesiyle kısıtla; kısıtlıyken bir adrese izin ver (son reddedilen hazır gelir) ya da tekrar aç |
 | `H` | Claude'un VM'deki geçmiş oturumları, bir sekmede: `j`/`k` ile gezin (altta gösterilir), `r` birini sürdürür |
 | `p` / `c` | proje (git deposu) gönder / değişiklikleri sekmede (orada `t`: dal olarak al, `P`: pull request) |
+| `f` | projenin bir GitHub issue'sunu çöz: numarası ve test komutu, sonra bir sekmede izlenir |
 | `u` | anlık görüntüler: birine dön, ad ve etiketle yenisini al, etiketini değiştir, sil |
 | `o` | portlar: şimdi yönlendir (`o` tekrar: durdur), her bağlantıda, ya da ağındaki cihazlara da |
 | `t` / `r` | başlat ya da durdur / RAM ve işlemci (önce VM'i kapatır) |
@@ -311,6 +313,17 @@ otomatik düzeltmesi ve sesle yazması çalışır. Çubuktaki bir tuş yazdığ
 gider; bir dosya adının başını yaz, tamamlamak için Tab'a dokun. Telefon uyanınca sayfa kendiliğinden
 yeniden bağlanır.
 
+Gerisi için bir VM'in adına dokun: ona bir görev ver ve çalışırken çıktısını
+izle (önceki görevler de oradadır, çalışan bir görev durdurulabilir), projesinin
+bir GitHub issue'sunu çözdür ([`vmagents fix`](#issuedan-pull-requeste)), ya da
+VM'i başlat ve kapat. Ana ekrana eklenince (tarayıcının menüsünden) sayfa
+simgesiyle ve tam ekran, bir uygulama gibi açılır. Telefona uyarak açık ya da
+koyu görünür.
+
+| VM'ler | Bir VM |
+|---|---|
+| ![Telefon sayfası: VM'ler](docs/phone-list.png) | ![Telefon sayfası: bir VM ve görevleri](docs/phone-vm.png) |
+
 Sayfa senin bilgisayarında çalışan küçük bir web sunucusudur ve
 [Tailscale](https://tailscale.com) (ücretsiz) üzerinden erişilir: şifreli, her
 yerden, internete hiçbir şey açılmaz. Bilgisayara kur
@@ -319,7 +332,9 @@ telefona da uygulamasını aynı hesapla kur. Yalnızca aynı Wi-Fi'da mı?
 `vmagents phone --lan` (o zaman şifresizdir; okul ve otel ağları cihazların
 birbirini görmesini çoğu zaman engeller). QR koddaki bağlantı rastgele bir anahtar
 taşır, sunucu onsuz hiçbir şeye cevap vermez; `--new` yenisini yapar. Kimin
-bağlandığı `~/.cache/vmagents/phone.log`'a yazılır. Arayüzde: `m`.
+bağlandığı `~/.cache/vmagents/phone.log`'a yazılır. Arayüzde: `m`. Sayfanın
+terminali (xterm.js) de senin bilgisayarından gelir; bir kez indirilir ve özetine
+bakılarak doğrulanır, yani aynı Wi-Fi'da telefonun internete çıkması gerekmez.
 
 SSH uygulamaları (Termius, Blink, JuiceSSH) da çalışır: `phone ssh AD ANAHTAR`
 uygulamanın açık anahtarını VM'e koyar ve ona bilgisayarında bir port verir
@@ -352,6 +367,34 @@ vmagents project dev              # sonucu (ve senin yeni commit'lerini) geri g�
   Arayüzde: `p` gönderir, `c` değişiklikleri bir sekmede gösterir (`t` al, `P` pull request).
 
 ![Bir projenin değişiklikleri, sekmede](docs/ui-changes.png)
+
+## Issue'dan pull request'e
+
+VM'de bir proje varken tek komut bir GitHub issue'sunu pull request'e kadar
+götürür, sen başka bir şeyle uğraşırken:
+
+```sh
+vmagents fix dev 42 --test "npm test"
+```
+
+1. Issue ve yorumları burada, GitHub CLI (`gh`) ile okunur.
+2. Proje VM'e yeniden gider: burada açık olan dalın temiz bir kopyası.
+3. Asistan issue'yu görev olarak alır (`vmagents run`): düzelt ve commit'le.
+4. Testler VM'de çalışır. Geçmezlerse çıktıları asistana gider ve yeniden
+   dener (`--tries`, varsayılan toplam 2).
+5. Asistanın commit'leri `vmagents/issue-42` dalı olarak geri gelir.
+6. Testler geçince dal gönderilir ve gönderilen dala karşı "Fixes #42" diyen
+   bir pull request açılır (`--draft`, ya da dalda durmak için `--no-pr`).
+
+- `--test` bir sonraki issue için saklanır. Verilmezse asistan bulduğu
+  testleri çalıştırır ve pull request vmagents'ın denetlemediğini söyler.
+- Yalnızca asistanın commit'leri alınır; ortada bıraktıkları (önbellekler,
+  test raporları) dışarıda kalır, hiç commit'lemediyse başka.
+- VM hiçbir zaman GitHub'a bağlanmaz: issue'nun metnini alır, iş de `take`
+  gibi vmagents üzerinden geri gelir. Asistan o metne sormadan uyar; bu yüzden
+  bir kısmını senden başkaları yazdıysa `fix` kimlerin yazdığını söyler ve önce
+  sorar (`--yes` sormaz).
+- Her asistanla: `--codex`, `--gemini`, `--opencode`, `--aider`. Arayüzde: `f`.
 
 ## Günlük kullanım
 
@@ -654,6 +697,7 @@ vmagents net AD [restricted|open|allow ADRES...|deny ADRES...|blocked]   VM'in a
 vmagents project AD [KLASÖR]     buradaki bir git deposunu VM'e gönder (--discard, --off)
 vmagents changes AD [--stat]     asistanların orada neyi değiştirdiği
 vmagents take AD [--branch DAL] [--pr]   o iş burada dal olarak (ya da pull request)
+vmagents fix AD ISSUE [--test KOMUT] [--tries N] [--no-pr] [--draft]   issue'dan pull request'e
 
 vmagents open [AD] [PORT...]     VM'in portu burada, tarayıcında ([YEREL:]PORT; --lan)
 vmagents ports AD 3000,5173      her bağlantıda yönlendirilen portlar (off: hiçbiri)
@@ -740,7 +784,8 @@ klasöründe çalışır. CI her gönderimde bunları shellcheck ile birlikte ç
 Her test dosyasının neyi kapsadığı ve gerçek VM'lerde elle nelerin denendiği
 [İngilizce README'de](README.md#tests) ayrıntılı olarak yazıyor: Debian, Ubuntu
 ve Arch VM'leri, Windows 10 (görevler dahil), Claude Code kancaları, arayüz,
-projeler, görevler, kopyalar, kısıtlı ağ, telefon sayfası ve AUR paketi.
+projeler, görevler, issue'dan pull request'e, kopyalar, kısıtlı ağ, telefon sayfası
+ve AUR paketi.
 
 ## Sınırlar
 
