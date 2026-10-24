@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vmforai</title>
+<meta name="description" content="Run Claude Code, Codex, Gemini CLI, OpenCode or aider inside a VM sandbox, not on your computer. One command, a snapshot every start, undo.">
+<meta property="og:title" content="vmforai: AI coding agents in a VM sandbox">
+<meta property="og:description" content="Run Claude Code, Codex, Gemini CLI, OpenCode or aider inside a VM, not on your computer. A snapshot every start; undo takes it all back.">
+<meta property="og:image" content="https://emincan2000.github.io/vmforai/social-preview.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171c19'/%3E%3Cpath d='M8 11l6 5-6 5M16 22h8' stroke='%239cc28f' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f6f2; --panel: #ffffff; --line: #d7ddd3; --text: #1d2420;
+  --dim: #5b675e; --green: #4f7a49; --code: #e9eee6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171c19; --panel: #1f2621; --line: #333d36; --text: #e6ebe4;
+    --dim: #9ba79d; --green: #9cc28f; --code: #121613;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 17px/1.6 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--green); }
+main { max-width: 960px; margin: 0 auto; padding: 0 16px 64px; }
+nav { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; }
+nav b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 18px; }
+nav a { margin-left: 18px; text-decoration: none; color: var(--dim); }
+nav a:hover { color: var(--text); }
+h1 { font-size: clamp(30px, 5.5vw, 48px); line-height: 1.15; margin: 40px 0 12px; letter-spacing: -0.02em; }
+h2 { font-size: 26px; margin: 56px 0 16px; letter-spacing: -0.01em; }
+.lead { font-size: 19px; color: var(--dim); max-width: 680px; margin: 0 0 28px; }
+code, pre { font-family: "JetBrains Mono", ui-monospace, "DejaVu Sans Mono", monospace; font-size: 14.5px; }
+pre {
+  background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 16px; margin: 0; overflow-x: auto; position: relative;
+}
+pre .c { color: var(--dim); }
+.copy {
+  position: absolute; top: 8px; right: 8px; font: 13px system-ui, sans-serif;
+  background: var(--panel); color: var(--dim); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer;
+}
+.copy:hover { color: var(--text); }
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+.btn {
+  display: inline-block; padding: 10px 18px; border-radius: 8px; text-decoration: none;
+  border: 1px solid var(--line); color: var(--text); background: var(--panel);
+}
+.btn.main { background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }
+img { max-width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--line); }
+.hero-img { margin-top: 40px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.card h3 { margin: 0 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--dim); font-size: 15.5px; }
+.card code { font-size: 13.5px; }
+.shots { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 640px) { .shots { grid-template-columns: 1fr; } }
+.caption { color: var(--dim); font-size: 14.5px; margin: 6px 0 0; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--dim); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+footer { color: var(--dim); font-size: 14.5px; border-top: 1px solid var(--line); margin-top: 64px; padding-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+<nav>
+  <b>vmforai</b>
+  <span>
+    <a href="#install">Install</a>
+    <a href="https://github.com/emincan2000/vmforai#commands">Docs</a>
+    <a href="https://github.com/emincan2000/vmforai">GitHub</a>
+  </span>
+</nav>
+
+<h1>Run AI coding agents in a VM,<br>not on your computer.</h1>
+<p class="lead">vmforai runs Claude Code, Codex, Gemini CLI, OpenCode or aider inside a
+virtual machine with one command. The agent may install, run and break whatever it
+likes. Every start takes a snapshot first, so <code>vmforai undo</code> takes it all back.</p>
+
+<pre><span class="c"># Linux (Debian, Ubuntu, Arch, Fedora, openSUSE, Alpine)</span>
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash
+vmforai create dev   <span class="c"># a new Debian VM with Claude Code in it</span>
+vmforai dev          <span class="c"># Claude Code, running in the VM</span></pre>
+
+<div class="buttons">
+  <a class="btn main" href="https://github.com/emincan2000/vmforai">View on GitHub</a>
+  <a class="btn" href="https://github.com/emincan2000/vmforai/releases">Releases</a>
+  <a class="btn" href="https://github.com/emincan2000/vmforai/blob/main/README.tr.md">Türkçe</a>
+</div>
+
+<img class="hero-img" src="demo.gif" width="1024" height="646" alt="vmforai: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page">
+
+<h2>Why a VM?</h2>
+<div class="grid">
+  <div class="card"><h3>The agent may act without asking</h3><p><code>rm -rf</code>, a careless <code>sudo</code> or a broken package only break the VM, and one command undoes them.</p></div>
+  <div class="card"><h3>Nothing of yours is in it</h3><p>No SSH keys, no browser, no GitHub token. A repository goes in as a copy; the agent's work comes back as a git branch.</p></div>
+  <div class="card"><h3>A whole computer, not a container</h3><p>Its own kernel, systemd, Docker, a desktop if you want one. Windows VMs too.</p></div>
+  <div class="card"><h3>It goes on without you</h3><p>Tasks run in the background. Follow them in the terminal UI or on your phone, with a notification when they end.</p></div>
+</div>
+
+<h2>What it does</h2>
+<div class="grid">
+  <div class="card"><h3>Give a task and go</h3><p><code>vmforai run dev "fix the failing tests"</code>: an agent works on it alone, in the background.</p></div>
+  <div class="card"><h3>One task, several tries</h3><p><code>vmforai try dev 3 "the task"</code>: three copies of the VM in seconds, each doing the task; take the best.</p></div>
+  <div class="card"><h3>From an issue to a pull request</h3><p><code>vmforai fix dev 42 --test "npm test"</code>: the agent works on issue 42, the tests run in the VM, a PR opens when they pass.</p></div>
+  <div class="card"><h3>A network on a short leash</h3><p><code>vmforai net dev restricted</code>: the VM reaches only the hosts on its list, enforced on your computer.</p></div>
+  <div class="card"><h3>From the phone</h3><p><code>vmforai phone</code> shows a QR code: list VMs, open agents in a terminal, give tasks, get notifications.</p></div>
+  <div class="card"><h3>Five agents</h3><p>Claude Code, Codex, Gemini CLI, OpenCode and aider, installed on first use.</p></div>
+</div>
+
+<h2>Terminal UI and phone</h2>
+<div class="shots">
+  <div><img src="ui.png" alt="vmforai ui: the VM list with details" loading="lazy"><p class="caption"><code>vmforai ui</code>: make VMs, open shells and agents in tabs, snapshots, ports, projects.</p></div>
+  <div><img src="phone-vm.png" alt="The phone page for one VM" loading="lazy"><p class="caption"><code>vmforai phone</code>: the same from the phone's browser.</p></div>
+</div>
+
+<h2>vmforai, a container, or the cloud?</h2>
+<div class="tablewrap">
+<table>
+  <tr><th></th><th>vmforai</th><th>A container (Docker, devcontainer)</th><th>Cloud agents</th></tr>
+  <tr><td>Runs</td><td>in a VM on your computer (or any machine you reach over SSH)</td><td>on your computer, sharing its kernel</td><td>on the provider's servers</td></tr>
+  <tr><td>Take it all back</td><td><code>vmforai undo</code>, from snapshots</td><td>throw the container away and build it again</td><td>nothing to take back here</td></tr>
+  <tr><td>The agent may use</td><td>sudo, systemd, Docker, a desktop, Windows</td><td>what the image and its rights allow</td><td>what the provider's machine allows</td></tr>
+  <tr><td>Your files and keys</td><td>out of reach; a repository goes in as a copy</td><td>out of reach unless mounted</td><td>out of reach; it works on your GitHub repository</td></tr>
+  <tr><td>Costs</td><td>your hardware</td><td>your hardware</td><td>the provider's prices</td></tr>
+</table>
+</div>
+<p>A container is lighter and starts in a second: when that is enough, use one.
+vmforai is for when the agent should have a whole machine to itself, and you want
+to be able to take back all it did.</p>
+
+<h2 id="install">Install</h2>
+<pre><span class="c"># Linux: puts vmforai (and vmf) in ~/.local/bin, then installs libvirt and QEMU</span>
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash</pre>
+<p></p>
+<pre><span class="c"># Windows 10 or 11, in PowerShell: sets vmforai up in WSL</span>
+irm https://raw.githubusercontent.com/emincan2000/vmforai/main/install.ps1 | iex</pre>
+<p>Also a <code>.deb</code> in the <a href="https://github.com/emincan2000/vmforai/releases">releases</a> and a
+<a href="https://github.com/emincan2000/vmforai/tree/main/packaging/aur">PKGBUILD</a> for Arch Linux.
+Later, <code>vmforai update</code> brings it to the latest release.
+Already have VMs? <code>vmforai add dev --host ADDRESS</code> works with any VM you reach over SSH.</p>
+
+<footer>
+  vmforai is free software under the MIT license, by
+  <a href="https://github.com/emincan2000">emincan2000</a>.
+  <a href="https://github.com/emincan2000/vmforai/issues">Issues</a> ·
+  <a href="https://github.com/emincan2000/vmforai/discussions">Discussions</a> ·
+  <a href="https://github.com/emincan2000/vmforai/blob/main/ROADMAP.md">Roadmap</a>
+</footer>
+</main>
+<script>
+for (const pre of document.querySelectorAll("pre")) {
+  const b = document.createElement("button");
+  b.className = "copy"; b.textContent = "Copy";
+  b.onclick = async () => {
+    const text = [...pre.childNodes].filter(n => n !== b && !(n.classList && n.classList.contains("c")))
+      .map(n => n.textContent).join("").split("\n").map(l => l.trimEnd()).filter(Boolean).join("\n");
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
+    catch { b.textContent = "Select and copy"; }
+    setTimeout(() => (b.textContent = "Copy"), 1500);
+  };
+  pre.appendChild(b);
+}
+</script>
+</body>
+</html>
