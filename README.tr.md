@@ -17,7 +17,7 @@
 
 ---
 
-![Bir asistan VM'deki projeyi siliyor; vmagents undo geri getiriyor](docs/demo.gif)
+![vmagents: komut satırı (bir görev, sonra undo), Claude Code'un sekmede açık olduğu terminal arayüzü ve telefon sayfası](docs/demo.gif)
 
 **vmagents**, Claude Code, Codex, Gemini CLI, OpenCode ya da aider'ı tek
 komutla **bir sanal makinenin içinde** çalıştırır: VM'i başlatır, SSH ile

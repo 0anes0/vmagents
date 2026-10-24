@@ -17,7 +17,7 @@
 
 ---
 
-![An agent deletes a project in the VM; vmagents undo brings it back](docs/demo.gif)
+![vmagents: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page](docs/demo.gif)
 
 **vmagents** runs Claude Code, Codex, Gemini CLI, OpenCode or aider **inside a
 virtual machine**, with one command: it starts the VM, connects over SSH and
