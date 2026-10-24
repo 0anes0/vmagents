@@ -11,65 +11,9 @@
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171c19'/%3E%3Cpath d='M8 11l6 5-6 5M16 22h8' stroke='%239cc28f' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<style>
-:root {
-  --bg: #f4f6f2; --panel: #ffffff; --line: #d7ddd3; --text: #1d2420;
-  --dim: #5b675e; --green: #4f7a49; --code: #e9eee6;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #171c19; --panel: #1f2621; --line: #333d36; --text: #e6ebe4;
-    --dim: #9ba79d; --green: #9cc28f; --code: #121613;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--text);
-  font: 17px/1.6 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-a { color: var(--green); }
-main { max-width: 960px; margin: 0 auto; padding: 0 16px 64px; }
-nav { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; }
-nav b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 18px; }
-nav a { margin-left: 18px; text-decoration: none; color: var(--dim); }
-nav a:hover { color: var(--text); }
-h1 { font-size: clamp(30px, 5.5vw, 48px); line-height: 1.15; margin: 40px 0 12px; letter-spacing: -0.02em; }
-h2 { font-size: 26px; margin: 56px 0 16px; letter-spacing: -0.01em; }
-.lead { font-size: 19px; color: var(--dim); max-width: 680px; margin: 0 0 28px; }
-code, pre { font-family: "JetBrains Mono", ui-monospace, "DejaVu Sans Mono", monospace; font-size: 14.5px; }
-pre {
-  background: var(--code); border: 1px solid var(--line); border-radius: 10px;
-  padding: 14px 16px; margin: 0; overflow-x: auto; position: relative;
-}
-pre .c { color: var(--dim); }
-.copy {
-  position: absolute; top: 8px; right: 8px; font: 13px system-ui, sans-serif;
-  background: var(--panel); color: var(--dim); border: 1px solid var(--line);
-  border-radius: 6px; padding: 3px 10px; cursor: pointer;
-}
-.copy:hover { color: var(--text); }
-.buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
-.btn {
-  display: inline-block; padding: 10px 18px; border-radius: 8px; text-decoration: none;
-  border: 1px solid var(--line); color: var(--text); background: var(--panel);
-}
-.btn.main { background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }
-img { max-width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--line); }
-.hero-img { margin-top: 40px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-.card h3 { margin: 0 0 6px; font-size: 17px; }
-.card p { margin: 0; color: var(--dim); font-size: 15.5px; }
-.card code { font-size: 13.5px; }
-.shots { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; align-items: start; }
-@media (max-width: 640px) { .shots { grid-template-columns: 1fr; } }
-.caption { color: var(--dim); font-size: 14.5px; margin: 6px 0 0; }
-table { width: 100%; border-collapse: collapse; font-size: 15px; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--dim); font-weight: 600; }
-.tablewrap { overflow-x: auto; }
-footer { color: var(--dim); font-size: 14.5px; border-top: 1px solid var(--line); margin-top: 64px; padding-top: 20px; }
-</style>
+<link rel="stylesheet" href="site.css">
+<link rel="alternate" hreflang="en" href="https://emincan2000.github.io/vmforai/">
+<link rel="alternate" hreflang="tr" href="https://emincan2000.github.io/vmforai/tr/">
 </head>
 <body>
 <main>
@@ -95,7 +39,7 @@ vmforai dev          <span class="c"># Claude Code, running in the VM</span></pr
 <div class="buttons">
   <a class="btn main" href="https://github.com/emincan2000/vmforai">View on GitHub</a>
   <a class="btn" href="https://github.com/emincan2000/vmforai/releases">Releases</a>
-  <a class="btn" href="https://github.com/emincan2000/vmforai/blob/main/README.tr.md">Türkçe</a>
+  <a class="btn" href="tr/" hreflang="tr" lang="tr">Türkçe</a>
 </div>
 
 <img class="hero-img" src="demo.gif" width="1024" height="646" alt="vmforai: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page">
@@ -158,19 +102,6 @@ Already have VMs? <code>vmforai add dev --host ADDRESS</code> works with any VM 
   <a href="https://github.com/emincan2000/vmforai/blob/main/ROADMAP.md">Roadmap</a>
 </footer>
 </main>
-<script>
-for (const pre of document.querySelectorAll("pre")) {
-  const b = document.createElement("button");
-  b.className = "copy"; b.textContent = "Copy";
-  b.onclick = async () => {
-    const text = [...pre.childNodes].filter(n => n !== b && !(n.classList && n.classList.contains("c")))
-      .map(n => n.textContent).join("").split("\n").map(l => l.trimEnd()).filter(Boolean).join("\n");
-    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
-    catch { b.textContent = "Select and copy"; }
-    setTimeout(() => (b.textContent = "Copy"), 1500);
-  };
-  pre.appendChild(b);
-}
-</script>
+<script src="site.js"></script>
 </body>
 </html>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vmforai</title>
+<meta name="description" content="Claude Code, Codex, Gemini CLI, OpenCode ya da aider'ı kendi bilgisayarında değil, bir sanal makinede çalıştır. Tek komut, her başlatmada anlık görüntü, geri alma.">
+<meta property="og:title" content="vmforai: yapay zeka kodlama asistanları bir sanal makinede">
+<meta property="og:description" content="Claude Code, Codex, Gemini CLI, OpenCode ya da aider'ı kendi bilgisayarında değil, bir VM'de çalıştır. Her başlatmada anlık görüntü; undo hepsini geri alır.">
+<meta property="og:image" content="https://emincan2000.github.io/vmforai/social-preview.png">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="tr_TR">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171c19'/%3E%3Cpath d='M8 11l6 5-6 5M16 22h8' stroke='%239cc28f' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="../site.css">
+<link rel="alternate" hreflang="en" href="https://emincan2000.github.io/vmforai/">
+<link rel="alternate" hreflang="tr" href="https://emincan2000.github.io/vmforai/tr/">
+</head>
+<body>
+<main>
+<nav>
+  <b>vmforai</b>
+  <span>
+    <a href="#kurulum">Kurulum</a>
+    <a href="https://github.com/emincan2000/vmforai/blob/main/README.tr.md#komutlar">Belgeler</a>
+    <a href="https://github.com/emincan2000/vmforai">GitHub</a>
+  </span>
+</nav>
+
+<h1>Yapay zeka asistanlarını bilgisayarında değil, bir VM'de çalıştır.</h1>
+<p class="lead">vmforai; Claude Code, Codex, Gemini CLI, OpenCode ya da aider'ı tek komutla
+bir sanal makinenin içinde çalıştırır. Asistan istediğini kurabilir, çalıştırabilir,
+bozabilir. Her başlatmada önce bir anlık görüntü alınır; <code>vmforai undo</code>
+hepsini geri alır.</p>
+
+<pre><span class="c"># Linux (Debian, Ubuntu, Arch, Fedora, openSUSE, Alpine)</span>
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash
+vmforai create dev   <span class="c"># içinde Claude Code olan yeni bir Debian VM</span>
+vmforai dev          <span class="c"># VM'de çalışan Claude Code</span></pre>
+
+<div class="buttons">
+  <a class="btn main" href="https://github.com/emincan2000/vmforai">GitHub'da gör</a>
+  <a class="btn" href="https://github.com/emincan2000/vmforai/releases">Sürümler</a>
+  <a class="btn" href="../" hreflang="en" lang="en">English</a>
+</div>
+
+<img class="hero-img" src="../demo.gif" width="1024" height="646" alt="vmforai: komut satırı (bir görev, sonra undo), Claude Code'un sekmede açık olduğu terminal arayüzü ve telefon sayfası">
+
+<h2>Neden bir VM?</h2>
+<div class="grid">
+  <div class="card"><h3>Asistan sormadan çalışabilir</h3><p>Orada <code>rm -rf</code>, dikkatsiz bir <code>sudo</code> ya da bozuk bir paket yalnızca VM'i bozar ve tek komutla geri alınır.</p></div>
+  <div class="card"><h3>İçinde senin hiçbir şeyin yok</h3><p>SSH anahtarın, tarayıcın, GitHub token'ın yok. Bir depo kopya olarak girer; asistanın işi bir git dalı olarak geri gelir.</p></div>
+  <div class="card"><h3>Konteyner değil, koca bir bilgisayar</h3><p>Kendi çekirdeği, systemd, Docker, istersen bir masaüstü. Windows VM'leri de olur.</p></div>
+  <div class="card"><h3>Sen yokken de devam eder</h3><p>Görevler arka planda çalışır. Terminal arayüzünden ya da telefonundan izlersin, bitince bildirim gelir.</p></div>
+</div>
+
+<h2>Neler yapar</h2>
+<div class="grid">
+  <div class="card"><h3>Görevi ver, git</h3><p><code>vmforai run dev "başarısız testleri düzelt"</code>: bir asistan arka planda tek başına çalışır.</p></div>
+  <div class="card"><h3>Bir görev, birkaç deneme</h3><p><code>vmforai try dev 3 "görev"</code>: VM'in saniyeler içinde üç kopyası, her biri görevi yapar; en iyisini alırsın.</p></div>
+  <div class="card"><h3>Issue'dan pull request'e</h3><p><code>vmforai fix dev 42 --test "npm test"</code>: asistan 42 numaralı issue üzerinde çalışır, testler VM'de çalışır, geçince bir PR açılır.</p></div>
+  <div class="card"><h3>Kısa tasmalı ağ</h3><p><code>vmforai net dev restricted</code>: VM yalnızca listesindeki adreslere ulaşır; senin bilgisayarında uygulanır.</p></div>
+  <div class="card"><h3>Telefondan</h3><p><code>vmforai phone</code> bir QR kod gösterir: VM'leri listele, asistanları bir terminalde aç, görev ver, bildirim al.</p></div>
+  <div class="card"><h3>Beş asistan</h3><p>Claude Code, Codex, Gemini CLI, OpenCode ve aider; ilk kullanımda kurulur.</p></div>
+</div>
+
+<h2>Terminal arayüzü ve telefon</h2>
+<div class="shots">
+  <div><img src="../ui.png" alt="vmforai ui: VM listesi ve ayrıntıları" loading="lazy"><p class="caption"><code>vmforai ui</code>: VM oluştur, kabukları ve asistanları sekmelerde aç; anlık görüntüler, portlar, projeler.</p></div>
+  <div><img src="../phone-vm.png" alt="Bir VM'in telefon sayfası" loading="lazy"><p class="caption"><code>vmforai phone</code>: aynısı telefonun tarayıcısından.</p></div>
+</div>
+
+<h2>vmforai mi, konteyner mi, bulut mu?</h2>
+<div class="tablewrap">
+<table>
+  <tr><th></th><th>vmforai</th><th>Bir konteyner (Docker, devcontainer)</th><th>Bulut asistanları</th></tr>
+  <tr><td>Nerede çalışır</td><td>bilgisayarındaki bir VM'de (ya da SSH ile eriştiğin herhangi bir makinede)</td><td>bilgisayarında, onun çekirdeğini paylaşarak</td><td>sağlayıcının sunucularında</td></tr>
+  <tr><td>Hepsini geri almak</td><td><code>vmforai undo</code>, anlık görüntülerden</td><td>konteyneri atıp yeniden kurmak</td><td>burada geri alınacak bir şey yok</td></tr>
+  <tr><td>Asistanın kullanabildikleri</td><td>sudo, systemd, Docker, bir masaüstü, Windows</td><td>imajın ve yetkilerinin izin verdiği kadar</td><td>sağlayıcının makinesinin izin verdiği kadar</td></tr>
+  <tr><td>Dosyaların ve anahtarların</td><td>ulaşılamaz; bir depo kopya olarak girer</td><td>bağlanmadıkça ulaşılamaz</td><td>ulaşılamaz; GitHub'daki deponda çalışır</td></tr>
+  <tr><td>Maliyet</td><td>kendi donanımın</td><td>kendi donanımın</td><td>sağlayıcının fiyatları</td></tr>
+</table>
+</div>
+<p>Konteyner daha hafiftir ve bir saniyede açılır: yetiyorsa onu kullan.
+vmforai, asistanın kendine ait koca bir makinesi olsun ve yaptığı her şeyi geri
+alabilmek istediğin zamanlar içindir.</p>
+
+<h2 id="kurulum">Kurulum</h2>
+<pre><span class="c"># Linux: vmforai'ı (ve vmf'yi) ~/.local/bin'e koyar, sonra libvirt ve QEMU'yu kurar</span>
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmforai/main/install.sh | bash</pre>
+<p></p>
+<pre><span class="c"># Windows 10 ya da 11, PowerShell'de: vmforai'ı WSL'de kurar</span>
+irm https://raw.githubusercontent.com/emincan2000/vmforai/main/install.ps1 | iex</pre>
+<p>Ayrıca <a href="https://github.com/emincan2000/vmforai/releases">sürümlerde</a> bir <code>.deb</code> ve Arch Linux için bir
+<a href="https://github.com/emincan2000/vmforai/tree/main/packaging/aur">PKGBUILD</a> var.
+Sonra <code>vmforai update</code> onu son sürüme getirir.
+Zaten VM'lerin mi var? <code>vmforai add dev --host ADRES</code>, SSH ile eriştiğin her VM ile çalışır.</p>
+
+<footer>
+  vmforai, MIT lisanslı özgür bir yazılımdır;
+  <a href="https://github.com/emincan2000">emincan2000</a> tarafından.
+  <a href="https://github.com/emincan2000/vmforai/issues">Issue'lar</a> ·
+  <a href="https://github.com/emincan2000/vmforai/discussions">Tartışmalar</a> ·
+  <a href="https://github.com/emincan2000/vmforai/blob/main/ROADMAP.tr.md">Yol haritası</a>
+</footer>
+</main>
+<script src="../site.js"></script>
+</body>
+</html>
