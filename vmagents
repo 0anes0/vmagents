@@ -5812,7 +5812,8 @@ set_net_filter() { # on|off
   out=$(vsh define "$tmp" 2>&1) || { rm -f "$tmp"; die "libvirt: $out"; }
   if [[ $(domstate) == running ]]; then
     # The running VM too: its card, with the new filter.
-    vsh dumpxml "$C_DOMAIN" | awk '/^ *<interface type=.network./ { p = 1 } p { print } p && /<\/interface>/ { exit }' |
+    # (Reads to the end: an early exit would make vsh fail on a closed pipe.)
+    vsh dumpxml "$C_DOMAIN" | awk '!done && /^ *<interface type=.network./ { p = 1 } p { print } p && /<\/interface>/ { p = 0; done = 1 }' |
       ON=$1 FILTER=$NET_FILTER GW=$NET_GW PORT=${P[NETPORT]} awk '
         /<filterref / { skip = 1 }
         skip { if (/<\/filterref>/ || /<filterref [^>]*\/>/) skip = 0; next }
@@ -5868,7 +5869,7 @@ net_blocked() { # the hosts refused lately, newest first, once each
   local f
   f=$(net_log_file "$NAME")
   [[ -f $f ]] || return 0
-  tail -n 500 "$f" | awk '{ print $2 }' | tac | awk '!seen[$0]++' | head -n "${1:-15}"
+  tail -n 500 "$f" | awk '{ print $2 }' | tac | awk '!seen[$0]++' | head -n "${1:-15}" || true  # (head may close early)
 }
 
 cmd_net() {
