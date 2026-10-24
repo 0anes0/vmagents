@@ -12,31 +12,38 @@
   ![Diller](https://img.shields.io/badge/aray%C3%BCz-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Kurulum](#kurulum) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Telefon](#telefondan) · [Projeler](#projeler) · [Issue'lar](#issuedan-pull-requeste) · [Komutlar](#komutlar) · [Yol haritası](ROADMAP.tr.md)
+  [Kurulum](#kurulum) · [Neden VM?](#vmagents-mi-konteyner-mi-bulut-mu) · [Hızlı başlangıç](#hızlı-başlangıç) · [Terminal arayüzü](#terminal-arayüzü) · [Görevler](#görevler-ve-sormadan-çalışma) · [Telefon](#telefondan) · [Projeler](#projeler) · [Issue'lar](#issuedan-pull-requeste) · [Komutlar](#komutlar) · [Yol haritası](ROADMAP.tr.md)
 </div>
 
 ---
 
+![Bir asistan VM'deki projeyi siliyor; vmagents undo geri getiriyor](docs/demo.gif)
+
 **vmagents**, Claude Code, Codex, Gemini CLI, OpenCode ya da aider'ı tek
-komutla **bir sanal makinenin içinde** çalıştırır. Gerekirse VM'i başlatır, SSH
-ile bağlanır ve asistanı orada açar: **Linux** VM'lerde tmux içinde (Claude Code
-**Windows** VM'lerde de). Asistan senin bilgisayarının değil, VM'in dosya ve
-programları üzerinde çalışır: istediğini kursun, çalıştırsın, bozsun; sonra
-hepsini `vmagents undo` ile geri al.
+komutla **bir sanal makinenin içinde** çalıştırır: VM'i başlatır, SSH ile
+bağlanır ve asistanı orada, tmux içinde açar. Asistan istediğini kurabilir,
+çalıştırabilir, bozabilir. Bilgisayarına dokunulmaz ve her başlatmada önce bir
+anlık görüntü alınır; `vmagents undo` hepsini geri alır.
 
-```
-$ vmagents
-Starting VM dev...
-Waiting for dev to get an IP address...
-Waiting for SSH on 192.168.122.48:22...
- ╭──────────────────────────────────────╮
- │ ✻ Welcome to Claude Code!            │     ← VM'de, tmux içinde çalışıyor
+```sh
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
+vmagents create dev      # içinde Claude Code olan yeni bir Debian VM, bir iki dakikada
+vmagents dev             # VM'de çalışan Claude Code
 ```
 
-Henüz VM'in yok mu? `vmagents create dev`, içinde Claude Code olan yeni bir
-Debian VM'i kurar; imaj bir kez indikten sonra genelde yarım dakika ile iki
-dakika arasında, tek bir şifre sorulmadan. Ya da her şeyi **terminal
-arayüzünden** yap: `vmagents ui`
+**Neden bir VM?**
+
+- **Asistan sormadan çalışabilir.** Orada `rm -rf`, dikkatsiz bir `sudo` ya da
+  bozuk bir paket yalnızca VM'i bozar ve tek komutla geri alınır.
+- **İçinde senin hiçbir şeyin yok.** SSH anahtarın, tarayıcın, GitHub token'ın,
+  başka projelerin yok: bir depo kopya olarak girer, asistanın işi de bakman
+  için bir git dalı olarak geri gelir.
+- **Bir konteyner değil, koca bir bilgisayar.** Kendi çekirdeği, systemd,
+  Docker, istersen bir masaüstü; Windows da olur.
+- **Sen yokken de devam eder.** Görevler arka planda çalışır; terminal
+  arayüzünden ya da telefonundan izlersin, bitince bildirim gelir.
+
+Ya da her şeyi **terminal arayüzünden** yap: `vmagents ui`
 
 ![vmagents ui](docs/ui.png)
 
@@ -74,6 +81,21 @@ arayüzünden** yap: `vmagents ui`
 OpenSSH dışında bağımlılığı olmayan tek bir Bash betiği (libvirt VM'leri için
 virsh, arayüz için Python gerekir). Birden çok VM, bir varsayılan, düz metin profiller.
 
+## vmagents mi, konteyner mi, bulut mu?
+
+| | vmagents | Bir konteyner (Docker, devcontainer) | Bulut asistanları |
+|---|---|---|---|
+| Nerede çalışır | bilgisayarındaki bir VM'de (ya da SSH ile eriştiğin herhangi bir makinede) | bilgisayarında, onun çekirdeğini paylaşarak | sağlayıcının sunucularında |
+| Hepsini geri almak | `vmagents undo`, anlık görüntülerden | konteyneri atıp yeniden kurmak | burada geri alınacak bir şey yok |
+| Asistanın kullanabildikleri | sudo, systemd, Docker, bir masaüstü, Windows | imajın ve yetkilerinin izin verdiği kadar | sağlayıcının makinesinin izin verdiği kadar |
+| Dosyaların ve anahtarların | ulaşılamaz; bir depo kopya olarak girer | bağlanmadıkça ulaşılamaz | ulaşılamaz; GitHub'daki deponda çalışır |
+| Asistanlar | Claude Code, Codex, Gemini CLI, OpenCode, aider | hepsi | sağlayıcının kendisininki |
+| Maliyet | kendi donanımın | kendi donanımın | sağlayıcının fiyatları |
+
+Konteyner daha hafiftir ve bir saniyede açılır: yetiyorsa onu kullan.
+vmagents, asistanın kendine ait koca bir makinesi olsun ve yaptığı her şeyi
+geri alabilmek istediğin zamanlar içindir.
+
 ## Kurulum
 
 ```sh
@@ -90,6 +112,11 @@ zypper ya da apk ile, yani Debian, Ubuntu, Fedora, Arch, openSUSE ve Alpine'de
 `--no-deps` bunu atlar. Başka bir yolla kurulduysa vmagents aynısını bir
 terminalde ilk çalıştığında yapar; `vmagents deps` yeniden yapar,
 `vmagents deps --check` yalnızca bakar.
+
+Sıfır makinelerde baştan sona denendi: Debian 13, Ubuntu 24.04 ve Arch Linux.
+Fedora, openSUSE ve Alpine: paket adları denetlendi ama henüz kimse denemedi.
+Aşağıdaki Windows bilgisayar kurucusu da yeni. Nasıl gittiğini yaz:
+[issues](https://github.com/emincan2000/vmagents/issues).
 
 Bir **Windows 10 ya da 11 bilgisayarda**, PowerShell'de:
 

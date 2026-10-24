@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install vmagents for the current user.
-# Usage: ./install.sh [--prefix DIR] [--no-deps] [--uninstall]
+# Usage: ./install.sh [--prefix DIR] [--no-deps] [--no-modify-path] [--uninstall]
 #    or: curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
 # Then what vmagents uses (libvirt, QEMU, ...) with the package manager; --no-deps: not that.
 set -euo pipefail
@@ -8,6 +8,7 @@ set -euo pipefail
 RAW=https://raw.githubusercontent.com/emincan2000/vmagents/main/vmagents
 PREFIX=$HOME/.local
 UNINSTALL=0
+MODIFY_PATH=1
 DEPS=1
 [[ -n ${VMAGENTS_NO_DEPS:-} ]] && DEPS=0
 while (($#)); do
@@ -16,6 +17,7 @@ while (($#)); do
     --uninstall) UNINSTALL=1; shift ;;
     --deps) DEPS=1; shift ;;  # (the default now)
     --no-deps) DEPS=0; shift ;;
+    --no-modify-path) MODIFY_PATH=0; shift ;;
     -h | --help) sed -n '2,5p' "$0"; exit 0 ;;
     *) echo "install.sh: unknown option $1" >&2; exit 2 ;;
   esac
@@ -25,6 +27,9 @@ BIN=$PREFIX/bin/vmagents
 if ((UNINSTALL)); then
   rm -f "$BIN"
   [[ -L $PREFIX/bin/vmclaude ]] && rm -f "$PREFIX/bin/vmclaude"
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do  # the PATH line install.sh added
+    [[ -f $rc ]] && grep -qF '  # vmagents' "$rc" && sed -i '/  # vmagents$/d' "$rc"
+  done
   echo "Removed $BIN."
   echo "Your VM profiles stay in ${XDG_CONFIG_HOME:-$HOME/.config}/vmagents; delete that folder to remove them."
   exit 0
@@ -52,10 +57,24 @@ fi
 for tool in ssh ssh-keygen; do
   command -v "$tool" >/dev/null || echo "note: $tool is missing — install openssh-client" >&2
 done
+# Not on the PATH yet: added for the shells to come (as uv and rustup do).
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
-  *) echo "note: $PREFIX/bin is not on your PATH; add it, e.g. in ~/.bashrc or ~/.zshrc:"
-     echo "  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
+  *)
+    line="export PATH=\"$PREFIX/bin:\$PATH\"  # vmagents"
+    added=''
+    if ((MODIFY_PATH)); then
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        [[ -f $rc || $rc == "$HOME/.bashrc" ]] || continue
+        grep -qsF "$PREFIX/bin" "$rc" || { printf '\n%s\n' "$line" >>"$rc" && added+=" ${rc/#"$HOME"/\~}"; }
+      done
+    fi
+    if [[ -n $added ]]; then
+      echo "$PREFIX/bin is now on the PATH in$added: open a new terminal (or: $line)"
+    else
+      echo "note: $PREFIX/bin is not on your PATH; add it, e.g. in ~/.bashrc or ~/.zshrc:"
+      echo "  $line"
+    fi ;;
 esac
 if ((DEPS)) && [[ $(uname -s) == Linux ]]; then
   # What vmagents uses, at once (sudo asks on the terminal, also when this

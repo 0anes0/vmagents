@@ -1,0 +1,46 @@
+name: Something does not work
+description: A bug, an error message, a VM that does not start
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for writing it up. Türkçe yazabilirsin.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: "vmagents create dev stopped at: Waiting for SSH..."
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: The command and what it printed
+      description: Paste the command and its whole output (it is formatted as text).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: vmagents doctor NAME, if it is about a VM
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: vmagents --version
+      placeholder: vmagents 0.24.1
+    validations:
+      required: true
+  - type: input
+    id: computer
+    attributes:
+      label: Your computer's system
+      placeholder: Ubuntu 24.04 / Arch / Fedora 42 / Windows 11 (WSL)
+    validations:
+      required: true
+  - type: input
+    id: vm
+    attributes:
+      label: The VM's system, and how it runs
+      placeholder: Debian 13 made by vmagents create / Windows 10 in VirtualBox

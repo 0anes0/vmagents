@@ -12,31 +12,38 @@
   ![Languages](https://img.shields.io/badge/UI-EN%20%7C%20TR-orange.svg)
   [![test](https://github.com/emincan2000/vmagents/actions/workflows/test.yml/badge.svg)](https://github.com/emincan2000/vmagents/actions/workflows/test.yml)
 
-  [Install](#install) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Issues](#from-an-issue-to-a-pull-request) · [Commands](#commands) · [Roadmap](ROADMAP.md)
+  [Install](#install) · [Why a VM?](#vmagents-a-container-or-the-cloud) · [Quick start](#quick-start) · [Terminal UI](#terminal-ui) · [Tasks](#tasks-and-yolo-mode) · [Phone](#from-the-phone) · [Projects](#projects) · [Issues](#from-an-issue-to-a-pull-request) · [Commands](#commands) · [Roadmap](ROADMAP.md)
 </div>
 
 ---
 
+![An agent deletes a project in the VM; vmagents undo brings it back](docs/demo.gif)
+
 **vmagents** runs Claude Code, Codex, Gemini CLI, OpenCode or aider **inside a
-virtual machine** with one command. It starts the VM if needed, connects over
-SSH and opens the agent there: in tmux on **Linux** VMs (Claude Code also on
-**Windows** VMs). The agent works on the VM's files and programs, not your
-computer's: let it install, run and break things, then take it all back with
-`vmagents undo`.
+virtual machine**, with one command: it starts the VM, connects over SSH and
+opens the agent there, in tmux. The agent may install, run and break whatever
+it likes. Your computer is not touched, and every start takes a snapshot first,
+so `vmagents undo` takes it all back.
 
-```
-$ vmagents
-Starting VM dev...
-Waiting for dev to get an IP address...
-Waiting for SSH on 192.168.122.48:22...
- ╭──────────────────────────────────────╮
- │ ✻ Welcome to Claude Code!            │     ← running on the VM, in tmux
+```sh
+curl -fsSL https://raw.githubusercontent.com/emincan2000/vmagents/main/install.sh | bash
+vmagents create dev      # a new Debian VM with Claude Code in it, in a minute or two
+vmagents dev             # Claude Code, running in the VM
 ```
 
-No VM yet? `vmagents create dev` makes a fresh Debian VM with Claude Code in
-it, usually in half a minute to two minutes once the image is downloaded,
-without a single password prompt. Or do everything from the **terminal UI**,
-`vmagents ui`:
+**Why a VM?**
+
+- **The agent may act without asking.** There, `rm -rf`, a careless `sudo` or a
+  broken package only break the VM, and one command undoes them.
+- **Nothing of yours is in it.** No SSH keys, no browser, no GitHub token, no
+  other projects: a repository goes in as a copy, and the agent's work comes
+  back as a git branch for you to look at.
+- **A whole computer, not a container.** Its own kernel, systemd, Docker, a
+  desktop if you want one; Windows too.
+- **It goes on without you.** Tasks run in the background; follow them in the
+  terminal UI or on your phone, with a notification when they end.
+
+Or do it all from the **terminal UI**, `vmagents ui`:
 
 ![vmagents ui](docs/ui.png)
 
@@ -74,6 +81,21 @@ without a single password prompt. Or do everything from the **terminal UI**,
 A single Bash script with no dependencies beyond OpenSSH (and virsh for
 libvirt VMs, Python for the UI). Several VMs, one default, plain-text profiles.
 
+## vmagents, a container, or the cloud?
+
+| | vmagents | A container (Docker, devcontainer) | Cloud agents |
+|---|---|---|---|
+| Runs | in a VM on your computer (or any machine you reach over SSH) | on your computer, sharing its kernel | on the provider's servers |
+| Take it all back | `vmagents undo`, from snapshots | throw the container away and build it again | nothing to take back here |
+| The agent may use | sudo, systemd, Docker, a desktop, Windows | what the image and its rights allow | what the provider's machine allows |
+| Your files and keys | out of reach; a repository goes in as a copy | out of reach unless mounted | out of reach; it works on your GitHub repository |
+| Agents | Claude Code, Codex, Gemini CLI, OpenCode, aider | any | the provider's own |
+| Costs | your hardware | your hardware | the provider's prices |
+
+A container is lighter and starts in a second: when that is enough, use one.
+vmagents is for when the agent should have a whole machine to itself, and
+you want to be able to take back all it did.
+
 ## Install
 
 ```sh
@@ -88,6 +110,11 @@ Arch, openSUSE and Alpine (sudo asks for your password); libvirt is started
 and you are added to its group. `--no-deps` leaves that out. Installed some
 other way, vmagents does the same on its first run in a terminal;
 `vmagents deps` does it again, `vmagents deps --check` only looks.
+
+Tried on fresh machines from start to end: Debian 13, Ubuntu 24.04 and Arch
+Linux. Fedora, openSUSE and Alpine: their package names are checked, but no
+one has tried them yet. The Windows computer installer below is new as well.
+Tell us how it goes: [issues](https://github.com/emincan2000/vmagents/issues).
 Later, `vmagents update` brings it to the latest release (checked against the
 release's checksums); the UI says when there is one.
 

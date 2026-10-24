@@ -19,7 +19,7 @@ if [[ -n ${VMAGENTS_HOST_PATH:-} ]]; then
   unset VIRTUAL_ENV VMAGENTS_HOST_PATH
 fi
 
-VERSION=0.24.1
+VERSION=0.24.2
 PROG=${0##*/}
 CONF_DIR=${VMAGENTS_CONFIG_DIR:-${VMCLAUDE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/vmagents}}
 HOSTS_DIR=$CONF_DIR/hosts
@@ -8486,11 +8486,17 @@ cmd_ui() {
   export VMAGENTS_BIN=$self VMAGENTS_CONF_DIR=$CONF_DIR
   if python3 -c 'import textual.widgets, pyte; from textual.binding import BindingsMap' 2>/dev/null; then
     exec python3 "$f"
-  elif command -v uv >/dev/null; then
-    # uv puts its venv first in PATH; keep the real one for what the UI runs.
-    VMAGENTS_HOST_PATH=$PATH exec uv run --quiet --no-project --with 'textual>=8,<9' --with 'pyte>=0.8.2' python "$f"
   fi
-  die "the UI needs Python with Textual and pyte: install uv (https://docs.astral.sh/uv/getting-started/installation/), or: pip install --user 'textual>=8' pyte"
+  # uv: on the PATH, or just installed by "vmagents deps" (~/.local/bin is on
+  # the PATH only from the next login on).
+  local uv
+  uv=$(command -v uv) || uv=$HOME/.local/bin/uv
+  [[ -x $uv ]] || uv=$HOME/.cargo/bin/uv
+  if [[ -x $uv ]]; then
+    # uv puts its venv first in PATH; keep the real one for what the UI runs.
+    VMAGENTS_HOST_PATH=$PATH exec "$uv" run --quiet --no-project --with 'textual>=8,<9' --with 'pyte>=0.8.2' python "$f"
+  fi
+  die "the UI needs Python with Textual and pyte, which uv fetches: $PROG deps installs uv (or: pip install --user 'textual>=8' pyte)"
 }
 
 UI_PY=$(cat <<'UI_END'

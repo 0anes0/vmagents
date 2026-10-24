@@ -18,10 +18,18 @@ class InstallTests(SandboxTest):
         binary = prefix / "bin" / "vmagents"
         self.assertEqual(binary.read_bytes(), (ROOT / "vmagents").read_bytes())
         self.assertTrue(binary.stat().st_mode & 0o111)
-        self.assertIn("is not on your PATH", r.stdout)
+        self.assertIn("is now on the PATH in ~/.bashrc: open a new terminal", r.stdout)
+        bashrc = self.sb.home / ".bashrc"
+        self.assertIn(f'export PATH="{prefix}/bin:$PATH"  # vmagents\n', bashrc.read_text())
+        self.install("--prefix", str(prefix))  # again: not twice
+        self.assertEqual(bashrc.read_text().count("# vmagents"), 1)
         r = self.install("--prefix", str(prefix), "--uninstall")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(binary.exists())
+        self.assertNotIn("vmagents", bashrc.read_text())
+        r = self.install("--prefix", str(prefix), "--no-modify-path")
+        self.assertIn("is not on your PATH", r.stdout)
+        self.assertNotIn("vmagents", bashrc.read_text())
 
     def test_installs_what_it_uses(self):
         # By default install.sh then runs "vmagents deps --yes"; a fake sudo stands in for the real one.

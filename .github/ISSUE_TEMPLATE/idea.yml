@@ -1,0 +1,15 @@
+name: An idea or a wish
+description: Something vmagents should do, or do differently
+labels: [idea]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to do with vmagents?
+      description: The situation and what gets in the way is more useful than a finished design.
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: How do you do it now, if at all?
