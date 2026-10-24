@@ -1,5 +1,6 @@
 """Drives vmforai ui on a pty of its own (120x32) and copies what it draws to
-stdout, for asciinema (docs/demo/make.sh). Keys at set moments."""
+stdout, for asciinema (docs/demo/make.sh). Keys at set moments: Claude Code in a
+tab does a small job, then F3 to F6 open the other four agents as tabs."""
 import fcntl, os, pty, select, struct, sys, termios, time
 
 COLS, ROWS = 120, 32
@@ -50,12 +51,13 @@ key("\r", 1)             # Claude Code, in a tab
 wait_for("to cycle", 30)
 pump(1.5)
 if b"to cycle" in seen:
-    typed("Write a one-line Python hello world. Just the code, no tools.", 0.5)
+    typed("A Python one-liner for the sum of the squares of 1 to 10. Just the code, no tools.", 0.5)
     key("\r", 1)
     seen = b""
-    wait_for("print(", 90)
-    pump(5)
-key("\x1d", 3)           # Ctrl+]: back to the list
-key("q", 1.2)
-key("y", 1.5)
-pump(1)
+    wait_for("print", 120)  # not in the prompt; colours split "print("
+    pump(4)
+for f in ("\x1bOR", "\x1bOS", "\x1b[15~", "\x1b[17~"):  # F3 to F6: Codex, Gemini, OpenCode, aider
+    key(f, 4)
+key("\x1d", 3)          # Ctrl+]: back to the list, the five tabs above it
+key("q", 2.5)          # "5 terminals are open...": the recording ends on it
+os.kill(pid, 9)

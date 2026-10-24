@@ -17,7 +17,7 @@
 
 ---
 
-![vmforai: the command line (a task, then undo), the terminal UI with Claude Code in a tab, and the phone page](docs/demo.gif)
+![vmforai: the command line (a task, then undo), the terminal UI with all five agents in tabs, and the phone giving a VM a task](docs/demo.gif)
 
 **vmforai** runs Claude Code, Codex, Gemini CLI, OpenCode or aider **inside a
 virtual machine**, with one command: it starts the VM, connects over SSH and
